@@ -625,7 +625,19 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                   {/* Toggle ON/OFF */}
                   <button
                     type="button"
-                    onClick={() => toggleStrategyActive(strategy.id)}
+                    onClick={() => {
+                      toggleStrategyActive(strategy.id);
+                      // Sync the new isActive to DB immediately so the cron
+                      // respects it — the store action is client-only.
+                      const updated = { ...strategy, isActive: !(strategy.isActive ?? false) };
+                      fetch('/api/strategies', {
+                        method:  'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body:    JSON.stringify(updated),
+                      }).catch((err) =>
+                        console.warn('[strategy-toggle] DB sync failed:', err),
+                      );
+                    }}
                     title={isActive ? 'Turn off live monitor' : 'Turn on live monitor'}
                     className={`text-[11px] leading-none px-0.5 flex-shrink-0 transition-colors
                                 ${isActive

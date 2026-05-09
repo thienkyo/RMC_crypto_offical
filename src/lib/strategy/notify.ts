@@ -275,7 +275,8 @@ export async function getNotifiableStrategies(): Promise<
   }>(
     `SELECT definition, last_notified_trade_time
      FROM strategies
-     WHERE notify_on_signal = TRUE`,
+     WHERE notify_on_signal = TRUE
+       AND (definition->>'isActive')::boolean = true`,
   );
   return rows.map((r) => ({
     strategy:           r.definition as unknown as Strategy,

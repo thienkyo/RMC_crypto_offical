@@ -1,0 +1,269 @@
+/**
+ * Telegram bot client for RMC alert delivery.
+ *
+ * Required env vars (server-side only — never exposed to client):
+ *   TELEGRAM_BOT_TOKEN   — from @BotFather (/newbot)
+ *   TELEGRAM_CHAT_ID     — comma-separated list of chat IDs to deliver to.
+ *                          Personal chat ID:  positive number  (e.g. 123456789)
+ *                          Group / supergroup: negative number (e.g. -1001234567890)
+ *                          Examples:
+ *                            Single personal:  TELEGRAM_CHAT_ID=123456789
+ *                            Group only:       TELEGRAM_CHAT_ID=-1001234567890
+ *                            Both:             TELEGRAM_CHAT_ID=123456789,-1001234567890
+ *
+ * To discover your group's chat ID, call GET /api/alerts/chats after adding
+ * the bot to the group and sending at least one message there.
+ */
+
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
+
+const TELEGRAM_API = 'https://api.telegram.org';
+
+export interface TelegramSendResult {
+  ok: boolean;
+  /** Number of chats successfully delivered to. */
+  delivered?: number;
+  /** First error encountered, if any. */
+  error?: string;
+}
+
+/**
+ * Send an HTML-mode message to ALL configured chat IDs.
+ * TELEGRAM_CHAT_ID may be a single ID or a comma-separated list.
+ * Returns ok:true as long as at least one delivery succeeded.
+ * Never throws.
+ */
+export async function sendTelegramAlert(text: string): Promise<TelegramSendResult> {
+  if (!BOT_TOKEN || !CHAT_ID) {
+    return { ok: false, error: 'TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured in env' };
+  }
+
+  // Parse comma-separated IDs, strip whitespace, drop empty strings.
+  const chatIds = CHAT_ID.split(',').map((s) => s.trim()).filter(Boolean);
+  if (chatIds.length === 0) {
+    return { ok: false, error: 'TELEGRAM_CHAT_ID is empty' };
+  }
+
+  let delivered = 0;
+  let firstError: string | undefined;
+
+  await Promise.all(
+    chatIds.map(async (chatId) => {
+      try {
+        const res = await fetch(`${TELEGRAM_API}/bot${BOT_TOKEN}/sendMessage`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+        });
+
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
+          const errMsg  = (payload['description'] as string | undefined) ?? `HTTP ${res.status}`;
+          console.error(`[telegram] Failed to deliver to ${chatId}: ${errMsg}`);
+          firstError ??= `chat ${chatId}: ${errMsg}`;
+        } else {
+          delivered++;
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[telegram] Exception delivering to ${chatId}: ${errMsg}`);
+        firstError ??= `chat ${chatId}: ${errMsg}`;
+      }
+    }),
+  );
+
+  return delivered > 0
+    ? { ok: true, delivered }
+    : { ok: false, error: firstError ?? 'All deliveries failed', delivered: 0 };
+}
+
+// ─── Message formatters ───────────────────────────────────────────────────────
+
+/**
+ * Indicator alert message.
+ *
+ * 🔔 Indicator Alert
+ * Symbol:    BTCUSDT  |  1h
+ * Indicator: RSI(14)
+ * Trigger:   RSI crossed below 30  →  28.4
+ * Price:     $62,840
+ * Time:      2026-05-08 14:35 UTC
+ */
+export function formatAlertMessage(opts: {
+  symbol:        string;
+  timeframe:     string;
+  indicatorName: string;  // e.g. "RSI(14)" or "Price"
+  triggerDesc:   string;  // e.g. "RSI crossed below 30"
+  currentValue:  number;  // e.g. 28.4
+  price:         number;  // close price of the triggering candle
+  timestamp:     number;  // Unix ms of the candle open time
+}): string {
+  const { symbol, timeframe, indicatorName, triggerDesc, currentValue, price, timestamp } = opts;
+
+  const W = 11; // label column width (longest label is "Indicator:" = 10 + 1 space)
+  const lines = [
+    '🔔 Indicator Alert',
+    `${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,
+    `${lbl('Indicator:', W)}${indicatorName}`,
+    `${lbl('Trigger:', W)}${triggerDesc}  →  ${fmtValue(currentValue)}`,
+    `${lbl('Price:', W)}${fmtPrice(price)}`,
+    `${lbl('Time:', W)}${fmtUtc(timestamp)}`,
+  ];
+
+  return `<pre>${lines.map(esc).join('\n')}</pre>`;
+}
+
+/**
+ * Strategy signal message.
+ *
+ * 📈 Strategy Signal — "RSI + EMA Pullback"
+ * RSI oversold + EMA crossover — high confidence  ← longName (optional)
+ * Rating:      ⭐⭐⭐  (3 conditions)
+ * Symbol:      BTCUSDT  |  4h
+ * Signal:      🟢 LONG ENTRY
+ * Price:       $62,840
+ * Conditions met:
+ *   ✅ RSI(14) < 35
+ *   ✅ EMA(20) crosses above 0
+ * Stop loss:   $61,200  (-2.6%)
+ * Take profit: $65,400  (+4.1%)
+ * Time:        2026-05-08 14:00 UTC
+ */
+export function formatStrategySignalMessage(opts: {
+  strategyName:  string;
+  /** Verbose name displayed in the Telegram message; falls back to strategyName. */
+  longName?:     string;
+  /** 1–5 star rating (computed from total entry condition count). */
+  rating:        number;
+  symbol:        string;
+  timeframe:     string;
+  direction:     'long' | 'short';
+  entryPrice:    number;
+  stopLossPct:   number;    // 0 = disabled
+  takeProfitPct: number;    // 0 = disabled
+  conditions:    string[];  // pre-formatted condition descriptions
+  timestamp:     number;    // Unix ms of the entry candle
+}): string {
+  const {
+    strategyName, longName, rating, symbol, timeframe, direction,
+    entryPrice, stopLossPct, takeProfitPct, conditions, timestamp,
+  } = opts;
+
+  const W = 13; // label column width ("Take profit:" = 12 + 1 space)
+
+  const isLong     = direction === 'long';
+  const signalIcon = isLong ? '🟢' : '🔴';
+  const signalText = isLong ? 'LONG ENTRY' : 'SHORT ENTRY';
+
+  const slPrice = stopLossPct   > 0 ? entryPrice * (isLong ? 1 - stopLossPct / 100   : 1 + stopLossPct / 100)   : null;
+  const tpPrice = takeProfitPct > 0 ? entryPrice * (isLong ? 1 + takeProfitPct / 100 : 1 - takeProfitPct / 100) : null;
+
+  const stars = '⭐'.repeat(Math.min(5, Math.max(1, rating)));
+  const condCount = conditions.length;
+
+  const lines: string[] = [`📈 Strategy Signal — "${strategyName}"`];
+
+  // Verbose name (optional)
+  const verboseName = longName?.trim();
+  if (verboseName) lines.push(verboseName);
+
+  lines.push(
+    `${lbl('Rating:', W)}${stars}  (${condCount} condition${condCount !== 1 ? 's' : ''})`,
+    `${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,
+    `${lbl('Signal:', W)}${signalIcon} ${signalText}`,
+    `${lbl('Price:', W)}${fmtPrice(entryPrice)}`,
+  );
+
+  if (conditions.length > 0) {
+    lines.push('Conditions met:');
+    for (const cond of conditions) {
+      lines.push(`  ✅ ${cond}`);
+    }
+  }
+
+  if (slPrice !== null) {
+    lines.push(`${lbl('Stop loss:', W)}${fmtPrice(slPrice)}  (${isLong ? '-' : '+'}${stopLossPct.toFixed(1)}%)`);
+  }
+  if (tpPrice !== null) {
+    lines.push(`${lbl('Take profit:', W)}${fmtPrice(tpPrice)}  (${isLong ? '+' : '-'}${takeProfitPct.toFixed(1)}%)`);
+  }
+
+  lines.push(`${lbl('Candle:', W)}${fmtUtc(timestamp)}`);
+
+  return `<pre>${lines.map(esc).join('\n')}</pre>`;
+}
+
+/**
+ * Compute a 1–5 star rating from total entry condition count.
+ * More conditions = harder to satisfy = higher-confidence signal = more stars.
+ */
+export function strategyRating(totalConditions: number): number {
+  return Math.min(5, Math.max(1, totalConditions));
+}
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+/** Left-pad a label to a fixed column width. */
+function lbl(label: string, width: number): string {
+  return label.padEnd(width);
+}
+
+/**
+ * Escape HTML special chars for content inside a <pre> block.
+ * Telegram HTML mode still requires & < > to be escaped inside <pre>.
+ */
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** Format a price value: "$62,840" for large numbers, "$0.0423" for small ones. */
+function fmtPrice(price: number): string {
+  if (price >= 1000) {
+    return '$' + price.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  if (price >= 1) {
+    return '$' + price.toFixed(2);
+  }
+  return '$' + price.toFixed(6);
+}
+
+/** Format an indicator value with adaptive precision. */
+function fmtValue(v: number): string {
+  if (Number.isNaN(v))   return '—';
+  if (Number.isInteger(v)) return String(v);
+  if (Math.abs(v) >= 100) return v.toFixed(1);
+  if (Math.abs(v) >= 1)   return v.toFixed(2);
+  return v.toFixed(4);
+}
+
+/** Format a Unix-ms timestamp as "YYYY-MM-DD HH:MM UTC". */
+function fmtUtc(ms: number): string {
+  const d   = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+  );
+}
+
+// ─── Bot utilities ────────────────────────────────────────────────────────────
+
+/**
+ * Verify bot credentials by calling getMe.
+ * Used by the /api/alerts/test endpoint.
+ */
+export async function verifyTelegramConfig(): Promise<{ ok: boolean; botName?: string; error?: string }> {
+  if (!BOT_TOKEN) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set' };
+  try {
+    const res  = await fetch(`${TELEGRAM_API}/bot${BOT_TOKEN}/getMe`);
+    const data = await res.json() as { ok: boolean; result?: { username: string } };
+    if (!data.ok) return { ok: false, error: 'Invalid bot token' };
+    return { ok: true, botName: data.result?.username };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

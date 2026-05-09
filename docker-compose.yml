@@ -1,0 +1,23 @@
+version: '3.9'
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: rmc_db
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: rmc
+      POSTGRES_PASSWORD: rmc_dev_password
+      POSTGRES_DB: rmc_crypto
+    volumes:
+      - rmc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rmc -d rmc_crypto']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rmc_pgdata:

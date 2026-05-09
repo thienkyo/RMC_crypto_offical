@@ -1,0 +1,34 @@
+{
+  "crons": [
+    {
+      "path":     "/api/cron/crawl-rss",
+      "schedule": "*/15 * * * *",
+      "comment":  "RSS feeds: CoinDesk, CoinTelegraph, Decrypt, The Block, BeInCrypto"
+    },
+    {
+      "path":     "/api/cron/crawl-reddit",
+      "schedule": "*/30 * * * *",
+      "comment":  "Reddit: r/cryptocurrency, r/bitcoin, r/ethtrader, r/CryptoMarkets"
+    },
+    {
+      "path":     "/api/cron/crawl-nitter",
+      "schedule": "*/20 * * * *",
+      "comment":  "Nitter RSS for tracked analyst accounts (configured in DB)"
+    },
+    {
+      "path":     "/api/cron/crawl-polymarket",
+      "schedule": "*/10 * * * *",
+      "comment":  "Polymarket prediction market odds snapshots"
+    },
+    {
+      "path":     "/api/cron/sentiment-run",
+      "schedule": "*/5 * * * *",
+      "comment":  "Gemini batch classify + Claude summaries for high-signal articles"
+    },
+    {
+      "path":     "/api/cron/check-alerts",
+      "schedule": "* * * * *",
+      "comment":  "Phase 5: evaluate indicator/price alert rules and fire Telegram notifications"
+    }
+  ]
+}

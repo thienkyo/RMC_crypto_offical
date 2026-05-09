@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Base overrides ──────────────────────────────────────────────────────── */
+html, body {
+  height: 100%;
+  overflow: hidden; /* full-viewport chart app — no page scroll */
+}
+
+body {
+  background-color: #0a0e1a;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Thin custom scrollbar ───────────────────────────────────────────────── */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #1e2a3d transparent;
+}
+.scrollbar-thin::-webkit-scrollbar       { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #1e2a3d; border-radius: 2px; }
+
+/* ─── Lightweight Charts overrides ───────────────────────────────────────── */
+/* Ensure LWC tooltips render above our UI elements */
+.tv-lightweight-charts { z-index: 10; }
+
+/* ─── Component utility classes (Phase 2) ────────────────────────────────── */
+/* All @apply calls use names from tailwind.config.ts:
+ *   text-text-primary / text-text-secondary / text-text-muted / text-text-price
+ *   bg-surface / bg-surface-1 / bg-surface-2 / bg-surface-3
+ *   border-surface-border
+ *   text-accent / bg-accent
+ */
+
+/* Nav links */
+.nav-link {
+  @apply text-xs text-text-muted hover:text-text-primary px-2.5 py-1 rounded transition-colors;
+}
+
+/* Section heading inside forms */
+.section-heading {
+  @apply text-xs font-semibold text-text-primary uppercase tracking-wider;
+}
+
+/* Field label */
+.field-label {
+  @apply text-xs text-text-muted;
+}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────── */
+.input-sm {
+  @apply rounded border border-surface-border bg-surface-2 px-2 py-1 text-sm text-text-primary
+         focus:outline-none focus:ring-1 focus:ring-accent/50;
+}
+.input-xs {
+  @apply rounded border border-surface-border bg-surface-2 px-1.5 py-0.5 text-xs text-text-primary font-mono
+         focus:outline-none focus:ring-1 focus:ring-accent/50;
+}
+
+/* ── Selects ─────────────────────────────────────────────────────────────── */
+.select-sm {
+  @apply rounded border border-surface-border bg-surface-2 px-2 py-1 text-xs text-text-primary
+         focus:outline-none focus:ring-1 focus:ring-accent/50 cursor-pointer;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn-sm {
+  @apply rounded px-3 py-1.5 text-xs font-medium transition-colors;
+}
+.btn-xs {
+  @apply rounded px-2 py-1 text-xs font-medium transition-colors
+         border border-surface-border text-text-muted hover:text-text-primary hover:border-accent/50;
+}
+.btn-primary {
+  @apply bg-accent text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+.btn-secondary {
+  @apply border border-surface-border text-text-muted hover:text-text-primary hover:border-accent/50 bg-transparent;
+}
+.btn-icon-xs {
+  @apply p-0.5 text-xs leading-none rounded hover:bg-surface-2 transition-colors;
+}
+
+/* ── Tab buttons (backtest panel) ─────────────────────────────────────────── */
+.tab-btn {
+  @apply px-3 py-1 text-xs rounded text-text-muted hover:text-text-primary transition-colors;
+}
+.tab-btn-active {
+  @apply bg-surface-2 text-text-primary;
+}

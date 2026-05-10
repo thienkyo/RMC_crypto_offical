@@ -65,7 +65,7 @@ export function StrategyBuilder() {
 
       {/* ── Right panel: backtest results ───────────────────────────── */}
       {(history.length > 0 || isBacktesting) && (
-        <aside className="w-[480px] flex-shrink-0 flex flex-col bg-surface">
+        <aside className="w-[768px] flex-shrink-0 flex flex-col bg-surface">
           {isBacktesting && (
             <div className="flex items-center justify-center gap-2 text-text-muted text-sm animate-pulse px-4 py-3 border-b border-surface-border">
               Running backtest…

@@ -230,14 +230,20 @@ async function fetchLatestCandles(
   }));
 
   // ── 2. Always fetch a fresh tail from Binance ────────────────────────────
-  // 5 bars is enough to cover the forming bar + the just-closed bar + a small
-  // buffer.  This call is lightweight and ensures the cron never evaluates a
-  // stale closing candle regardless of DB freshness.
+  // Calculate how many candles are missing between the DB tail and now.
+  // This guarantees we bridge the gap if the DB hasn't been updated recently,
+  // preventing corrupted indicator calculations due to missing candles.
   try {
+    const dbTailTime = dbCandles.length > 0 ? dbCandles[dbCandles.length - 1]!.openTime : 0;
+    const tfMs = TF_TO_MS[timeframe as Timeframe];
+    // We add 5 as a safety buffer
+    const missingCandles = dbTailTime > 0 ? Math.ceil((Date.now() - dbTailTime) / tfMs) + 5 : limit;
+    const fetchLimit = Math.min(limit, Math.max(5, missingCandles));
+
     const freshTail = await fetchKlines(
       symbol,
       timeframe as Timeframe,
-      5,
+      fetchLimit,
       undefined,
       true, // noCache — bypass any in-memory cache
     );

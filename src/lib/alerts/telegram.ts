@@ -108,7 +108,7 @@ export function formatAlertMessage(opts: {
     `${lbl('Indicator:', W)}${indicatorName}`,
     `${lbl('Trigger:', W)}${triggerDesc}  →  ${fmtValue(currentValue)}`,
     `${lbl('Price:', W)}${fmtPrice(price)}`,
-    `${lbl('Time:', W)}${fmtUtc(timestamp)}`,
+    `${lbl('Time:', W)}${fmtLocal(timestamp)}`,
   ];
 
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
@@ -119,22 +119,23 @@ export function formatAlertMessage(opts: {
  *
  * 📈 Strategy Signal — "RSI + EMA Pullback"
  * RSI oversold + EMA crossover — high confidence  ← longName (optional)
- * Rating:      ⭐⭐⭐  (3 conditions)
+ * Rating:      ⭐⭐⭐
  * Symbol:      BTCUSDT  |  4h
  * Signal:      🟢 LONG ENTRY
  * Price:       $62,840
- * Conditions met:
+ * SL:          $61,200  (-2.6%)
+ * TP:          $65,400  (+4.1%)
+ * Candle:      2026-05-08 21:00 (UTC+7)
+ * 
+ * Conditions:
  *   ✅ RSI(14) < 35
  *   ✅ EMA(20) crosses above 0
- * Stop loss:   $61,200  (-2.6%)
- * Take profit: $65,400  (+4.1%)
- * Time:        2026-05-08 14:00 UTC
  */
 export function formatStrategySignalMessage(opts: {
   strategyName:  string;
   /** Verbose name displayed in the Telegram message; falls back to strategyName. */
   longName?:     string;
-  /** 1–5 star rating (computed from total entry condition count). */
+  /** 1–7 star rating (computed from total entry condition count). */
   rating:        number;
   symbol:        string;
   timeframe:     string;
@@ -159,7 +160,7 @@ export function formatStrategySignalMessage(opts: {
   const slPrice = stopLossPct   > 0 ? entryPrice * (isLong ? 1 - stopLossPct / 100   : 1 + stopLossPct / 100)   : null;
   const tpPrice = takeProfitPct > 0 ? entryPrice * (isLong ? 1 + takeProfitPct / 100 : 1 - takeProfitPct / 100) : null;
 
-  const stars = '⭐'.repeat(Math.min(5, Math.max(1, rating)));
+  const stars = '⭐'.repeat(Math.min(7, Math.max(1, rating)));
   const condCount = conditions.length;
 
   const lines: string[] = [`📈 Strategy Signal — "${strategyName}"`];
@@ -169,37 +170,40 @@ export function formatStrategySignalMessage(opts: {
   if (verboseName) lines.push(verboseName);
 
   lines.push(
-    `${lbl('Rating:', W)}${stars}  (${condCount} condition${condCount !== 1 ? 's' : ''})`,
+    `${lbl('Rating:', W)}${stars}`,
     `${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,
     `${lbl('Signal:', W)}${signalIcon} ${signalText}`,
-    `${lbl('Price:', W)}${fmtPrice(entryPrice)}`,
+    `${lbl('Price:', W)}${fmtPrice(entryPrice)}`
   );
 
+  if (slPrice !== null) {
+    lines.push(`${lbl('SL:', W)}${fmtPrice(slPrice)}  (${isLong ? '-' : '+'}${stopLossPct.toFixed(1)}%)`);
+  }
+  if (tpPrice !== null) {
+    lines.push(`${lbl('TP:', W)}${fmtPrice(tpPrice)}  (${isLong ? '+' : '-'}${takeProfitPct.toFixed(1)}%)`);
+  }
+
+  lines.push(`${lbl('Candle:', W)}${fmtLocal(timestamp)}`);
+
   if (conditions.length > 0) {
-    lines.push('Conditions met:');
+    lines.push(''); // blank line
+    lines.push('Conditions:');
     for (const cond of conditions) {
       lines.push(`  ✅ ${cond}`);
     }
   }
 
-  if (slPrice !== null) {
-    lines.push(`${lbl('Stop loss:', W)}${fmtPrice(slPrice)}  (${isLong ? '-' : '+'}${stopLossPct.toFixed(1)}%)`);
-  }
-  if (tpPrice !== null) {
-    lines.push(`${lbl('Take profit:', W)}${fmtPrice(tpPrice)}  (${isLong ? '+' : '-'}${takeProfitPct.toFixed(1)}%)`);
-  }
-
-  lines.push(`${lbl('Candle:', W)}${fmtUtc(timestamp)}`);
-
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
 }
 
 /**
- * Compute a 1–5 star rating from total entry condition count.
- * More conditions = harder to satisfy = higher-confidence signal = more stars.
+ * Compute a 1–7 star rating from total entry condition count and confirmation periods.
+ * More conditions + longer confirmations = harder to satisfy = higher-confidence signal = more stars.
+ * Each additional confirmation candle adds 0.5 to the difficulty score.
  */
-export function strategyRating(totalConditions: number): number {
-  return Math.min(5, Math.max(1, totalConditions));
+export function strategyRating(totalConditions: number, extraConfirmations: number = 0): number {
+  const score = totalConditions + (extraConfirmations * 0.5);
+  return Math.min(7, Math.max(1, Math.round(score)));
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -240,13 +244,14 @@ function fmtValue(v: number): string {
   return v.toFixed(4);
 }
 
-/** Format a Unix-ms timestamp as "YYYY-MM-DD HH:MM UTC". */
-function fmtUtc(ms: number): string {
+/** Format a Unix-ms timestamp as "YYYY-MM-DD HH:MM (UTC+7)". */
+function fmtLocal(ms: number): string {
   const d   = new Date(ms);
+  d.setUTCHours(d.getUTCHours() + 7); // Convert to UTC+7
   const pad = (n: number) => String(n).padStart(2, '0');
   return (
     `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} (UTC+7)`
   );
 }
 

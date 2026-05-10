@@ -6,6 +6,7 @@ import type { LogicalRange, IChartApi, Logical, SeriesMarker, UTCTimestamp as LW
 import { format } from 'date-fns';
 import { useChartStore } from '@/store/chart';
 import { useStrategyStore } from '@/store/strategy';
+import { useLayoutStore } from '@/store/layout';
 import { useCandles }    from '@/hooks/useCandles';
 import { subscribeKline } from '@/lib/exchange/binance';
 import { INDICATORS }    from '@/lib/indicators';
@@ -99,6 +100,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
   const allStrategies        = useStrategyStore((s) => s.strategies);
   const router = useRouter();
+
+  const { leftRailVisible, rightRailVisible, toggleLeft, toggleRight } = useLayoutStore();
 
   // ── Strategy chip visibility ───────────────────────────────────────────────
   // Chips show for every strategy matching this chart's symbol+timeframe.

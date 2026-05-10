@@ -1,16 +1,16 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { Watchlist } from '@/components/watchlist/Watchlist';
 import { AnalysisPanel } from '@/components/analysis/AnalysisPanel';
 import { NewsFeed } from '@/components/news/NewsFeed';
 import { AlertManager } from '@/components/alerts/AlertManager';
 import { useAlertPoller } from '@/hooks/useAlertPoller';
+import { useLayoutStore } from '@/store/layout';
 
 /**
  * ChartLayout is dynamically imported with ssr: false.
- * `next/dynamic` with ssr:false must live inside a 'use client' file in Next.js 15.
  * TradingView Lightweight Charts uses canvas/WebSocket — browser-only APIs.
  */
 const ChartLayout = dynamic(
@@ -28,44 +28,67 @@ const ChartLayout = dynamic(
 type RailTab = 'analysis' | 'news' | 'alerts';
 
 /**
- * Main page — full-viewport layout:
+ * Main page — full-viewport layout.
+ * Rail visibility is controlled via useLayoutStore so ChartLayout can also
+ * read / toggle them from its own top bar buttons.
  *
- *  ┌──────────────────────────────────────────────────────────┐
- *  │  Watchlist (220px) │ ChartLayout (flex) │ Right rail     │
- *  │                    │                    │  [AI] [News]   │
- *  │                    │                    │  <active panel>│
- *  └──────────────────────────────────────────────────────────┘
- *
- * The right rail has three tabs: AI Analysis (Phase 3), News (Phase 4), Alerts (Phase 5).
+ * Keyboard shortcuts: [ = toggle left rail, ] = toggle right rail.
  */
 export default function Page() {
-  // Holds the screenshot function registered by ChartLayout once it mounts.
-  // Using a ref (not state) so registering it doesn't trigger a re-render.
   const captureRef = useRef<(() => string | null) | null>(null);
   const [railTab, setRailTab] = useState<RailTab>('analysis');
 
-  // Automatically poll the alert evaluation loop every 60 s.
-  // This replaces the Vercel cron in local dev — no manual button needed.
+  const { leftRailVisible, rightRailVisible, toggleLeft, toggleRight } = useLayoutStore();
+
   useAlertPoller();
+
+  // Keyboard shortcuts: [ / ] — ignored while typing in inputs.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '[') toggleLeft();
+      if (e.key === ']') toggleRight();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [toggleLeft, toggleRight]);
 
   return (
     <main className="flex h-full w-full overflow-hidden bg-surface">
-      <Watchlist />
 
+      {/* ── Left rail (Watchlist) ─────────────────────────────────────────
+          max-width collapses reliably on flex items; overflow-hidden clips
+          the Watchlist's internal w-[220px] when collapsed.              */}
+      <div
+        className={`flex-shrink-0 overflow-hidden
+                    transition-[max-width] duration-200 ease-in-out
+                    ${leftRailVisible ? 'max-w-[220px]' : 'max-w-0'}`}
+      >
+        <Watchlist />
+      </div>
+
+      {/* ── Chart (flex-1) ────────────────────────────────────────────────
+          ChartLayout renders the left/right toggle buttons in its top bar. */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <ChartLayout
           onCaptureMounted={(fn) => { captureRef.current = fn; }}
         />
       </div>
 
-      {/* Right rail — 420px fixed, tabbed: AI Analysis | News | Alerts */}
-      <div className="w-[420px] flex-shrink-0 flex flex-col overflow-hidden border-l border-surface-border">
-
+      {/* ── Right rail ───────────────────────────────────────────────────── */}
+      <div
+        className={`flex-shrink-0 overflow-hidden flex flex-col
+                    w-[420px] border-l border-surface-border
+                    transition-[max-width] duration-200 ease-in-out
+                    ${rightRailVisible ? 'max-w-[420px]' : 'max-w-0'}`}
+      >
         {/* Tab bar */}
         <div className="flex border-b border-surface-border flex-shrink-0">
           {(['analysis', 'news', 'alerts'] as RailTab[]).map((tab) => (
             <button
               key={tab}
+              type="button"
               onClick={() => setRailTab(tab)}
               className={`flex-1 h-10 text-[11px] font-mono uppercase tracking-widest transition-colors
                 ${railTab === tab
@@ -89,6 +112,7 @@ export default function Page() {
           <AlertManager />
         </div>
       </div>
+
     </main>
   );
 }

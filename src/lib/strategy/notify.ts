@@ -115,10 +115,19 @@ export async function evaluateStrategySignal(
   // ── 6. Build message and stamp ─────────────────────────────────────────────
   const allConditionLabels = allConditions.map((c) => conditionLabel(c));
 
+  // Calculate extra confirmation score: only 'confirmation' mode increases difficulty.
+  const extraConfirmations = allConditions.reduce((sum, c) => {
+    const mode = c.checkMode ?? 'confirmation';
+    if (mode === 'confirmation') {
+      return sum + Math.max(0, (c.checkCandles ?? 1) - 1);
+    }
+    return sum;
+  }, 0);
+
   const message = formatStrategySignalMessage({
     strategyName:  strategy.name,
     longName:      strategy.longName,
-    rating:        strategyRating(allConditions.length),
+    rating:        strategyRating(allConditions.length, extraConfirmations),
     symbol:        strategy.symbol,
     timeframe:     strategy.timeframe,
     direction:     strategy.action.type === 'enter_long' ? 'long' : 'short',

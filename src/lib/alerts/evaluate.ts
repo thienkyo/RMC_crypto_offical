@@ -47,8 +47,14 @@ export async function evaluateAlertRule(rule: AlertRule): Promise<AlertEvalResul
     return { fired: false, rule, reason: 'no_candles' };
   }
 
-  // candles[length-1] is the forming bar; candles[length-2] is the last closed.
-  const closedCandles = candles.slice(0, -1);
+  // candles[length-1] is usually the forming bar; we filter explicitly by closeTime to ensure robustness.
+  const now = Date.now();
+  const closedCandles = candles.filter((c) => c.closeTime < now);
+  
+  if (closedCandles.length < 2) {
+    return { fired: false, rule, reason: 'no_candles' };
+  }
+
   const lastClosed    = closedCandles[closedCandles.length - 1]!;
   const prevClosed    = closedCandles[closedCandles.length - 2];
   const condition     = rule.condition;
@@ -82,7 +88,7 @@ export async function evaluateAlertRule(rule: AlertRule): Promise<AlertEvalResul
       triggerDesc:   triggerDesc(condition),
       currentValue,
       price:         lastClosed.close,
-      timestamp:     lastClosed.openTime,
+      timestamp:     lastClosed.closeTime + 1,
     });
 
     return { fired: true, rule, message };

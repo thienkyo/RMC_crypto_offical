@@ -58,8 +58,10 @@ export async function evaluateStrategySignal(
     return { fired: false, strategy, reason: 'error' };
   }
 
-  // Drop the currently-forming bar — only evaluate fully closed candles.
-  const closed = candles.slice(0, -1);
+  // Only evaluate fully closed candles. We filter explicitly by closeTime to ensure
+  // we don't accidentally drop closed candles if Binance API is delayed.
+  const now = Date.now();
+  const closed = candles.filter((c) => c.closeTime < now);
   if (closed.length < 2) return { fired: false, strategy, reason: 'no_candles' };
 
   const lastClosed = closed[closed.length - 1]!;
@@ -135,7 +137,7 @@ export async function evaluateStrategySignal(
     stopLossPct:   strategy.risk.stopLossPct,
     takeProfitPct: strategy.risk.takeProfitPct,
     conditions:    allConditionLabels,
-    timestamp:     lastClosed.openTime,
+    timestamp:     lastClosed.closeTime + 1,
   });
 
   await updateLastNotifiedTime(strategy.id, lastClosed.openTime);

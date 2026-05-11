@@ -76,6 +76,13 @@ export function StrategyList() {
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleStrategyActive(s.id);
+                  // Sync to DB so the cron respects the toggle
+                  const updated = { ...s, isActive: !(s.isActive ?? false) };
+                  fetch('/api/strategies', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify(updated),
+                  }).catch((err) => console.warn('[strategy-list:toggle] DB sync failed:', err));
                 }}
                 className={`btn-icon-xs transition-colors ${
                   (s.isActive ?? false)
@@ -105,7 +112,12 @@ export function StrategyList() {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (confirm(`Delete "${s.name}"?`)) deleteStrategy(s.id);
+                  if (confirm(`Delete "${s.name}"?`)) {
+                    deleteStrategy(s.id);
+                    // Sync deletion to DB to stop background alerts
+                    fetch(`/api/strategies?id=${s.id}`, { method: 'DELETE' })
+                      .catch((err) => console.warn('[strategy-list:delete] DB sync failed:', err));
+                  }
                 }}
                 className="btn-icon-xs text-text-muted opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
                 title="Delete"

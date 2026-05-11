@@ -20,6 +20,7 @@ interface BbPctParams { period: number; stdDevMult: number; [key: string]: numbe
 export const bbpct: Indicator<BbPctParams> = {
   id: 'bbpct',
   name: 'BB %B',
+  description: 'Bollinger Bands %B. Quantifies a security\'s price relative to its Bollinger Bands. > 1 means price is above upper band, < 0 means below lower band.',
   defaultParams: { period: 20, stdDevMult: 2 },
   paramsMeta: {
     period:     { label: 'Period',      min: 2, max: 200, step: 1   },

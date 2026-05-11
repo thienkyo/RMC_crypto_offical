@@ -14,6 +14,15 @@ export { macd }      from './macd';
 export { bollinger } from './bollinger';
 export { bbpct }     from './bbpct';
 
+// Patterns
+export {
+  abandonedBabyBearish,
+  abandonedBabyBullish,
+  identicalThreeCrows,
+  advanceBlock,
+  bearishDojiStar
+} from '../patterns';
+
 export type {
   Indicator,
   IndicatorResult,
@@ -30,6 +39,13 @@ import { macd }      from './macd';
 import { bollinger } from './bollinger';
 import { bbpct }     from './bbpct';
 import type { Indicator } from './types';
+import {
+  abandonedBabyBearish,
+  abandonedBabyBullish,
+  identicalThreeCrows,
+  advanceBlock,
+  bearishDojiStar
+} from '../patterns';
 
 // The registry stores all indicators under their widened default param type.
 // Callers pass Record<string,number> params (from the store) which satisfies
@@ -41,4 +57,9 @@ export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
   macd,
   bollinger,
   bbpct,
+  abandonedBabyBearish,
+  abandonedBabyBullish,
+  identicalThreeCrows,
+  advanceBlock,
+  bearishDojiStar,
 };

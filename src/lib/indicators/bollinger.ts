@@ -6,6 +6,7 @@ interface BollingerParams { period: number; stdDevMult: number; [key: string]: n
 export const bollinger: Indicator<BollingerParams> = {
   id: 'bollinger',
   name: 'Bollinger Bands',
+  description: 'Bollinger Bands. Volatility indicator consisting of a middle SMA and upper/lower standard deviation bands. Helps identify overextended conditions.',
   defaultParams: { period: 20, stdDevMult: 2 },
   paramsMeta: {
     period:     { label: 'Period',      min: 2, max: 200, step: 1   },

@@ -18,6 +18,7 @@ interface RsiParams {
 export const rsi: Indicator<RsiParams> = {
   id: 'rsi',
   name: 'RSI',
+  description: 'Relative Strength Index. Momentum oscillator measuring the speed and change of price movements. > 70 implies overbought, < 30 implies oversold.',
   defaultParams: { period: 14, emaPeriod: 10 },
   paramsMeta: {
     period:    { label: 'RSI Period',  min: 2, max: 100, step: 1 },

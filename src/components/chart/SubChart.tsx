@@ -291,14 +291,22 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
         const existing = seriesRefs.current.get(s.id);
 
         if (s.seriesType === 'histogram') {
-          const histData = s.data.map((p) => {
-            if (Number.isNaN(p.value)) return { time: toSec(p.time) } as any;
+          let histData = s.data.map((p) => {
+            const timeVal = toSec(p.time);
+            if (Number.isNaN(p.value)) return { time: timeVal } as any;
             return {
-              time:  toSec(p.time),
+              time:  timeVal,
               value: p.value,
               color: p.color,
             };
           });
+          
+          const badPoints = histData.filter((p: any) => Number.isNaN(p.time) || p.time === undefined);
+          if (badPoints.length > 0) {
+            console.error(`[SubChart] NaN time detected in histogram series ${s.id}.`);
+            console.error(`Raw indicator data slice:`, JSON.stringify(s.data.filter(p => Number.isNaN(toSec(p.time)) || p.time === undefined).slice(0, 5)));
+            histData = histData.filter((p: any) => !Number.isNaN(p.time) && p.time !== undefined);
+          }
 
           if (existing) {
             const hist = existing as ISeriesApi<'Histogram'>;
@@ -316,10 +324,18 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
           }
         } else {
           // line
-          const lineData = s.data.map((p) => {
-            if (Number.isNaN(p.value)) return { time: toSec(p.time) } as any;
-            return { time: toSec(p.time), value: p.value };
+          let lineData = s.data.map((p) => {
+            const timeVal = toSec(p.time);
+            if (Number.isNaN(p.value)) return { time: timeVal } as any;
+            return { time: timeVal, value: p.value };
           });
+          
+          const badPoints = lineData.filter((p: any) => Number.isNaN(p.time) || p.time === undefined);
+          if (badPoints.length > 0) {
+            console.error(`[SubChart] NaN time detected in line series ${s.id}.`);
+            console.error(`Raw indicator data slice:`, JSON.stringify(s.data.filter(p => Number.isNaN(toSec(p.time)) || p.time === undefined).slice(0, 5)));
+            lineData = lineData.filter((p: any) => !Number.isNaN(p.time) && p.time !== undefined);
+          }
 
           if (existing) {
             const line = existing as ISeriesApi<'Line'>;

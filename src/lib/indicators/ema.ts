@@ -6,6 +6,7 @@ interface EmaParams { period: number; [key: string]: number }
 export const ema: Indicator<EmaParams> = {
   id: 'ema',
   name: 'EMA',
+  description: 'Exponential Moving Average. Reacts faster to recent price changes than SMA. Used to identify trend direction and dynamic support/resistance.',
   defaultParams: { period: 20 },
   paramsMeta: {
     period: { label: 'Period', min: 2, max: 500, step: 1 },

@@ -57,6 +57,7 @@ export interface ParamMeta {
 export interface Indicator<P extends Record<string, number> = Record<string, number>> {
   id: string;
   name: string;
+  description?: string;
   defaultParams: P;
   /** Metadata for each param key — drives the config popup UI. */
   paramsMeta: Record<keyof P, ParamMeta>;

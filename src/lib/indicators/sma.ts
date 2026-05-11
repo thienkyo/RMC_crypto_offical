@@ -6,6 +6,7 @@ interface SmaParams { period: number; [key: string]: number }
 export const sma: Indicator<SmaParams> = {
   id: 'sma',
   name: 'SMA',
+  description: 'Simple Moving Average. Shows the average price over a period. Useful for identifying the overall, smoother trend direction.',
   defaultParams: { period: 20 },
   paramsMeta: {
     period: { label: 'Period', min: 2, max: 500, step: 1 },

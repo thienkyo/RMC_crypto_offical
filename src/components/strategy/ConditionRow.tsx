@@ -71,6 +71,7 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
   
   const seriesOptions = SERIES_LABELS[condition.indicatorId] ?? ['Signal'];
   const selectedIndicator = INDICATORS[condition.indicatorId];
+  const isPattern = selectedIndicator?.bias !== undefined;
   const paramEntries = selectedIndicator
     ? Object.entries(selectedIndicator.defaultParams)
     : [];
@@ -125,11 +126,14 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
 
   function handleIndicatorChange(newId: string) {
     const indicator = INDICATORS[newId];
+    const isPattern = indicator?.bias !== undefined;
     onChange({
       ...condition,
       indicatorId:  newId,
       params:       indicator ? { ...indicator.defaultParams } : {},
       seriesIndex:  0,
+      // Patterns always evaluate `> 0` — lock it in so the engine is always correct.
+      ...(isPattern ? { operator: 'gt' as const, value: 0 } : {}),
     });
   }
 
@@ -292,37 +296,43 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
         </select>
       )}
 
-      {/* ── Operator ──────────────────────────────────────────────────── */}
-      <select
-        value={condition.operator}
-        onChange={(e) => set('operator', e.target.value as ConditionOperator)}
-        className="select-sm"
-      >
-        {(Object.keys(OPERATOR_LABELS) as ConditionOperator[]).map((op) => (
-          <option key={op} value={op}>
-            {OPERATOR_LABELS[op]}
-          </option>
-        ))}
-      </select>
+      {/* ── Operator + Threshold — hidden for patterns (always gt/0) ─── */}
+      {isPattern ? (
+        <span className="text-xs font-mono text-text-muted bg-surface-2 border border-surface-border rounded px-2 py-0.5 select-none">
+          detected
+        </span>
+      ) : (
+        <>
+          <select
+            value={condition.operator}
+            onChange={(e) => set('operator', e.target.value as ConditionOperator)}
+            className="select-sm"
+          >
+            {(Object.keys(OPERATOR_LABELS) as ConditionOperator[]).map((op) => (
+              <option key={op} value={op}>
+                {OPERATOR_LABELS[op]}
+              </option>
+            ))}
+          </select>
 
-      {/* ── Threshold value ───────────────────────────────────────────── */}
-      <input
-        type="number"
-        value={valueInput}
-        step="any"
-        onChange={(e) => {
-          setValueInput(e.target.value);           // always update display
-          const num = parseFloat(e.target.value);
-          if (!Number.isNaN(num)) set('value', num); // commit when parseable
-        }}
-        onBlur={() => {
-          // Normalise display on blur (e.g. "0." → "0", trailing zeros dropped)
-          const num = parseFloat(valueInput);
-          setValueInput(Number.isNaN(num) ? String(condition.value) : String(num));
-        }}
-        className="input-xs w-24"
-        placeholder="value"
-      />
+          <input
+            type="number"
+            value={valueInput}
+            step="any"
+            onChange={(e) => {
+              setValueInput(e.target.value);
+              const num = parseFloat(e.target.value);
+              if (!Number.isNaN(num)) set('value', num);
+            }}
+            onBlur={() => {
+              const num = parseFloat(valueInput);
+              setValueInput(Number.isNaN(num) ? String(condition.value) : String(num));
+            }}
+            className="input-xs w-24"
+            placeholder="value"
+          />
+        </>
+      )}
 
       {/* ── Alert check mode ──────────────────────────────────────────── */}
       <span className="text-xs text-text-muted opacity-50 select-none">|</span>

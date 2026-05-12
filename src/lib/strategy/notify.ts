@@ -24,7 +24,7 @@
 import { db }                         from '@/lib/db/client';
 import { fetchKlines, TF_TO_MS }      from '@/lib/exchange/binance';
 import { buildIndicatorCache,
-         evaluateCondition }           from '@/lib/strategy/evaluate';
+         evaluateConditionChecked }    from '@/lib/strategy/evaluate';
 import { formatStrategySignalMessage,
          strategyRating }              from '@/lib/alerts/telegram';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
@@ -145,38 +145,15 @@ export async function evaluateStrategySignal(
 }
 
 // ─── Per-condition check ──────────────────────────────────────────────────────
+// Delegates to the shared evaluateConditionChecked() in evaluate.ts so the
+// notify path is guaranteed to match the backtester and chart markers exactly.
 
-/**
- * Evaluate a single condition using its own checkMode + checkCandles.
- *
- * 'confirmation' (default): condition must be true on ALL of the last N closed candles.
- * 'lookback':               condition must be true on ANY of the last N closed candles.
- */
 function conditionPassesCheck(
   condition: StrategyCondition,
   closed:    Candle[],
   cache:     Map<string, Map<number, number>>,
 ): boolean {
-  const mode = condition.checkMode    ?? 'confirmation';
-  const n    = Math.max(1, condition.checkCandles ?? 1);
-  const last = closed.length - 1;
-
-  if (mode === 'confirmation') {
-    // ALL of the last N candles must satisfy the condition.
-    for (let i = last; i > last - n; i--) {
-      if (i < 0) return false;
-      const prev = i > 0 ? closed[i - 1] : undefined;
-      if (!evaluateCondition(condition, closed[i]!, prev, cache)) return false;
-    }
-    return true;
-  }
-
-  // lookback: ANY of the last N candles satisfies the condition.
-  for (let i = last; i >= Math.max(0, last - n + 1); i--) {
-    const prev = i > 0 ? closed[i - 1] : undefined;
-    if (evaluateCondition(condition, closed[i]!, prev, cache)) return true;
-  }
-  return false;
+  return evaluateConditionChecked(condition, closed, closed.length - 1, cache);
 }
 
 // ─── Candle fetching — always fresh tail ─────────────────────────────────────

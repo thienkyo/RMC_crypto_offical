@@ -47,30 +47,16 @@ export function useAlertPoller(): void {
     // Fire immediately on mount
     void runCheck();
 
-    // Then poll every INTERVAL_MS
+    // Poll every INTERVAL_MS regardless of tab visibility.
+    // The interval keeps running when the user switches to another app —
+    // fetch() to the local Next.js server works fine from a background tab,
+    // and browser timer throttling is irrelevant here since the interval is
+    // already 60 s (matching the minimum throttle floor in background tabs).
+    // Vercel cron only runs on deployed infra, so this loop is the sole
+    // signal driver in local dev — stopping it on blur = no alerts at all.
     intervalRef.current = setInterval(() => { void runCheck(); }, INTERVAL_MS);
 
-    // Pause/resume on visibility change to avoid missed ticks
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        // Tab became active again — fire immediately to catch up
-        void runCheck();
-        if (!intervalRef.current) {
-          intervalRef.current = setInterval(() => { void runCheck(); }, INTERVAL_MS);
-        }
-      } else {
-        // Tab hidden — stop the interval (it would fire into the void anyway)
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibility);
-
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);

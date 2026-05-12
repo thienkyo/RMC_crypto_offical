@@ -13,7 +13,7 @@
  * how position management would have filtered them.
  */
 
-import { buildIndicatorCache, evaluateCondition } from '@/lib/strategy/evaluate';
+import { buildIndicatorCache, evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
 import type { Strategy } from '@/types/strategy';
 import type { Candle } from '@/types/market';
 
@@ -24,11 +24,9 @@ export interface RawSignal {
 
 /**
  * Return every closed candle (excluding the currently-forming bar) where
- * the strategy's entry conditions were met.
- *
- * Evaluation uses the same evaluateCondition() logic as the backtester —
- * single-candle check per bar, no multi-candle confirmation window.
- * (checkMode / checkCandles are notification-layer concerns, not chart display.)
+ * the strategy's entry conditions were met, honouring each condition's
+ * checkMode + checkCandles window.  Matches the backtester exactly so chart
+ * markers and trade counts are always in sync.
  */
 export function computeSignalCandles(strategy: Strategy, candles: Candle[]): RawSignal[] {
   const allConditions = strategy.entryConditions.flatMap((g) => g.conditions);
@@ -48,16 +46,9 @@ export function computeSignalCandles(strategy: Strategy, candles: Candle[]): Raw
 
   // candles.length - 1 skips the currently-forming bar (same convention as notify.ts).
   for (let i = 1; i < candles.length - 1; i++) {
-    const candle = candles[i]!;
-    const prev   = candles[i - 1]!;
-
-    // ANY condition group (OR), ALL conditions within a group (AND)
-    const fired = strategy.entryConditions.some((group) => {
-      if (group.conditions.length === 0) return false;
-      return group.conditions.every((c) => evaluateCondition(c, candle, prev, cache));
-    });
-
-    if (fired) signals.push({ openTimeMs: candle.openTime, direction });
+    if (evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache)) {
+      signals.push({ openTimeMs: candles[i]!.openTime, direction });
+    }
   }
 
   return signals;

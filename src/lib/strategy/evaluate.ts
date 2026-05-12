@@ -137,3 +137,74 @@ export function evaluateConditionGroups(
   if (groups.length === 0) return false;
   return groups.some((g) => evaluateConditionGroup(g, candle, prevCandle, cache));
 }
+
+// ─── Window-aware evaluation (respects checkMode + checkCandles) ─────────────
+//
+// These are the canonical functions used by the backtester, chart signal
+// computation, and the notify cron — all three paths must agree on when a
+// condition fires, otherwise the backtest shows different trade counts than
+// what actually gets sent to Telegram.
+//
+// 'confirmation' (default), N:
+//   The condition must hold on ALL of the last N consecutive closed candles
+//   ending at barIndex.  checkCandles = 1 is equivalent to the single-bar check.
+//
+// 'lookback', N:
+//   The condition must have been true on AT LEAST ONE of the last N candles.
+
+/**
+ * Evaluate a single condition at bar `barIndex`, honouring its
+ * `checkMode` + `checkCandles` window.
+ */
+export function evaluateConditionChecked(
+  condition: StrategyCondition,
+  candles:   Candle[],
+  barIndex:  number,
+  cache:     Map<string, TimeValueMap>,
+): boolean {
+  const mode = condition.checkMode    ?? 'confirmation';
+  const n    = Math.max(1, condition.checkCandles ?? 1);
+
+  if (mode === 'confirmation') {
+    // ALL of the last N candles (barIndex-N+1 … barIndex) must pass.
+    for (let i = barIndex; i > barIndex - n; i--) {
+      if (i < 0) return false;
+      if (!evaluateCondition(condition, candles[i]!, candles[i - 1], cache)) return false;
+    }
+    return true;
+  }
+
+  // lookback: ANY of the last N candles must pass.
+  for (let i = barIndex; i >= Math.max(0, barIndex - n + 1); i--) {
+    if (evaluateCondition(condition, candles[i]!, candles[i - 1], cache)) return true;
+  }
+  return false;
+}
+
+/**
+ * Evaluate one condition group at `barIndex` — ALL ENABLED conditions must
+ * pass their individual checkMode windows (AND).
+ */
+export function evaluateConditionGroupChecked(
+  group:    ConditionGroup,
+  candles:  Candle[],
+  barIndex: number,
+  cache:    Map<string, TimeValueMap>,
+): boolean {
+  const active = group.conditions.filter((c) => c.enabled !== false);
+  if (active.length === 0) return false;
+  return active.every((c) => evaluateConditionChecked(c, candles, barIndex, cache));
+}
+
+/**
+ * Evaluate a list of condition groups at `barIndex` — ANY group firing triggers (OR).
+ */
+export function evaluateConditionGroupsChecked(
+  groups:   ConditionGroup[],
+  candles:  Candle[],
+  barIndex: number,
+  cache:    Map<string, TimeValueMap>,
+): boolean {
+  if (groups.length === 0) return false;
+  return groups.some((g) => evaluateConditionGroupChecked(g, candles, barIndex, cache));
+}

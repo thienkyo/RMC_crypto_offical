@@ -30,7 +30,7 @@ import type {
   EquityPoint,
   ExitReason,
 } from '@/types/strategy';
-import { buildIndicatorCache, evaluateConditionGroups } from './evaluate';
+import { buildIndicatorCache, evaluateConditionGroupsChecked } from './evaluate';
 import { computeMetrics } from './metrics';
 
 export interface BacktestOptions {
@@ -207,7 +207,7 @@ export function runBacktest(
     //   match this candle's openTime to render on the correct bar.
     if (
       openPositions.length > 0 &&
-      evaluateConditionGroups(strategy.exitConditions, candle, prevCandle, cache)
+      evaluateConditionGroupsChecked(strategy.exitConditions, candles, i, cache)
     ) {
       for (const pos of openPositions) {
         closePos(pos, candle.close, candle.openTime, 'signal');
@@ -218,7 +218,7 @@ export function runBacktest(
     // ── Phase 3: Entry signal — open if below the maxPositions cap ───────────
     if (
       openPositions.length < maxPositions &&
-      evaluateConditionGroups(strategy.entryConditions, candle, prevCandle, cache)
+      evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache)
     ) {
       openPos(candle.close, candle.openTime);
     }

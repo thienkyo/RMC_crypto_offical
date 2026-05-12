@@ -1,23 +1,23 @@
 /**
  * Telegram bot client for RMC alert delivery.
  *
- * Required env vars (server-side only — never exposed to client):
+ * Required env var (server-side only):
  *   TELEGRAM_BOT_TOKEN   — from @BotFather (/newbot)
- *   TELEGRAM_CHAT_ID     — comma-separated list of chat IDs to deliver to.
- *                          Personal chat ID:  positive number  (e.g. 123456789)
- *                          Group / supergroup: negative number (e.g. -1001234567890)
- *                          Examples:
- *                            Single personal:  TELEGRAM_CHAT_ID=123456789
- *                            Group only:       TELEGRAM_CHAT_ID=-1001234567890
- *                            Both:             TELEGRAM_CHAT_ID=123456789,-1001234567890
  *
- * To discover your group's chat ID, call GET /api/alerts/chats after adding
- * the bot to the group and sending at least one message there.
+ * Chat IDs are stored in the `settings` DB table and managed via the Settings
+ * page — no redeploy needed when you change them.
+ *
+ * Routing rule:
+ *   alert/strategy name contains "test" (case-insensitive)
+ *     → personal chat IDs  (visible only to you)
+ *   otherwise
+ *     → group chat IDs     (broadcast to group/channel)
  */
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
+import { db } from '@/lib/db/client';
+import { parseChatIds, isTestTarget } from '@/lib/telegram';
 
+const BOT_TOKEN    = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = 'https://api.telegram.org';
 
 export interface TelegramSendResult {
@@ -29,23 +29,54 @@ export interface TelegramSendResult {
 }
 
 /**
- * Send an HTML-mode message to ALL configured chat IDs.
- * TELEGRAM_CHAT_ID may be a single ID or a comma-separated list.
- * Returns ok:true as long as at least one delivery succeeded.
- * Never throws.
+ * Send an HTML-mode message, routing to personal or group chat IDs based on
+ * `targetName` (alert rule name or strategy name).
+ *
+ * - Name contains "test" (case-insensitive) → personal chat IDs
+ * - Otherwise → group chat IDs
+ *
+ * Returns ok:true as long as at least one delivery succeeded. Never throws.
  */
-export async function sendTelegramAlert(text: string): Promise<TelegramSendResult> {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    return { ok: false, error: 'TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured in env' };
+export async function sendTelegramAlert(
+  text:       string,
+  targetName: string,
+): Promise<TelegramSendResult> {
+  if (!BOT_TOKEN) {
+    return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set in .env.local' };
   }
 
-  // Parse comma-separated IDs, strip whitespace, drop empty strings.
-  const chatIds = CHAT_ID.split(',').map((s) => s.trim()).filter(Boolean);
+  // ── Load chat IDs from DB ─────────────────────────────────────────────────
+  let personalIds: string[] = [];
+  let groupIds:    string[] = [];
+  try {
+    const { rows } = await db.query<{ key: string; value: string | null }>(
+      `SELECT key, value FROM settings
+       WHERE key IN ('telegram_personal_chat_id', 'telegram_group_chat_id')`,
+    );
+    const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    personalIds = parseChatIds(map['telegram_personal_chat_id']);
+    groupIds    = parseChatIds(map['telegram_group_chat_id']);
+  } catch (err) {
+    return { ok: false, error: `Failed to load chat IDs from DB: ${String(err)}` };
+  }
+
+  // ── Route by name ─────────────────────────────────────────────────────────
+  const isTest  = isTestTarget(targetName);
+  const chatIds = isTest ? personalIds : groupIds;
+  const channel = isTest ? 'personal' : 'group';
+
   if (chatIds.length === 0) {
-    return { ok: false, error: 'TELEGRAM_CHAT_ID is empty' };
+    const msg = `No ${channel} chat IDs configured — add them on the Settings page`;
+    console.warn(`[telegram] ${msg} (target: "${targetName}")`);
+    return { ok: false, error: msg };
   }
 
-  let delivered = 0;
+  console.log(
+    `[telegram] "${targetName}" → ${channel} (${chatIds.length} chat(s), isTest=${isTest})`,
+  );
+
+  // ── Send in parallel ──────────────────────────────────────────────────────
+  let delivered  = 0;
   let firstError: string | undefined;
 
   await Promise.all(

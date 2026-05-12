@@ -56,7 +56,7 @@ async function runCheckAlerts(): Promise<Response> {
       console.error('[cron:check-alerts] Failed to log alert history:', err);
     }
 
-    const telegramResult = await sendTelegramAlert(evalResult.message);
+    const telegramResult = await sendTelegramAlert(evalResult.message, evalResult.rule.name);
     if (telegramResult.ok) {
       if (historyEntry) {
         await markAlertDelivered(historyEntry.id).catch((err) =>
@@ -106,7 +106,7 @@ async function runCheckAlerts(): Promise<Response> {
     firedCount++;
     console.log(`[cron:check-alerts] STRATEGY FIRED: ${evalResult.strategy.name} (${evalResult.strategy.symbol})`);
 
-    const telegramResult = await sendTelegramAlert(evalResult.message);
+    const telegramResult = await sendTelegramAlert(evalResult.message, evalResult.strategy.name);
     const telegramStatus = telegramResult.ok
       ? `sent to ${telegramResult.delivered} chat(s)`
       : `failed: ${telegramResult.error}`;

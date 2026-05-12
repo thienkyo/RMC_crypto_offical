@@ -14,6 +14,7 @@ export async function GET(): Promise<Response> {
     return Response.json({ ok: false, error: verify.error }, { status: 400 });
   }
 
+  // Pass 'test' as targetName so this ping always routes to personal chat IDs.
   const result = await sendTelegramAlert(
     [
       '✅ <b>RMC Alerts connected</b>',
@@ -21,6 +22,7 @@ export async function GET(): Promise<Response> {
       'Telegram delivery is working.',
       '<i>Paper trading only — not financial advice</i>',
     ].join('\n'),
+    'test-connectivity-ping',
   );
 
   return Response.json(result);

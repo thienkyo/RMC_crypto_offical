@@ -201,6 +201,21 @@ CREATE TABLE IF NOT EXISTS alert_history (
 CREATE INDEX IF NOT EXISTS alert_history_rule ON alert_history (rule_id, fired_at DESC);
 CREATE INDEX IF NOT EXISTS alert_history_undelivered ON alert_history (fired_at) WHERE delivered = FALSE;
 
+-- ─── App settings ────────────────────────────────────────────────────────────
+-- Generic key/value store for user-configurable settings.
+-- Prefer explicit named keys over a JSON blob so each field is queryable.
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT        PRIMARY KEY,
+  value      TEXT,                        -- NULL = field present but intentionally blank
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed default (empty) Telegram keys so the settings page can always SELECT them.
+INSERT INTO settings (key, value) VALUES
+  ('telegram_personal_chat_id', NULL),
+  ('telegram_group_chat_id',    NULL)
+ON CONFLICT (key) DO NOTHING;
+
 -- ─── Backfill tracking ───────────────────────────────────────────────────────
 -- Tracks the earliest candle we have per symbol+timeframe so we know
 -- whether a historical range is already in DB without a COUNT(*).

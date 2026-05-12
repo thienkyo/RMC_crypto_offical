@@ -35,6 +35,7 @@ export function buildIndicatorCache(
   const cache = new Map<string, TimeValueMap>();
 
   for (const condition of conditions) {
+    if (condition.enabled === false) continue; // skip disabled conditions
     const key = conditionCacheKey(condition);
     if (cache.has(key)) continue; // already computed
 
@@ -108,7 +109,9 @@ export function evaluateCondition(
 }
 
 /**
- * Evaluate one condition group — ALL conditions must be satisfied (AND).
+ * Evaluate one condition group — ALL ENABLED conditions must be satisfied (AND).
+ * Disabled conditions (enabled === false) are skipped.
+ * A group with no active conditions returns false (never fires).
  */
 export function evaluateConditionGroup(
   group: ConditionGroup,
@@ -116,10 +119,9 @@ export function evaluateConditionGroup(
   prevCandle: Candle | undefined,
   cache: Map<string, TimeValueMap>,
 ): boolean {
-  if (group.conditions.length === 0) return false;
-  return group.conditions.every((c) =>
-    evaluateCondition(c, candle, prevCandle, cache),
-  );
+  const active = group.conditions.filter((c) => c.enabled !== false);
+  if (active.length === 0) return false;
+  return active.every((c) => evaluateCondition(c, candle, prevCandle, cache));
 }
 
 /**

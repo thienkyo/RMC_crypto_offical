@@ -93,7 +93,13 @@ export function ConditionGroupEditor({
       {group.conditions.map((condition, i) => (
         <div key={condition.id}>
           {i > 0 && (
-            <span className="text-xs font-mono text-text-muted pl-1">AND</span>
+            <span className={`text-xs font-mono pl-1 ${
+              condition.enabled === false
+                ? 'text-text-muted opacity-30 line-through'
+                : 'text-text-muted'
+            }`}>
+              AND
+            </span>
           )}
           <ConditionRow
             condition={condition}

@@ -30,6 +30,8 @@ export interface SubChartHandle {
 interface Props {
   series:        IndicatorSeries[];
   title:         string;
+  /** Signal direction for pattern indicators — renders a colored bull/bear pill. */
+  bias?:         'bullish' | 'bearish';
   /** Fixed height in pixels. */
   height:        number;
   /**
@@ -92,7 +94,7 @@ function toSeriesMarkers(markers: IndicatorMarker[] | undefined): SeriesMarker<U
  * cursor moves. Values disappear when the cursor leaves the chart.
  */
 export const SubChart = forwardRef<SubChartHandle, Props>(
-  function SubChart({ series, title, height, crosshairTime, showTimeAxis = false, onCrosshair }, ref) {
+  function SubChart({ series, title, bias, height, crosshairTime, showTimeAxis = false, onCrosshair }, ref) {
     const containerRef    = useRef<HTMLDivElement>(null);
     const chartRef        = useRef<IChartApi | null>(null);
     const seriesRefs      = useRef<Map<string, ISeriesApi<'Line' | 'Histogram'>>>(new Map());
@@ -373,6 +375,16 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
           <span className="text-[10px] font-mono text-text-secondary">
             {title}
           </span>
+
+          {/* Bias pill — bullish/bearish tag for pattern indicators */}
+          {bias && (
+            <span
+              className={`text-[9px] font-mono font-medium px-1 py-px rounded flex-shrink-0
+                ${bias === 'bullish' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}
+            >
+              {bias === 'bullish' ? '▲ Bullish' : '▼ Bearish'}
+            </span>
+          )}
 
           {/* Per-series values — shown while crosshair is active on any pane */}
           {series.map((s) => {

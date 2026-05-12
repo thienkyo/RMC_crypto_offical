@@ -10,7 +10,7 @@ import { useLayoutStore } from '@/store/layout';
 import { useCandles }    from '@/hooks/useCandles';
 import { subscribeKline } from '@/lib/exchange/binance';
 import { INDICATORS }    from '@/lib/indicators';
-import type { IndicatorSeries, IndicatorPoint } from '@/lib/indicators';
+import type { IndicatorSeries, IndicatorPoint, IndicatorMarker } from '@/lib/indicators';
 import { useLiveStrategies } from '@/hooks/useLiveStrategy';
 import { computeSignalCandles } from '@/lib/strategy/signals';
 import { PriceChart, type PriceChartHandle } from './PriceChart';
@@ -294,6 +294,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     const groups = new Map<string, IndicatorSeries[]>();
     for (const s of allSeries.filter((s) => s.panel === 'sub')) {
       const indicatorId = activeIndicators.find((ai) => s.id.startsWith(ai.id))?.id ?? s.id;
+      // Pattern indicators (bias set) render only as arrow markers on the price chart —
+      // no sub-pane needed; the histogram signal data is irrelevant for display.
+      if (INDICATORS[indicatorId]?.bias !== undefined) continue;
       if (!groups.has(indicatorId)) groups.set(indicatorId, []);
       groups.get(indicatorId)!.push(s);
     }
@@ -444,6 +447,28 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // always get fresh data without subscribing to every live tick.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStrategies, candles]);
+
+  // ── Pattern markers on price chart ───────────────────────────────────────
+  // Extract IndicatorMarker[] from any indicator series that carries them
+  // (pattern detectors) and convert to LWC SeriesMarker format so they render
+  // as arrows directly on the price chart — same layer as strategy markers.
+  const patternMarkers = useMemo((): SeriesMarker<LWCTimestamp>[] => {
+    const out: SeriesMarker<LWCTimestamp>[] = [];
+    for (const s of allSeries) {
+      if (!s.markers || s.markers.length === 0) continue;
+      for (const m of s.markers as IndicatorMarker[]) {
+        out.push({
+          time:     Math.floor(m.time / 1000) as LWCTimestamp,
+          position: m.position,
+          color:    m.color,
+          shape:    m.shape,
+          size:     m.size ?? 1,
+          text:     m.text ?? '',
+        });
+      }
+    }
+    return out;
+  }, [allSeries]);
 
   // ── Candle timer Y position ───────────────────────────────────────────────
   // Keep the timer aligned to the price axis label by tracking the Y pixel of
@@ -806,7 +831,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             onCrosshair={handleCrosshair}
             crosshairTime={crosshairTime}
             showTimeAxis={subPaneGroups.size === 0}
-            markers={strategyMarkers}
+            markers={[...strategyMarkers, ...patternMarkers].sort(
+              (a, b) => (a.time as number) - (b.time as number),
+            )}
           />
 
           {/* Candle countdown — positioned on the price axis just below the live price label */}
@@ -859,23 +886,27 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
         {/* Sub-pane charts (resizable) */}
         <div className="flex-shrink-0">
-          {Array.from(subPaneGroups.entries()).map(([indicatorId, series], index, arr) => (
-            <div key={indicatorId} className="flex flex-col">
-              <PaneResizer onDelta={(delta) => handlePaneDelta(indicatorId, delta)} />
-              <SubChart
-                ref={(el) => {
-                  if (el) subRefs.current.set(indicatorId, el);
-                  else    subRefs.current.delete(indicatorId);
-                }}
-                series={series}
-                title={indicatorId.toUpperCase()}
-                height={getSubHeight(indicatorId)}
-                crosshairTime={crosshairTime}
-                showTimeAxis={index === arr.length - 1}
-                onCrosshair={handleCrosshair}
-              />
-            </div>
-          ))}
+          {Array.from(subPaneGroups.entries()).map(([indicatorId, series], index, arr) => {
+            const ind = INDICATORS[indicatorId];
+            return (
+              <div key={indicatorId} className="flex flex-col">
+                <PaneResizer onDelta={(delta) => handlePaneDelta(indicatorId, delta)} />
+                <SubChart
+                  ref={(el) => {
+                    if (el) subRefs.current.set(indicatorId, el);
+                    else    subRefs.current.delete(indicatorId);
+                  }}
+                  series={series}
+                  title={ind?.name ?? indicatorId.toUpperCase()}
+                  bias={ind?.bias}
+                  height={getSubHeight(indicatorId)}
+                  crosshairTime={crosshairTime}
+                  showTimeAxis={index === arr.length - 1}
+                  onCrosshair={handleCrosshair}
+                />
+              </div>
+            );
+          })}
         </div>
 
       </div>

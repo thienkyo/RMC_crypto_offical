@@ -50,16 +50,18 @@ import {
 // The registry stores all indicators under their widened default param type.
 // Callers pass Record<string,number> params (from the store) which satisfies
 // each indicator's P constraint because P extends Record<string,number>.
+// Keyed by each indicator's own .id field (snake_case) so store lookups
+// via ai.id always resolve correctly — regardless of the import variable name.
 export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
-  ema,
-  sma,
-  rsi,
-  macd,
-  bollinger,
-  bbpct,
-  abandonedBabyBearish,
-  abandonedBabyBullish,
-  identicalThreeCrows,
-  advanceBlock,
-  bearishDojiStar,
+  [ema.id]:                  ema,
+  [sma.id]:                  sma,
+  [rsi.id]:                  rsi,
+  [macd.id]:                 macd,
+  [bollinger.id]:            bollinger,
+  [bbpct.id]:                bbpct,
+  [abandonedBabyBearish.id]: abandonedBabyBearish,
+  [abandonedBabyBullish.id]: abandonedBabyBullish,
+  [identicalThreeCrows.id]:  identicalThreeCrows,
+  [advanceBlock.id]:         advanceBlock,
+  [bearishDojiStar.id]:      bearishDojiStar,
 };

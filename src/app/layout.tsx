@@ -34,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {/* Page links — Next.js Link renders <a> with client-side navigation */}
             <Link href="/"         className="nav-link">Chart</Link>
             <Link href="/strategy" className="nav-link">Strategy</Link>
+            <Link href="/settings" className="nav-link">Settings</Link>
 
             {/* Right spacer + paper-trade badge */}
             <span className="ml-auto text-xs font-mono text-amber-400/70">

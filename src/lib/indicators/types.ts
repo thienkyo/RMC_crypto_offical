@@ -58,6 +58,12 @@ export interface Indicator<P extends Record<string, number> = Record<string, num
   id: string;
   name: string;
   description?: string;
+  /**
+   * Signal direction for candlestick pattern indicators.
+   * Undefined for price/oscillator indicators that have no directional bias.
+   * Rendered as a colored pill tag in the IndicatorSelector dropdown.
+   */
+  bias?: 'bullish' | 'bearish';
   defaultParams: P;
   /** Metadata for each param key — drives the config popup UI. */
   paramsMeta: Record<keyof P, ParamMeta>;

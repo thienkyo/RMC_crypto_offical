@@ -34,6 +34,27 @@ const SERIES_LABELS: Record<string, string[]> = {
   bollinger: ['Middle Band', 'Upper Band', 'Lower Band'],
 };
 
+// ── Enable / disable toggle ───────────────────────────────────────────────────
+
+function EnableToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={enabled ? 'Disable condition (config preserved)' : 'Enable condition'}
+      className={`flex-shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded border
+        font-mono text-[10px] font-semibold transition-all select-none
+        ${enabled
+          ? 'bg-up/10 border-up/30 text-up hover:bg-up/20'
+          : 'bg-surface-2 border-surface-border text-text-muted hover:border-accent/40 hover:text-text-primary'
+        }`}
+    >
+      <span className="text-[8px]">{enabled ? '●' : '○'}</span>
+      <span>{enabled ? 'ON' : 'OFF'}</span>
+    </button>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -44,14 +65,9 @@ interface Props {
 
 export function ConditionRow({ condition, onChange, onRemove }: Props) {
   const allIds = Object.keys(INDICATORS);
-  const patternIds = [
-    'abandonedBabyBearish',
-    'abandonedBabyBullish',
-    'identicalThreeCrows',
-    'advanceBlock',
-    'bearishDojiStar'
-  ];
-  const indicatorIds = allIds.filter(id => !patternIds.includes(id));
+  // Patterns are indicators with a bias field; plain indicators have no bias.
+  const patternIds    = allIds.filter((id) => INDICATORS[id]?.bias !== undefined);
+  const indicatorIds  = allIds.filter((id) => INDICATORS[id]?.bias === undefined);
   
   const seriesOptions = SERIES_LABELS[condition.indicatorId] ?? ['Signal'];
   const selectedIndicator = INDICATORS[condition.indicatorId];
@@ -124,16 +140,31 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
     }
   }
 
+  const isEnabled = condition.enabled !== false;
+
   return (
-    <div className="flex flex-wrap items-center gap-2 py-1.5">
+    <div className={`flex flex-wrap items-center gap-2 py-1.5 transition-opacity ${isEnabled ? '' : 'opacity-40'}`}>
+      {/* ── Enable / disable toggle ────────────────────────────────────── */}
+      <EnableToggle
+        enabled={isEnabled}
+        onToggle={() => set('enabled', !isEnabled)}
+      />
       {/* ── Indicator selector ─────────────────────────────────────────── */}
       <div className="relative flex items-center gap-1" ref={helpContainerRef}>
         <div className="relative" ref={dropdownRef}>
-          <div 
+          <div
             className="select-sm flex items-center justify-between cursor-pointer min-w-[180px]"
             onClick={() => { setDropdownOpen(!dropdownOpen); setSearchQuery(''); }}
           >
             <span className="truncate pr-2">{selectedIndicator?.name ?? condition.indicatorId}</span>
+            {selectedIndicator?.bias && (
+              <span
+                className={`text-[9px] font-mono font-medium px-1 py-px rounded flex-shrink-0 mr-1
+                  ${selectedIndicator.bias === 'bullish' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}
+              >
+                {selectedIndicator.bias === 'bullish' ? '▲' : '▼'}
+              </span>
+            )}
             <span className="text-[10px] opacity-60">▼</span>
           </div>
 
@@ -182,18 +213,29 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
                       {filteredPatterns.length > 0 && (
                         <div>
                           <div className="px-2 py-1 text-[10px] text-text-muted uppercase tracking-wider font-semibold">Candlestick Patterns</div>
-                          {filteredPatterns.map(id => (
-                            <div
-                              key={id}
-                              className={clsx(
-                                "px-2 py-1.5 text-xs rounded cursor-pointer truncate transition-colors",
-                                condition.indicatorId === id ? "bg-accent/20 text-accent font-medium" : "text-text-primary hover:bg-surface-3"
-                              )}
-                              onClick={() => { handleIndicatorChange(id); setDropdownOpen(false); }}
-                            >
-                              {INDICATORS[id]?.name ?? id}
-                            </div>
-                          ))}
+                          {filteredPatterns.map(id => {
+                            const ind = INDICATORS[id];
+                            return (
+                              <div
+                                key={id}
+                                className={clsx(
+                                  "px-2 py-1.5 text-xs rounded cursor-pointer transition-colors flex items-center gap-1.5",
+                                  condition.indicatorId === id ? "bg-accent/20 text-accent font-medium" : "text-text-primary hover:bg-surface-3"
+                                )}
+                                onClick={() => { handleIndicatorChange(id); setDropdownOpen(false); }}
+                              >
+                                <span className="flex-1 truncate">{ind?.name ?? id}</span>
+                                {ind?.bias && (
+                                  <span
+                                    className={`text-[9px] font-mono font-medium px-1 py-px rounded flex-shrink-0
+                                      ${ind.bias === 'bullish' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}
+                                  >
+                                    {ind.bias === 'bullish' ? '▲ Bull' : '▼ Bear'}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </>

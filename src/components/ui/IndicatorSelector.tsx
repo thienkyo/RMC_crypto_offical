@@ -164,6 +164,19 @@ export function IndicatorSelector() {
                         {indicator.name}
                       </span>
 
+                      {/* Bias tag — shown for pattern indicators */}
+                      {indicator.bias && (
+                        <span
+                          className={`text-[9px] font-mono font-medium px-1 py-px rounded flex-shrink-0
+                            ${indicator.bias === 'bullish'
+                              ? 'bg-up/15 text-up'
+                              : 'bg-down/15 text-down'
+                            }`}
+                        >
+                          {indicator.bias === 'bullish' ? '▲ Bull' : '▼ Bear'}
+                        </span>
+                      )}
+
                       {/* Param summary (e.g. "14, 10") */}
                       <span className="text-[10px] text-text-muted font-mono">
                         {Object.values(ai.params).join(', ')}
@@ -235,8 +248,19 @@ export function IndicatorSelector() {
                 }}
               >
                 <span className="w-2 h-2 rounded-full flex-shrink-0 bg-surface-3" />
-                <span className="text-xs text-text-primary">{indicator.name}</span>
-                <span className="ml-auto text-[10px] text-text-muted">+</span>
+                <span className="text-xs text-text-primary flex-1 truncate">{indicator.name}</span>
+                {indicator.bias && (
+                  <span
+                    className={`text-[9px] font-mono font-medium px-1 py-px rounded flex-shrink-0
+                      ${indicator.bias === 'bullish'
+                        ? 'bg-up/15 text-up'
+                        : 'bg-down/15 text-down'
+                      }`}
+                  >
+                    {indicator.bias === 'bullish' ? '▲ Bull' : '▼ Bear'}
+                  </span>
+                )}
+                <span className="text-[10px] text-text-muted">+</span>
               </div>
             ))}
 

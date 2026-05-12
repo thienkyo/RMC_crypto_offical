@@ -44,6 +44,12 @@ export interface StrategyCondition {
   checkMode?: 'confirmation' | 'lookback';
   /** Number of candles used by checkMode. Default 1. */
   checkCandles?: number;
+  /**
+   * When false the condition is skipped entirely during evaluation — treated as
+   * if it were not in the group. Its config values are preserved so it can be
+   * re-enabled without re-entering everything. Defaults to true when absent.
+   */
+  enabled?: boolean;
 }
 
 /**

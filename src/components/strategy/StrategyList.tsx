@@ -17,15 +17,13 @@ import type { Strategy } from '@/types/strategy';
 // ── Template row ──────────────────────────────────────────────────────────────
 
 interface TemplateRowProps {
-  s:          Strategy;
-  active:     boolean;
-  onSelect:    () => void;
-  onClone:     () => void;
-  onDuplicate: () => void;
-  onDelete:    () => void;
+  s:        Strategy;
+  active:   boolean;
+  onSelect: () => void;
+  onDelete: () => void;
 }
 
-function TemplateRow({ s, active, onSelect, onClone, onDuplicate, onDelete }: TemplateRowProps) {
+function TemplateRow({ s, active, onSelect, onDelete }: TemplateRowProps) {
   return (
     <div
       className={`group flex items-center justify-between px-3 py-2 cursor-pointer
@@ -51,26 +49,6 @@ function TemplateRow({ s, active, onSelect, onClone, onDuplicate, onDelete }: Te
       </div>
 
       <div className="flex items-center gap-0.5 ml-1">
-        {/* Duplicate → another template */}
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-          className="btn-icon-xs text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary transition-opacity"
-          title="Duplicate template"
-        >
-          ⧉
-        </button>
-
-        {/* Clone → working strategy */}
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onClone(); }}
-          className="btn-icon-xs text-text-muted opacity-0 group-hover:opacity-100 hover:text-violet-400 transition-opacity"
-          title="Clone as working strategy"
-        >
-          ⎘
-        </button>
-
         {/* Delete */}
         <button
           type="button"
@@ -327,8 +305,6 @@ export function StrategyList() {
               s={t}
               active={activeId === t.id}
               onSelect={() => setActiveStrategy(t.id)}
-              onDuplicate={() => duplicateStrategy(t.id)}
-              onClone={() => handleClone(t.id)}
               onDelete={() => handleDelete(t)}
             />
           ))}

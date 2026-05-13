@@ -40,8 +40,10 @@ export function StrategyForm({ strategy: initial }: Props) {
   const [draft, setDraft]     = useState<Strategy>(initial);
   const [error, setError]     = useState<string | null>(null);
 
-  const upsertStrategy  = useStrategyStore((s) => s.upsertStrategy);
-  const isBacktesting   = useStrategyStore((s) => s.isBacktesting);
+  const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
+  const duplicateStrategy    = useStrategyStore((s) => s.duplicateStrategy);
+  const cloneFromTemplate    = useStrategyStore((s) => s.cloneFromTemplate);
+  const isBacktesting        = useStrategyStore((s) => s.isBacktesting);
   const { runBacktestForStrategy } = useBacktest();
 
   // Re-sync draft if a different strategy is selected
@@ -306,7 +308,7 @@ export function StrategyForm({ strategy: initial }: Props) {
         )}
 
         {/* ── Actions ───────────────────────────────────────────────────── */}
-        <div className="flex items-center gap-3 pb-4">
+        <div className="flex items-center gap-3 pb-4 flex-wrap">
           <button
             type="button"
             onClick={handleSave}
@@ -315,7 +317,26 @@ export function StrategyForm({ strategy: initial }: Props) {
             Save (v{draft.version + 1})
           </button>
 
-          {!draft.isTemplate && (
+          {draft.isTemplate ? (
+            <>
+              <button
+                type="button"
+                onClick={() => duplicateStrategy(draft.id)}
+                className="btn-sm btn-secondary"
+                title="Duplicate as another template"
+              >
+                ⧉ Duplicate
+              </button>
+              <button
+                type="button"
+                onClick={() => cloneFromTemplate(draft.id)}
+                className="btn-sm btn-primary"
+                title="Clone as a working strategy"
+              >
+                ⎘ Clone as Strategy
+              </button>
+            </>
+          ) : (
             <button
               type="button"
               onClick={handleBacktest}

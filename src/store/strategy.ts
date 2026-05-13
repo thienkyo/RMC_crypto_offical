@@ -10,6 +10,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Strategy, BacktestResult } from '@/types/strategy';
 import type { Timeframe } from '@/types/market';
+import { STARTER_TEMPLATES } from '@/lib/strategy/starterTemplates';
 
 // ── Default strategy factory ──────────────────────────────────────────────────
 
@@ -36,6 +37,15 @@ export function createDefaultStrategy(): Strategy {
       stopLossPct:    2,
       takeProfitPct:  4,
     },
+  };
+}
+
+export function createDefaultTemplate(): Strategy {
+  return {
+    ...createDefaultStrategy(),
+    name:       'New Template',
+    isTemplate: true,
+    isActive:   false,
   };
 }
 
@@ -72,6 +82,17 @@ interface StrategyState {
   toggleStrategyActive: (id: string) => void;
   /** Clone a strategy with a new id and " (copy)" suffix. */
   duplicateStrategy: (id: string) => void;
+  /**
+   * Clone a template into a regular working strategy.
+   * Sets isTemplate to false, prefixes name with "Copy of ", assigns a new id.
+   */
+  cloneFromTemplate: (templateId: string) => void;
+  /**
+   * Upsert the STARTER_TEMPLATES into the store (by id).
+   * Existing templates with the same id are replaced so this is idempotent.
+   * Regular strategies and custom templates are unaffected.
+   */
+  loadStarterTemplates: () => void;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -155,6 +176,46 @@ export const useStrategyStore = create<StrategyState>()(
           return {
             strategies:       [...s.strategies, copy],
             activeStrategyId: copy.id,
+          };
+        }),
+
+      loadStarterTemplates: () =>
+        set((s) => {
+          const now = Date.now();
+          // Stamp createdAt/updatedAt on first load (they're 0 in the constant).
+          const stamped = STARTER_TEMPLATES.map((t) => ({
+            ...t,
+            createdAt: t.createdAt === 0 ? now : t.createdAt,
+            updatedAt: now,
+          }));
+          // Upsert by id: drop any existing entry with the same id, then append.
+          const starterIds = new Set(stamped.map((t) => t.id));
+          return {
+            strategies: [
+              ...s.strategies.filter((x) => !starterIds.has(x.id)),
+              ...stamped,
+            ],
+          };
+        }),
+
+      cloneFromTemplate: (templateId) =>
+        set((s) => {
+          const template = s.strategies.find((x) => x.id === templateId && x.isTemplate);
+          if (!template) return {};
+          const now = Date.now();
+          const clone: typeof template = {
+            ...template,
+            id:         `strategy_${now}`,
+            name:       `Copy of ${template.name}`,
+            version:    1,
+            createdAt:  now,
+            updatedAt:  now,
+            isActive:   false,
+            isTemplate: false, // becomes a regular working strategy
+          };
+          return {
+            strategies:       [...s.strategies, clone],
+            activeStrategyId: clone.id,
           };
         }),
     }),

@@ -120,7 +120,22 @@ export function StrategyForm({ strategy: initial }: Props) {
 
         {/* ── Metadata ──────────────────────────────────────────────────── */}
         <section className="space-y-3">
-          <h3 className="section-heading">Strategy</h3>
+          <h3 className="section-heading flex items-center gap-2">
+            {draft.isTemplate ? 'Template' : 'Strategy'}
+            {draft.isTemplate && (
+              <span className="text-[10px] font-mono font-semibold px-1.5 py-px rounded
+                               bg-violet-500/15 text-violet-400 tracking-wider">
+                TEMPLATE
+              </span>
+            )}
+            <span className={`text-[10px] font-mono font-semibold px-1.5 py-px rounded ${
+              draft.action.type === 'enter_long'
+                ? 'bg-emerald-500/15 text-emerald-400'
+                : 'bg-red-500/15 text-red-400'
+            }`}>
+              {draft.action.type === 'enter_long' ? '▲ Bullish' : '▼ Bearish'}
+            </span>
+          </h3>
 
           <div className="flex flex-wrap gap-3 items-end">
             <label className="flex flex-col gap-1">
@@ -253,35 +268,37 @@ export function StrategyForm({ strategy: initial }: Props) {
           />
         </section>
 
-        {/* ── Notifications ────────────────────────────────────────────── */}
-        <section className="space-y-2">
-          <h3 className="section-heading">Notifications</h3>
-          <label className="flex items-center gap-3 cursor-pointer select-none">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={draft.notifyOnSignal ?? false}
-              onClick={() => patch('notifyOnSignal', !(draft.notifyOnSignal ?? false))}
-              className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${
-                draft.notifyOnSignal ? 'bg-emerald-500' : 'bg-surface-border'
-              }`}
-            >
-              <span className={`block w-3.5 h-3.5 rounded-full bg-white shadow transition-transform mx-0.5 ${
-                draft.notifyOnSignal ? 'translate-x-4' : 'translate-x-0'
-              }`} />
-            </button>
-            <span className="text-xs text-text-primary">
-              Notify on Telegram when entry signal fires
-            </span>
-          </label>
-          {draft.notifyOnSignal && (
-            <p className="text-xs text-text-muted pl-12">
-              Save to sync this strategy to the server. The cron checks every minute
-              and fires when entry conditions are met. Configure{' '}
-              <span className="text-text-primary">Confirm / Lookback</span> per condition above.
-            </p>
-          )}
-        </section>
+        {/* ── Notifications (hidden for templates) ─────────────────────── */}
+        {!draft.isTemplate && (
+          <section className="space-y-2">
+            <h3 className="section-heading">Notifications</h3>
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={draft.notifyOnSignal ?? false}
+                onClick={() => patch('notifyOnSignal', !(draft.notifyOnSignal ?? false))}
+                className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${
+                  draft.notifyOnSignal ? 'bg-emerald-500' : 'bg-surface-border'
+                }`}
+              >
+                <span className={`block w-3.5 h-3.5 rounded-full bg-white shadow transition-transform mx-0.5 ${
+                  draft.notifyOnSignal ? 'translate-x-4' : 'translate-x-0'
+                }`} />
+              </button>
+              <span className="text-xs text-text-primary">
+                Notify on Telegram when entry signal fires
+              </span>
+            </label>
+            {draft.notifyOnSignal && (
+              <p className="text-xs text-text-muted pl-12">
+                Save to sync this strategy to the server. The cron checks every minute
+                and fires when entry conditions are met. Configure{' '}
+                <span className="text-text-primary">Confirm / Lookback</span> per condition above.
+              </p>
+            )}
+          </section>
+        )}
 
         {/* ── Error ─────────────────────────────────────────────────────── */}
         {error && (
@@ -298,14 +315,16 @@ export function StrategyForm({ strategy: initial }: Props) {
             Save (v{draft.version + 1})
           </button>
 
-          <button
-            type="button"
-            onClick={handleBacktest}
-            disabled={isBacktesting}
-            className="btn-sm btn-primary"
-          >
-            {isBacktesting ? 'Running…' : '▶ Run Backtest'}
-          </button>
+          {!draft.isTemplate && (
+            <button
+              type="button"
+              onClick={handleBacktest}
+              disabled={isBacktesting}
+              className="btn-sm btn-primary"
+            >
+              {isBacktesting ? 'Running…' : '▶ Run Backtest'}
+            </button>
+          )}
 
           <span className="text-xs text-text-muted">
             v{draft.version} · {new Date(draft.updatedAt).toLocaleDateString()}

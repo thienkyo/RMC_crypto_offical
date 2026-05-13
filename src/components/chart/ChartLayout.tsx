@@ -108,17 +108,50 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // ⏻ toggles active state (chip stays, just dims).
   // X dismisses the chip for this session; cleared when symbol/TF changes.
   const [dismissedChipIds, setDismissedChipIds] = useState<Set<string>>(new Set());
+  // IDs of chips whose tooltip is currently pinned open (click to pin, click outside to close all).
+  const [pinnedChipIds, setPinnedChipIds] = useState<Set<string>>(new Set());
+  const chipsRef = useRef<HTMLDivElement>(null);
 
-  // Reset dismissals whenever the chart context changes
+  // Reset dismissals + pins whenever the chart context changes
   useEffect(() => {
     setDismissedChipIds(new Set());
+    setPinnedChipIds(new Set());
   }, [symbol, timeframe]);
 
-  // All strategies for this chart that haven't been dismissed
+  // Click outside chips area → close all pinned tooltips
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (chipsRef.current && !chipsRef.current.contains(e.target as Node)) {
+        setPinnedChipIds(new Set());
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  function togglePin(id: string) {
+    setPinnedChipIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function dismissChip(id: string) {
+    setDismissedChipIds((prev) => new Set([...prev, id]));
+    setPinnedChipIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }
+
+  // All non-template strategies for this chart that haven't been dismissed.
+  // Templates are blueprints only — they never appear as active chart chips.
   const chartStrategies = useMemo(
     () =>
       allStrategies.filter(
-        (s) => s.symbol === symbol && s.timeframe === timeframe && !dismissedChipIds.has(s.id),
+        (s) =>
+          !s.isTemplate &&
+          s.symbol === symbol &&
+          s.timeframe === timeframe &&
+          !dismissedChipIds.has(s.id),
       ),
     [allStrategies, symbol, timeframe, dismissedChipIds],
   );
@@ -587,18 +620,20 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             ⏻ toggles live monitoring; chip stays but dims when off.
             × dismisses the chip for this session. ⚙ jumps to settings. */}
         {chartStrategies.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
+          <div ref={chipsRef} className="flex items-center gap-1.5 flex-wrap">
             {chartStrategies.map((strategy, idx) => {
-              const isActive  = strategy.isActive ?? false;
-              const liveState = liveStrategies.find((ls) => ls.strategy.id === strategy.id);
+              const isActive   = strategy.isActive ?? false;
+              const isPinned   = pinnedChipIds.has(strategy.id);
+              const liveState  = liveStrategies.find((ls) => ls.strategy.id === strategy.id);
               const lastSignal = liveState?.lastSignal ?? null;
-              const color = STRATEGY_COLORS[idx % STRATEGY_COLORS.length]!;
+              const color      = STRATEGY_COLORS[idx % STRATEGY_COLORS.length]!;
 
-              // ── Tooltip helpers (client-side only, no server imports) ────
-              const totalConditions = strategy.entryConditions.flatMap((g) => g.conditions).length;
-              const rating          = Math.min(5, Math.max(1, totalConditions));
-              const stars           = '⭐'.repeat(rating);
-              const allConditions   = strategy.entryConditions.flatMap((g) => g.conditions);
+              // ── Tooltip helpers ────────────────────────────────────────
+              const allConditions    = strategy.entryConditions.flatMap((g) => g.conditions);
+              const totalConditions  = allConditions.length;
+              const activeConditions = allConditions.filter((c) => c.enabled !== false).length;
+              const rating           = Math.min(5, Math.max(1, activeConditions));
+              const stars            = '⭐'.repeat(rating);
               const opSym: Record<string, string> = {
                 gt: '>', lt: '<', gte: '≥', lte: '≤',
                 crosses_above: '↑ crosses above', crosses_below: '↓ crosses below',
@@ -614,102 +649,54 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               return (
                 <div
                   key={strategy.id}
-                  className={`group relative flex items-center gap-1 pl-2 pr-1 py-0.5 rounded
-                              border transition-opacity
-                              ${isActive
-                                ? 'bg-surface-2 border-surface-border opacity-100'
-                                : 'bg-surface   border-surface-border opacity-50'}`}
+                  className={`group relative flex items-center gap-1 px-2 py-0.5 rounded
+                              border cursor-pointer select-none transition-all
+                              ${isPinned
+                                ? 'bg-surface-2 border-accent/50'
+                                : 'bg-surface-2 border-surface-border hover:border-accent/30'}`}
+                  onClick={() => togglePin(strategy.id)}
                 >
-                  {/* Dot — pulses when active, static when off */}
-                  <span
-                    className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'animate-pulse' : ''}`}
-                    style={{ backgroundColor: isActive ? color : '#4b5563' }}
-                  />
-
-                  {/* Strategy name */}
-                  <span className="text-xs font-mono text-text-secondary truncate max-w-[90px]">
-                    {strategy.name}
-                  </span>
-
-                  {/* Last signal — only when active and a signal exists */}
-                  {isActive && lastSignal && (
+                  {/* Visual content — dimmed when inactive, but container stays
+                      at full opacity so the tooltip inside is never affected. */}
+                  <div className={`flex items-center gap-1 transition-opacity ${isActive ? '' : 'opacity-40'}`}>
+                    {/* Dot — pulses when active */}
                     <span
-                      className="text-[10px] font-mono font-medium"
-                      style={{
-                        color: lastSignal.exitReason === 'end_of_data'
-                          ? color
-                          : lastSignal.pnlPct >= 0 ? '#10b981' : '#ef4444',
-                      }}
-                    >
-                      {lastSignal.exitReason === 'end_of_data'
-                        ? `● ${lastSignal.direction === 'long' ? 'L' : 'S'}`
-                        : `${lastSignal.pnlPct >= 0 ? '+' : ''}${lastSignal.pnlPct.toFixed(1)}%`}
+                      className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'animate-pulse' : ''}`}
+                      style={{ backgroundColor: isActive ? color : '#4b5563' }}
+                    />
+
+                    {/* Strategy name */}
+                    <span className="text-xs font-mono text-text-secondary truncate max-w-[90px]">
+                      {strategy.name}
                     </span>
-                  )}
 
-                  {/* Divider */}
-                  <span className="w-px h-3 bg-surface-border mx-0.5 flex-shrink-0" />
+                    {/* Last signal badge */}
+                    {isActive && lastSignal && (
+                      <span
+                        className="text-[10px] font-mono font-medium"
+                        style={{
+                          color: lastSignal.exitReason === 'end_of_data'
+                            ? color
+                            : lastSignal.pnlPct >= 0 ? '#10b981' : '#ef4444',
+                        }}
+                      >
+                        {lastSignal.exitReason === 'end_of_data'
+                          ? `● ${lastSignal.direction === 'long' ? 'L' : 'S'}`
+                          : `${lastSignal.pnlPct >= 0 ? '+' : ''}${lastSignal.pnlPct.toFixed(1)}%`}
+                      </span>
+                    )}
+                  </div>
 
-                  {/* Toggle ON/OFF */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      toggleStrategyActive(strategy.id);
-                      // Sync the new isActive to DB immediately so the cron
-                      // respects it — the store action is client-only.
-                      const updated = { ...strategy, isActive: !(strategy.isActive ?? false) };
-                      fetch('/api/strategies', {
-                        method:  'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body:    JSON.stringify(updated),
-                      }).catch((err) =>
-                        console.warn('[strategy-toggle] DB sync failed:', err),
-                      );
-                    }}
-                    title={isActive ? 'Turn off live monitor' : 'Turn on live monitor'}
-                    className={`text-[11px] leading-none px-0.5 flex-shrink-0 transition-colors
-                                ${isActive
-                                  ? 'text-text-muted hover:text-down'
-                                  : 'text-text-muted hover:text-up'}`}
-                  >
-                    ⏻
-                  </button>
-
-                  {/* Settings */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveStrategy(strategy.id);
-                      router.push('/strategy');
-                    }}
-                    title="Open strategy settings"
-                    className="text-text-muted hover:text-text-primary transition-colors
-                               text-[11px] leading-none px-0.5 flex-shrink-0"
-                  >
-                    ⚙
-                  </button>
-
-                  {/* Dismiss chip */}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDismissedChipIds((prev) => new Set([...prev, strategy.id]))
-                    }
-                    title="Hide from header"
-                    className="text-text-muted hover:text-text-primary transition-colors
-                               text-[10px] leading-none px-0.5 flex-shrink-0"
-                  >
-                    ×
-                  </button>
-
-                  {/* ── Hover tooltip ───────────────────────────────────── */}
+                  {/* ── Tooltip — hover preview, click to pin ───────────── */}
                   <div
-                    className="invisible group-hover:visible opacity-0 group-hover:opacity-100
-                               transition-opacity duration-150
-                               absolute top-full left-0 mt-1.5 z-50
-                               w-64 rounded border border-surface-border
-                               bg-surface shadow-lg text-xs text-text-primary
-                               pointer-events-none select-none"
+                    className={`absolute top-full left-0 mt-1.5 z-50
+                                w-64 rounded border border-surface-border
+                                bg-surface shadow-xl text-xs text-text-primary
+                                transition-opacity duration-150
+                                ${isPinned
+                                  ? 'visible opacity-100'
+                                  : 'invisible group-hover:visible opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto'}`}
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header */}
                     <div className="px-3 py-2 border-b border-surface-border">
@@ -728,21 +715,93 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                       </div>
                     </div>
 
+                    {/* Action buttons */}
+                    <div className="px-3 py-2 border-b border-surface-border flex items-center gap-2">
+                      {/* Toggle live monitor */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          toggleStrategyActive(strategy.id);
+                          // Pin the tooltip so it stays visible after the action —
+                          // user can immediately click Activate/Deactivate again.
+                          setPinnedChipIds((prev) => new Set([...prev, strategy.id]));
+                          const updated = { ...strategy, isActive: !(strategy.isActive ?? false) };
+                          fetch('/api/strategies', {
+                            method:  'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body:    JSON.stringify(updated),
+                          }).catch((err) => console.warn('[strategy-toggle] DB sync failed:', err));
+                        }}
+                        className={`flex items-center gap-1 px-2 py-1 rounded border text-[11px]
+                                    font-mono transition-colors
+                                    ${isActive
+                                      ? 'border-down/40 text-down hover:bg-down/10'
+                                      : 'border-up/40 text-up hover:bg-up/10'}`}
+                      >
+                        <span>⏻</span>
+                        <span>{isActive ? 'Deactivate' : 'Activate'}</span>
+                      </button>
+
+                      {/* Settings */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveStrategy(strategy.id);
+                          router.push('/strategy');
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 rounded border
+                                   border-surface-border text-[11px] font-mono text-text-muted
+                                   hover:text-text-primary hover:border-accent/40 transition-colors"
+                      >
+                        <span>⚙</span>
+                        <span>Settings</span>
+                      </button>
+
+                      {/* Dismiss */}
+                      <button
+                        type="button"
+                        onClick={() => dismissChip(strategy.id)}
+                        className="ml-auto flex items-center justify-center w-6 h-6 rounded
+                                   border border-surface-border text-[11px] text-text-muted
+                                   hover:text-down hover:border-down/40 transition-colors"
+                        title="Hide chip"
+                      >
+                        ×
+                      </button>
+                    </div>
+
                     {/* Rating + conditions */}
                     <div className="px-3 py-2 border-b border-surface-border space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-text-muted">Rating</span>
-                        <span>{stars} <span className="text-text-muted">({totalConditions})</span></span>
+                        <span>
+                          {stars}{' '}
+                          <span className="text-text-muted">
+                            ({activeConditions < totalConditions
+                              ? `${activeConditions}/${totalConditions}`
+                              : totalConditions})
+                          </span>
+                        </span>
                       </div>
                       {allConditions.length === 0 ? (
                         <div className="text-text-muted italic">No entry conditions</div>
                       ) : (
-                        allConditions.map((c) => (
-                          <div key={c.id} className="flex items-start gap-1 font-mono text-[10px]">
-                            <span className="text-up mt-px">✓</span>
-                            <span className="text-text-secondary">{fmtCond(c)}</span>
-                          </div>
-                        ))
+                        allConditions.map((c) => {
+                          const enabled = c.enabled !== false;
+                          return (
+                            <div
+                              key={c.id}
+                              className="flex items-start gap-1 font-mono text-[10px]"
+                            >
+                              <span className={`mt-px ${enabled ? 'text-up' : 'text-text-muted'}`}>
+                                {enabled ? '✓' : '○'}
+                              </span>
+                              <span className={`${enabled ? 'text-text-secondary' : 'text-text-muted line-through'}`}>
+                                {fmtCond(c)}
+                              </span>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
 

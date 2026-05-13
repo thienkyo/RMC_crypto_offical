@@ -7,12 +7,14 @@
  * To add a new indicator: implement the Indicator<P> interface,
  * import it here, and add it to INDICATORS.
  */
-export { ema }       from './ema';
-export { sma }       from './sma';
-export { rsi }       from './rsi';
-export { macd }      from './macd';
+export { ema }      from './ema';
+export { sma }      from './sma';
+export { rsi }      from './rsi';
+export { macd }     from './macd';
 export { bollinger } from './bollinger';
-export { bbpct }     from './bbpct';
+export { bbpct }    from './bbpct';
+export { adx }      from './adx';
+export { stochrsi } from './stochrsi';
 
 // Patterns
 export {
@@ -20,7 +22,12 @@ export {
   abandonedBabyBullish,
   identicalThreeCrows,
   advanceBlock,
-  bearishDojiStar
+  bearishDojiStar,
+  beltHoldBearish,
+  beltHoldBullish,
+  breakawayBearish,
+  breakawayBullish,
+  bullishDojiStar
 } from '../patterns';
 
 export type {
@@ -32,19 +39,26 @@ export type {
   ParamMeta,
 } from './types';
 
-import { ema }       from './ema';
-import { sma }       from './sma';
-import { rsi }       from './rsi';
-import { macd }      from './macd';
+import { ema }      from './ema';
+import { sma }      from './sma';
+import { rsi }      from './rsi';
+import { macd }     from './macd';
 import { bollinger } from './bollinger';
-import { bbpct }     from './bbpct';
+import { bbpct }    from './bbpct';
+import { adx }      from './adx';
+import { stochrsi } from './stochrsi';
 import type { Indicator } from './types';
 import {
   abandonedBabyBearish,
   abandonedBabyBullish,
   identicalThreeCrows,
   advanceBlock,
-  bearishDojiStar
+  bearishDojiStar,
+  beltHoldBearish,
+  beltHoldBullish,
+  breakawayBearish,
+  breakawayBullish,
+  bullishDojiStar
 } from '../patterns';
 
 // The registry stores all indicators under their widened default param type.
@@ -59,9 +73,16 @@ export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
   [macd.id]:                 macd,
   [bollinger.id]:            bollinger,
   [bbpct.id]:                bbpct,
+  [adx.id]:                  adx,
+  [stochrsi.id]:             stochrsi,
   [abandonedBabyBearish.id]: abandonedBabyBearish,
   [abandonedBabyBullish.id]: abandonedBabyBullish,
   [identicalThreeCrows.id]:  identicalThreeCrows,
   [advanceBlock.id]:         advanceBlock,
   [bearishDojiStar.id]:      bearishDojiStar,
+  [beltHoldBearish.id]:      beltHoldBearish,
+  [beltHoldBullish.id]:      beltHoldBullish,
+  [breakawayBearish.id]:     breakawayBearish,
+  [breakawayBullish.id]:     breakawayBullish,
+  [bullishDojiStar.id]:      bullishDojiStar,
 };

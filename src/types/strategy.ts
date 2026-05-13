@@ -109,6 +109,11 @@ export interface Strategy {
   /** When true, evaluated live on the chart and entry/exit markers are painted. */
   isActive: boolean;
   /**
+   * When true this is a reusable template — it cannot be activated or monitored
+   * directly. Clone it to create a regular working strategy.
+   */
+  isTemplate?: boolean;
+  /**
    * Entry fires when ANY group is fully satisfied (OR between groups, AND within).
    * Empty → strategy never enters.
    */

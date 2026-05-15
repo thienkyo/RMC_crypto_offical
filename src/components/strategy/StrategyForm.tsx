@@ -24,11 +24,13 @@ import type {
   ConditionGroup,
 } from '@/types/strategy';
 
-function makeGroup(): ConditionGroup {
+function makeGroup(operator: 'or' | 'and' = 'or'): ConditionGroup {
   return {
     id:         `group_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     label:      '',
     conditions: [],
+    operator,
+    // conditionOperator left undefined → smart default kicks in
   };
 }
 
@@ -206,29 +208,55 @@ export function StrategyForm({ strategy: initial }: Props) {
         <section className="space-y-2">
           <h3 className="section-heading">
             Entry Conditions
-            <span className="text-text-muted font-normal text-xs ml-2">(paper trade opens when any group fires)</span>
+            <span className="text-text-muted font-normal text-xs ml-2">
+              (OR groups: any fires · AND groups: all must fire)
+            </span>
           </h3>
 
           {draft.entryConditions.length === 0 && (
             <p className="text-xs text-text-muted italic">No entry conditions — add a group.</p>
           )}
           {draft.entryConditions.map((group, i) => (
-            <ConditionGroupEditor
-              key={group.id}
-              group={group}
-              groupIndex={i}
-              totalGroups={draft.entryConditions.length}
-              onChange={(updated) => updateEntryGroup(i, updated)}
-              onRemoveGroup={() => removeEntryGroup(i)}
-            />
+            <div key={group.id}>
+              {/* Inter-group connector pill */}
+              {i > 0 && (
+                <div className="flex items-center gap-2 py-1 pl-1">
+                  <div className="h-px flex-1 bg-surface-border" />
+                  <span className={`text-[10px] font-mono font-semibold px-2 py-px rounded border ${
+                    (group.operator ?? 'or') === 'or'
+                      ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                      : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                  }`}>
+                    {(group.operator ?? 'or') === 'or' ? 'OR' : 'AND'}
+                  </span>
+                  <div className="h-px flex-1 bg-surface-border" />
+                </div>
+              )}
+              <ConditionGroupEditor
+                group={group}
+                groupIndex={i}
+                totalGroups={draft.entryConditions.length}
+                onChange={(updated) => updateEntryGroup(i, updated)}
+                onRemoveGroup={() => removeEntryGroup(i)}
+              />
+            </div>
           ))}
-          <button
-            type="button"
-            onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup()])}
-            className="btn-xs"
-          >
-            + Add OR group
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup('or')])}
+              className="btn-xs"
+            >
+              + Add OR group
+            </button>
+            <button
+              type="button"
+              onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup('and')])}
+              className="btn-xs"
+            >
+              + Add AND group
+            </button>
+          </div>
         </section>
 
         {/* ── Exit conditions ───────────────────────────────────────────── */}
@@ -242,22 +270,45 @@ export function StrategyForm({ strategy: initial }: Props) {
             <p className="text-xs text-text-muted italic">No exit signal — SL / TP only.</p>
           )}
           {draft.exitConditions.map((group, i) => (
-            <ConditionGroupEditor
-              key={group.id}
-              group={group}
-              groupIndex={i}
-              totalGroups={draft.exitConditions.length}
-              onChange={(updated) => updateExitGroup(i, updated)}
-              onRemoveGroup={() => removeExitGroup(i)}
-            />
+            <div key={group.id}>
+              {i > 0 && (
+                <div className="flex items-center gap-2 py-1 pl-1">
+                  <div className="h-px flex-1 bg-surface-border" />
+                  <span className={`text-[10px] font-mono font-semibold px-2 py-px rounded border ${
+                    (group.operator ?? 'or') === 'or'
+                      ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                      : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                  }`}>
+                    {(group.operator ?? 'or') === 'or' ? 'OR' : 'AND'}
+                  </span>
+                  <div className="h-px flex-1 bg-surface-border" />
+                </div>
+              )}
+              <ConditionGroupEditor
+                group={group}
+                groupIndex={i}
+                totalGroups={draft.exitConditions.length}
+                onChange={(updated) => updateExitGroup(i, updated)}
+                onRemoveGroup={() => removeExitGroup(i)}
+              />
+            </div>
           ))}
-          <button
-            type="button"
-            onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup()])}
-            className="btn-xs"
-          >
-            + Add OR group
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup('or')])}
+              className="btn-xs"
+            >
+              + Add OR group
+            </button>
+            <button
+              type="button"
+              onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup('and')])}
+              className="btn-xs"
+            >
+              + Add AND group
+            </button>
+          </div>
         </section>
 
         {/* ── Action & risk ─────────────────────────────────────────────── */}

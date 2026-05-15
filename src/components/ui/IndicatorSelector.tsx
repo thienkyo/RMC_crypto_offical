@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useChartStore } from '@/store/chart';
 import { INDICATORS } from '@/lib/indicators';
+import type { ParamMeta } from '@/lib/indicators';
 import { clsx } from 'clsx';
 
 // ─── Param editor ─────────────────────────────────────────────────────────────
@@ -33,10 +34,13 @@ function ParamEditor({ indicatorId, params }: ParamEditorProps) {
   }, [params]);
 
   const commit = useCallback(
-    (key: string, raw: string, meta: { min: number; max: number; step: number }) => {
+    (key: string, raw: string, meta: ParamMeta) => {
       const parsed = parseFloat(raw);
       if (isNaN(parsed)) return;
-      const clamped = Math.min(meta.max, Math.max(meta.min, parsed));
+      // Only clamp number-type params; time/select values are pre-validated by their inputs.
+      const clamped = (!meta.type || meta.type === 'number')
+        ? Math.min(meta.max, Math.max(meta.min, parsed))
+        : parsed;
       updateIndicatorParams(indicatorId, { [key]: clamped });
       setDraft((d) => ({ ...d, [key]: String(clamped) }));
     },
@@ -45,33 +49,71 @@ function ParamEditor({ indicatorId, params }: ParamEditorProps) {
 
   return (
     <div className="px-3 pb-2 pt-1 border-t border-surface-border bg-surface-1">
-      {Object.entries(indicator.paramsMeta).map(([key, meta]) => (
-        <div key={key} className="flex items-center justify-between gap-2 py-0.5">
-          <label className="text-[10px] text-text-muted font-mono whitespace-nowrap">
-            {meta.label}
-          </label>
-          <input
-            type="number"
-            min={meta.min}
-            max={meta.max}
-            step={meta.step}
-            value={draft[key] ?? ''}
-            onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-            onBlur={(e) => commit(key, e.target.value, meta)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                commit(key, (e.target as HTMLInputElement).value, meta);
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            className="w-16 bg-surface-3 border border-surface-border rounded px-1.5 py-0.5
-                       text-[11px] font-mono text-text-primary text-right
-                       focus:outline-none focus:border-accent
-                       [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none
-                       [&::-webkit-outer-spin-button]:appearance-none"
-          />
-        </div>
-      ))}
+      {Object.entries(indicator.paramsMeta).map(([key, meta]) => {
+        const inputCls = `w-16 bg-surface-3 border border-surface-border rounded px-1.5 py-0.5
+                          text-[11px] font-mono text-text-primary text-right
+                          focus:outline-none focus:border-accent
+                          [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none
+                          [&::-webkit-outer-spin-button]:appearance-none`;
+        return (
+          <div key={key} className="flex items-center justify-between gap-2 py-0.5">
+            <label className="text-[10px] text-text-muted font-mono whitespace-nowrap">
+              {meta.label}
+            </label>
+            {meta.type === 'time' ? (
+              (() => {
+                const totalMins = parseFloat(draft[key] ?? '0') || 0;
+                const hh = String(Math.floor(totalMins / 60)).padStart(2, '0');
+                const mm = String(totalMins % 60).padStart(2, '0');
+                return (
+                  <input
+                    type="time"
+                    value={`${hh}:${mm}`}
+                    onChange={(e) => {
+                      const [h, m] = e.target.value.split(':').map(Number);
+                      const v = String(((h ?? 0) * 60) + (m ?? 0));
+                      setDraft((d) => ({ ...d, [key]: v }));
+                      commit(key, v, meta);
+                    }}
+                    className={inputCls + ' w-24'}
+                  />
+                );
+              })()
+            ) : meta.type === 'select' ? (
+              <select
+                value={draft[key] ?? String(meta.options[0]?.value ?? 0)}
+                onChange={(e) => {
+                  setDraft((d) => ({ ...d, [key]: e.target.value }));
+                  commit(key, e.target.value, meta);
+                }}
+                className="bg-surface-3 border border-surface-border rounded px-1 py-0.5
+                           text-[11px] text-text-primary focus:outline-none focus:border-accent"
+              >
+                {meta.options.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="number"
+                min={meta.min}
+                max={meta.max}
+                step={meta.step}
+                value={draft[key] ?? ''}
+                onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                onBlur={(e) => commit(key, e.target.value, meta)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    commit(key, (e.target as HTMLInputElement).value, meta);
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className={inputCls}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

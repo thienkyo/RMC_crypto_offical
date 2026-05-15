@@ -27,11 +27,12 @@ const OPERATOR_LABELS: Record<ConditionOperator, string> = {
 };
 
 const SERIES_LABELS: Record<string, string[]> = {
-  ema:       ['EMA Line'],
-  sma:       ['SMA Line'],
-  rsi:       ['RSI', 'EMA of RSI'],
-  macd:      ['MACD Line', 'Signal', 'Histogram', 'Strategy Signal'],
-  bollinger: ['Middle Band', 'Upper Band', 'Lower Band'],
+  ema:         ['EMA Line'],
+  sma:         ['SMA Line'],
+  rsi:         ['RSI', 'EMA of RSI'],
+  macd:        ['MACD Line', 'Signal', 'Histogram', 'Strategy Signal'],
+  bollinger:   ['Middle Band', 'Upper Band', 'Lower Band'],
+  time_of_day: ['In window'],
 };
 
 // ── Enable / disable toggle ───────────────────────────────────────────────────
@@ -71,8 +72,9 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
   
   const seriesOptions = SERIES_LABELS[condition.indicatorId] ?? ['Signal'];
   const selectedIndicator = INDICATORS[condition.indicatorId];
-  const isPattern = selectedIndicator?.bias !== undefined;
-  const paramEntries = selectedIndicator
+  const isPattern       = selectedIndicator?.bias       !== undefined;
+  const isHideThreshold = selectedIndicator?.hideThreshold === true;
+  const paramEntries    = selectedIndicator
     ? Object.entries(selectedIndicator.defaultParams)
     : [];
 
@@ -132,8 +134,10 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
       indicatorId:  newId,
       params:       indicator ? { ...indicator.defaultParams } : {},
       seriesIndex:  0,
-      // Patterns always evaluate `> 0` — lock it in so the engine is always correct.
-      ...(isPattern ? { operator: 'gt' as const, value: 0 } : {}),
+      // Patterns always evaluate `> 0`; hideThreshold indicators always `> 0.5`.
+      // Lock these in so the engine is always correct.
+      ...(isPattern           ? { operator: 'gt' as const, value: 0   } : {}),
+      ...(indicator?.hideThreshold ? { operator: 'gt' as const, value: 0.5 } : {}),
     });
   }
 
@@ -266,20 +270,64 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
       </div>
 
       {/* ── Indicator params (inline, compact) ────────────────────────── */}
-      {paramEntries.map(([key]) => (
-        <label key={key} className="flex items-center gap-1 text-xs text-text-muted">
-          <span>{selectedIndicator?.paramsMeta[key]?.label ?? key}</span>
-          <input
-            type="number"
-            value={condition.params[key] ?? 0}
-            min={selectedIndicator?.paramsMeta[key]?.min ?? 0}
-            max={selectedIndicator?.paramsMeta[key]?.max ?? 9999}
-            step={selectedIndicator?.paramsMeta[key]?.step ?? 1}
-            onChange={(e) => handleParamChange(key, e.target.value)}
-            className="input-xs w-16"
-          />
-        </label>
-      ))}
+      {paramEntries.map(([key]) => {
+        const meta = selectedIndicator?.paramsMeta[key];
+        const label = meta?.label ?? key;
+
+        if (meta?.type === 'time') {
+          // Render as HH:MM picker; value stored as total minutes from midnight
+          const totalMins = condition.params[key] ?? 0;
+          const hh = String(Math.floor(totalMins / 60)).padStart(2, '0');
+          const mm = String(totalMins % 60).padStart(2, '0');
+          return (
+            <label key={key} className="flex items-center gap-1 text-xs text-text-muted">
+              <span>{label}</span>
+              <input
+                type="time"
+                value={`${hh}:${mm}`}
+                onChange={(e) => {
+                  const [h, m] = e.target.value.split(':').map(Number);
+                  handleParamChange(key, String(((h ?? 0) * 60) + (m ?? 0)));
+                }}
+                className="input-xs w-24"
+              />
+            </label>
+          );
+        }
+
+        if (meta?.type === 'select') {
+          return (
+            <label key={key} className="flex items-center gap-1 text-xs text-text-muted">
+              <span>{label}</span>
+              <select
+                value={condition.params[key] ?? meta.options[0]?.value ?? 0}
+                onChange={(e) => handleParamChange(key, e.target.value)}
+                className="select-sm"
+              >
+                {meta.options.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </label>
+          );
+        }
+
+        // Default: number input
+        return (
+          <label key={key} className="flex items-center gap-1 text-xs text-text-muted">
+            <span>{label}</span>
+            <input
+              type="number"
+              value={condition.params[key] ?? 0}
+              min={(meta as { min?: number } | undefined)?.min ?? 0}
+              max={(meta as { max?: number } | undefined)?.max ?? 9999}
+              step={(meta as { step?: number } | undefined)?.step ?? 1}
+              onChange={(e) => handleParamChange(key, e.target.value)}
+              className="input-xs w-16"
+            />
+          </label>
+        );
+      })}
 
       {/* ── Series selector (only shown for multi-series indicators) ──── */}
       {seriesOptions.length > 1 && (
@@ -296,10 +344,14 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
         </select>
       )}
 
-      {/* ── Operator + Threshold — hidden for patterns (always gt/0) ─── */}
+      {/* ── Operator + Threshold — hidden for patterns and hideThreshold ─ */}
       {isPattern ? (
         <span className="text-xs font-mono text-text-muted bg-surface-2 border border-surface-border rounded px-2 py-0.5 select-none">
           detected
+        </span>
+      ) : isHideThreshold ? (
+        <span className="text-xs font-mono text-text-muted bg-surface-2 border border-surface-border rounded px-2 py-0.5 select-none">
+          in window
         </span>
       ) : (
         <>

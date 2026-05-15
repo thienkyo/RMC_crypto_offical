@@ -417,15 +417,44 @@ export function AlertManager() {
               {Object.entries(selectedIndicator.paramsMeta).map(([key, meta]) => (
                 <label key={key} className="flex items-center gap-1 text-zinc-500">
                   <span>{meta.label}</span>
-                  <input
-                    type="number"
-                    min={meta.min}
-                    max={meta.max}
-                    step={meta.step}
-                    value={params[key] ?? 0}
-                    onChange={(e) => setParams((p) => ({ ...p, [key]: parseFloat(e.target.value) }))}
-                    className="w-14 bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                  />
+                  {meta.type === 'time' ? (
+                    (() => {
+                      const totalMins = params[key] ?? 0;
+                      const hh = String(Math.floor(totalMins / 60)).padStart(2, '0');
+                      const mm = String(totalMins % 60).padStart(2, '0');
+                      return (
+                        <input
+                          type="time"
+                          value={`${hh}:${mm}`}
+                          onChange={(e) => {
+                            const [h, m] = e.target.value.split(':').map(Number);
+                            setParams((p) => ({ ...p, [key]: ((h ?? 0) * 60) + (m ?? 0) }));
+                          }}
+                          className="w-24 bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                        />
+                      );
+                    })()
+                  ) : meta.type === 'select' ? (
+                    <select
+                      value={params[key] ?? meta.options[0]?.value ?? 0}
+                      onChange={(e) => setParams((p) => ({ ...p, [key]: parseFloat(e.target.value) }))}
+                      className="bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                    >
+                      {meta.options.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      min={meta.min}
+                      max={meta.max}
+                      step={meta.step}
+                      value={params[key] ?? 0}
+                      onChange={(e) => setParams((p) => ({ ...p, [key]: parseFloat(e.target.value) }))}
+                      className="w-14 bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                    />
+                  )}
                 </label>
               ))}
               {selectedIndicator.id === 'macd' && (

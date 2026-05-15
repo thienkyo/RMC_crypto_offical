@@ -14,11 +14,44 @@ import { INDICATORS } from '@/lib/indicators';
 import type { Candle } from '@/types/market';
 import type { StrategyCondition, ConditionGroup } from '@/types/strategy';
 
+// ─── Group operator helpers ───────────────────────────────────────────────────
+
+/**
+ * Resolve the intra-group condition operator.
+ * OR groups default to AND inside; AND groups default to OR inside.
+ * An explicit conditionOperator always wins.
+ */
+function resolveConditionOperator(group: ConditionGroup): 'and' | 'or' {
+  if (group.conditionOperator !== undefined) return group.conditionOperator;
+  return group.operator === 'and' ? 'or' : 'and';
+}
+
+/**
+ * Combine group results using the OR/AND split logic:
+ *   • At least one OR group must fire  (or there are none)
+ *   • Every AND group must fire        (or there are none)
+ *
+ * The first group (index 0) is always treated as OR regardless of its stored
+ * operator — it is the primary entry setup and its role is fixed.
+ */
+function combineGroupResults(
+  groups: ConditionGroup[],
+  evaluate: (g: ConditionGroup) => boolean,
+): boolean {
+  if (groups.length === 0) return false;
+  // Index 0 is always OR — force it regardless of stored operator value.
+  const orGroups  = groups.filter((g, i) => i === 0 || (g.operator ?? 'or') === 'or');
+  const andGroups = groups.filter((g, i) => i  >  0 &&  g.operator           === 'and');
+  const orPasses  = orGroups.length === 0 || orGroups.some((g) => evaluate(g));
+  const andPasses = andGroups.every((g) => evaluate(g));
+  return orPasses && andPasses;
+}
+
 /** Maps openTime (Unix ms) → indicator value at that bar. */
 type TimeValueMap = Map<number, number>;
 
 /** Stable cache key for a (indicator, params, seriesIndex) triple. */
-function conditionCacheKey(c: StrategyCondition): string {
+export function conditionCacheKey(c: StrategyCondition): string {
   return `${c.indicatorId}|${c.seriesIndex}|${JSON.stringify(c.params)}`;
 }
 
@@ -109,8 +142,8 @@ export function evaluateCondition(
 }
 
 /**
- * Evaluate one condition group — ALL ENABLED conditions must be satisfied (AND).
- * Disabled conditions (enabled === false) are skipped.
+ * Evaluate one condition group using its conditionOperator (AND/OR within group).
+ * Disabled conditions are skipped.
  * A group with no active conditions returns false (never fires).
  */
 export function evaluateConditionGroup(
@@ -121,11 +154,14 @@ export function evaluateConditionGroup(
 ): boolean {
   const active = group.conditions.filter((c) => c.enabled !== false);
   if (active.length === 0) return false;
-  return active.every((c) => evaluateCondition(c, candle, prevCandle, cache));
+  const op = resolveConditionOperator(group);
+  return op === 'or'
+    ? active.some((c)  => evaluateCondition(c, candle, prevCandle, cache))
+    : active.every((c) => evaluateCondition(c, candle, prevCandle, cache));
 }
 
 /**
- * Evaluate a list of condition groups — ANY group being satisfied triggers (OR).
+ * Evaluate a list of condition groups using the OR/AND split logic.
  * Returns false when groups is empty (never fires).
  */
 export function evaluateConditionGroups(
@@ -134,8 +170,9 @@ export function evaluateConditionGroups(
   prevCandle: Candle | undefined,
   cache: Map<string, TimeValueMap>,
 ): boolean {
-  if (groups.length === 0) return false;
-  return groups.some((g) => evaluateConditionGroup(g, candle, prevCandle, cache));
+  return combineGroupResults(groups, (g) =>
+    evaluateConditionGroup(g, candle, prevCandle, cache),
+  );
 }
 
 // ─── Window-aware evaluation (respects checkMode + checkCandles) ─────────────
@@ -182,8 +219,8 @@ export function evaluateConditionChecked(
 }
 
 /**
- * Evaluate one condition group at `barIndex` — ALL ENABLED conditions must
- * pass their individual checkMode windows (AND).
+ * Evaluate one condition group at `barIndex` using its conditionOperator
+ * (AND/OR within group), honouring checkMode + checkCandles per condition.
  */
 export function evaluateConditionGroupChecked(
   group:    ConditionGroup,
@@ -193,11 +230,14 @@ export function evaluateConditionGroupChecked(
 ): boolean {
   const active = group.conditions.filter((c) => c.enabled !== false);
   if (active.length === 0) return false;
-  return active.every((c) => evaluateConditionChecked(c, candles, barIndex, cache));
+  const op = resolveConditionOperator(group);
+  return op === 'or'
+    ? active.some((c)  => evaluateConditionChecked(c, candles, barIndex, cache))
+    : active.every((c) => evaluateConditionChecked(c, candles, barIndex, cache));
 }
 
 /**
- * Evaluate a list of condition groups at `barIndex` — ANY group firing triggers (OR).
+ * Evaluate a list of condition groups at `barIndex` using the OR/AND split logic.
  */
 export function evaluateConditionGroupsChecked(
   groups:   ConditionGroup[],
@@ -205,6 +245,7 @@ export function evaluateConditionGroupsChecked(
   barIndex: number,
   cache:    Map<string, TimeValueMap>,
 ): boolean {
-  if (groups.length === 0) return false;
-  return groups.some((g) => evaluateConditionGroupChecked(g, candles, barIndex, cache));
+  return combineGroupResults(groups, (g) =>
+    evaluateConditionGroupChecked(g, candles, barIndex, cache),
+  );
 }

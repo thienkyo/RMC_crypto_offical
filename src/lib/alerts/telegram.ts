@@ -146,6 +146,21 @@ export function formatAlertMessage(opts: {
 }
 
 /**
+ * One condition group as passed to the signal message formatter.
+ * The group at index 0 is always OR; subsequent groups may be OR or AND.
+ */
+export interface ConditionGroupDisplay {
+  /** Inter-group role: 'or' = alternative setup, 'and' = required filter. */
+  groupOperator:     'or' | 'and';
+  /** How conditions inside are combined. */
+  conditionOperator: 'and' | 'or';
+  /** Optional human label for the group. */
+  label?:            string;
+  /** Structured conditions with pass/fail state and live value. */
+  conditions:        Array<{ label: string; passed: boolean; value?: number }>;
+}
+
+/**
  * Strategy signal message.
  *
  * 📈 Strategy Signal — "RSI + EMA Pullback"
@@ -157,29 +172,35 @@ export function formatAlertMessage(opts: {
  * SL:          $61,200  (-2.6%)
  * TP:          $65,400  (+4.1%)
  * Candle:      2026-05-08 21:00 (UTC+7)
- * 
+ *
  * Conditions:
  *   ✅ RSI(14) < 35
- *   ✅ EMA(20) crosses above 0
+ *   AND ✅ MACD(12,26,9) < 0
+ * ── OR ──
+ *   ✅ Three Crows > 0
+ * ── AND filter ──
+ *   ✅ ADX(14) > 25
+ *   OR ✅ BB%B(20,2) > 1.0
  */
 export function formatStrategySignalMessage(opts: {
-  strategyName:  string;
+  strategyName:    string;
   /** Verbose name displayed in the Telegram message; falls back to strategyName. */
-  longName?:     string;
+  longName?:       string;
   /** 1–7 star rating (computed from total entry condition count). */
-  rating:        number;
-  symbol:        string;
-  timeframe:     string;
-  direction:     'long' | 'short';
-  entryPrice:    number;
-  stopLossPct:   number;    // 0 = disabled
-  takeProfitPct: number;    // 0 = disabled
-  conditions:    string[];  // pre-formatted condition descriptions
-  timestamp:     number;    // Unix ms of the entry candle
+  rating:          number;
+  symbol:          string;
+  timeframe:       string;
+  direction:       'long' | 'short';
+  entryPrice:      number;
+  stopLossPct:     number;    // 0 = disabled
+  takeProfitPct:   number;    // 0 = disabled
+  /** Structured condition groups — carries AND/OR operator info. */
+  conditionGroups: ConditionGroupDisplay[];
+  timestamp:       number;    // Unix ms of the entry candle
 }): string {
   const {
     strategyName, longName, rating, symbol, timeframe, direction,
-    entryPrice, stopLossPct, takeProfitPct, conditions, timestamp,
+    entryPrice, stopLossPct, takeProfitPct, conditionGroups, timestamp,
   } = opts;
 
   const W = 13; // label column width ("Take profit:" = 12 + 1 space)
@@ -192,11 +213,9 @@ export function formatStrategySignalMessage(opts: {
   const tpPrice = takeProfitPct > 0 ? entryPrice * (isLong ? 1 + takeProfitPct / 100 : 1 - takeProfitPct / 100) : null;
 
   const stars = '⭐'.repeat(Math.min(7, Math.max(1, rating)));
-  const condCount = conditions.length;
 
   const lines: string[] = [`📈 Strategy Signal — "${strategyName}"`];
 
-  // Verbose name (optional)
   const verboseName = longName?.trim();
   if (verboseName) lines.push(verboseName);
 
@@ -204,7 +223,7 @@ export function formatStrategySignalMessage(opts: {
     `${lbl('Rating:', W)}${stars}`,
     `${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,
     `${lbl('Signal:', W)}${signalIcon} ${signalText}`,
-    `${lbl('Price:', W)}${fmtPrice(entryPrice)}`
+    `${lbl('Price:', W)}${fmtPrice(entryPrice)}`,
   );
 
   if (slPrice !== null) {
@@ -216,11 +235,35 @@ export function formatStrategySignalMessage(opts: {
 
   lines.push(`${lbl('Candle:', W)}${fmtLocal(timestamp)}`);
 
-  if (conditions.length > 0) {
-    lines.push(''); // blank line
+  // ── Conditions block ───────────────────────────────────────────────────────
+  const nonEmptyGroups = conditionGroups.filter((g) => g.conditions.length > 0);
+  if (nonEmptyGroups.length > 0) {
+    lines.push('');
     lines.push('Conditions:');
-    for (const cond of conditions) {
-      lines.push(`  ✅ ${cond}`);
+
+    for (let gi = 0; gi < nonEmptyGroups.length; gi++) {
+      const group   = nonEmptyGroups[gi]!;
+      const condOp  = group.conditionOperator.toUpperCase();
+
+      // Inter-group separator (not before the first group)
+      if (gi > 0) {
+        const sep = group.groupOperator === 'and' ? '── AND filter ──' : '── OR ──';
+        lines.push(sep);
+      }
+
+      // Optional group label
+      if (group.label?.trim()) {
+        lines.push(`  [${group.label.trim()}]`);
+      }
+
+      // Conditions with intra-group operator between them
+      for (let ci = 0; ci < group.conditions.length; ci++) {
+        const cond = group.conditions[ci]!;
+        const icon = cond.passed ? '✅' : '⚪';
+        const valSuffix = cond.value !== undefined ? `  →  ${fmtValue(cond.value)}` : '';
+        const prefix = ci === 0 ? `  ${icon}` : `  ${condOp} ${icon}`;
+        lines.push(`${prefix} ${cond.label}${valSuffix}`);
+      }
     }
   }
 

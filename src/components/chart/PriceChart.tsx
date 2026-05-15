@@ -10,11 +10,13 @@ import {
   createChart,
   ColorType,
   CrosshairMode,
+  TickMarkType,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
   type SeriesMarker,
 } from 'lightweight-charts';
+import { format } from 'date-fns';
 import type { Candle } from '@/types/market';
 import type { IndicatorSeries } from '@/lib/indicators';
 
@@ -119,6 +121,9 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
           textColor:  '#64748b',
           fontSize:   11,
         },
+        localization: {
+          timeFormatter: (time: number) => format(new Date(time * 1000), 'yyyy-MM-dd HH:mm'),
+        },
         grid: {
           vertLines: { color: '#1a2035' },
           horzLines: { color: '#1a2035' },
@@ -139,6 +144,17 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
           timeVisible:    true,
           secondsVisible: false,
           visible:        showTimeAxis,
+          tickMarkFormatter: (time: number, tickMarkType: TickMarkType) => {
+            const date = new Date(time * 1000);
+            switch (tickMarkType) {
+              case TickMarkType.Year:        return format(date, 'yyyy');
+              case TickMarkType.Month:       return format(date, 'MMM');
+              case TickMarkType.DayOfMonth:  return format(date, 'd');
+              case TickMarkType.Time:        return format(date, 'HH:mm');
+              case TickMarkType.TimeWithSeconds: return format(date, 'HH:mm:ss');
+              default:                       return format(date, 'HH:mm');
+            }
+          },
         },
         width:  containerRef.current.clientWidth,
         height: containerRef.current.clientHeight,

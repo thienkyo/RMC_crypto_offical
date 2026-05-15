@@ -13,12 +13,14 @@ import {
   createChart,
   ColorType,
   CrosshairMode,
+  TickMarkType,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
   type SeriesMarker,
   type MouseEventParams,
 } from 'lightweight-charts';
+import { format } from 'date-fns';
 import type { IndicatorSeries, IndicatorMarker, IndicatorPoint } from '@/lib/indicators';
 
 export interface SubChartHandle {
@@ -176,6 +178,9 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
           textColor:  '#64748b',
           fontSize:   10,
         },
+        localization: {
+          timeFormatter: (time: number) => format(new Date(time * 1000), 'yyyy-MM-dd HH:mm'),
+        },
         grid: {
           vertLines: { color: '#1a2035' },
           horzLines: { color: '#1a2035' },
@@ -202,6 +207,17 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
           timeVisible:    true,
           secondsVisible: false,
           visible:        showTimeAxis,
+          tickMarkFormatter: (time: number, tickMarkType: TickMarkType) => {
+            const date = new Date(time * 1000);
+            switch (tickMarkType) {
+              case TickMarkType.Year:        return format(date, 'yyyy');
+              case TickMarkType.Month:       return format(date, 'MMM');
+              case TickMarkType.DayOfMonth:  return format(date, 'd');
+              case TickMarkType.Time:        return format(date, 'HH:mm');
+              case TickMarkType.TimeWithSeconds: return format(date, 'HH:mm:ss');
+              default:                       return format(date, 'HH:mm');
+            }
+          },
         },
         width:  containerRef.current.clientWidth,
         height,

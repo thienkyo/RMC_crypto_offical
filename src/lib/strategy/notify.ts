@@ -24,7 +24,9 @@
 import { db }                         from '@/lib/db/client';
 import { fetchKlines, TF_TO_MS }      from '@/lib/exchange/binance';
 import { buildIndicatorCache,
-         evaluateConditionChecked }    from '@/lib/strategy/evaluate';
+         conditionCacheKey,
+         evaluateConditionChecked,
+         evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
 import { formatStrategySignalMessage,
          strategyRating }              from '@/lib/alerts/telegram';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
@@ -76,7 +78,7 @@ export async function evaluateStrategySignal(
 
   // ── 2. First-run guard ─────────────────────────────────────────────────────
   if (lastNotifiedTimeMs === null) {
-    await updateLastNotifiedTime(strategy.id, lastClosed.openTime);
+    await tryStampNotifiedTime(strategy.id, lastClosed.openTime);
     return { fired: false, strategy, reason: 'first_run', debug: baseDebug };
   }
 
@@ -96,29 +98,48 @@ export async function evaluateStrategySignal(
   }
 
   // ── 5. Evaluate condition groups ───────────────────────────────────────────
-  // Collect per-condition pass/fail for debug output.
-  const allConditions = strategy.entryConditions.flatMap((g) => g.conditions);
-  const conditionResults = allConditions.map((c) => ({
-    label:  conditionLabel(c),
-    passed: conditionPassesCheck(c, closed, cache),
-  }));
+  // Use the canonical evaluation functions to ensure notify logic exactly
+  // matches backtester and chart markers.
+  const fired = evaluateConditionGroupsChecked(
+    strategy.entryConditions,
+    closed,
+    closed.length - 1,
+    cache,
+  );
 
-  const fired = strategy.entryConditions.some((group) => {
-    if (group.conditions.length === 0) return false;
-    return group.conditions.every((condition) =>
-      conditionPassesCheck(condition, closed, cache),
-    );
-  });
+  // Collect per-condition pass/fail for debug output (only for enabled conditions).
+  const conditionResults = strategy.entryConditions
+    .flatMap((g) => g.conditions)
+    .filter((c) => c.enabled !== false)
+    .map((c) => ({
+      label:  conditionLabel(c),
+      passed: conditionPassesCheck(c, closed, cache),
+    }));
 
   const fullDebug = { ...baseDebug, conditionResults };
 
   if (!fired) return { fired: false, strategy, reason: 'conditions_not_met', debug: fullDebug };
 
-  // ── 6. Build message and stamp ─────────────────────────────────────────────
-  const allConditionLabels = allConditions.map((c) => conditionLabel(c));
+  // ── 6. Atomic stamp — race-condition guard ────────────────────────────────
+  // Stamp BEFORE building/sending the message. The UPDATE only succeeds if no
+  // other cron process has already stamped this candle (conditional WHERE).
+  // If rowCount === 0, we lost the race — bail out silently.
+  const stamped = await tryStampNotifiedTime(strategy.id, lastClosed.openTime);
+  if (!stamped) {
+    console.log(
+      `[strategy/notify] dedup (concurrent): ${strategy.name} already stamped for ` +
+      new Date(lastClosed.openTime).toISOString(),
+    );
+    return { fired: false, strategy, reason: 'dedup_blocked', debug: fullDebug };
+  }
+
+  // ── 7. Build message ───────────────────────────────────────────────────────
+  const activeConditions = strategy.entryConditions
+    .flatMap((g) => g.conditions)
+    .filter((c) => c.enabled !== false);
 
   // Calculate extra confirmation score: only 'confirmation' mode increases difficulty.
-  const extraConfirmations = allConditions.reduce((sum, c) => {
+  const extraConfirmations = activeConditions.reduce((sum, c) => {
     const mode = c.checkMode ?? 'confirmation';
     if (mode === 'confirmation') {
       return sum + Math.max(0, (c.checkCandles ?? 1) - 1);
@@ -126,21 +147,41 @@ export async function evaluateStrategySignal(
     return sum;
   }, 0);
 
+  // Map to structured display format for Telegram
+  const conditionGroups = strategy.entryConditions
+    .filter((g) => g.conditions.some((c) => c.enabled !== false))
+    .map((g) => ({
+      groupOperator:     g.operator ?? 'or',
+      conditionOperator: g.conditionOperator ?? (g.operator === 'and' ? 'or' : 'and'),
+      label:             g.label,
+      conditions:        g.conditions
+        .filter((c) => c.enabled !== false)
+        .map((c) => {
+          const key = conditionCacheKey(c);
+          const timeMap = cache.get(key);
+          const value = timeMap?.get(lastClosed.openTime);
+          return {
+            label:  conditionLabel(c),
+            passed: conditionPassesCheck(c, closed, cache),
+            value,
+          };
+        }),
+    }));
+
   const message = formatStrategySignalMessage({
     strategyName:  strategy.name,
     longName:      strategy.longName,
-    rating:        strategyRating(allConditions.length, extraConfirmations),
+    rating:        strategyRating(activeConditions.length, extraConfirmations),
     symbol:        strategy.symbol,
     timeframe:     strategy.timeframe,
     direction:     strategy.action.type === 'enter_long' ? 'long' : 'short',
     entryPrice:    lastClosed.close,
     stopLossPct:   strategy.risk.stopLossPct,
     takeProfitPct: strategy.risk.takeProfitPct,
-    conditions:    allConditionLabels,
+    conditionGroups,
     timestamp:     lastClosed.closeTime + 1,
   });
 
-  await updateLastNotifiedTime(strategy.id, lastClosed.openTime);
   return { fired: true, strategy, message, debug: fullDebug };
 }
 
@@ -251,13 +292,27 @@ async function fetchLatestCandles(
   }
 }
 
-async function updateLastNotifiedTime(strategyId: string, openTimeMs: number): Promise<void> {
-  await db.query(
+/**
+ * Atomically stamp the strategy's last_notified_trade_time.
+ *
+ * The WHERE guard ensures only the first writer wins when two cron processes
+ * overlap — equivalent to a test-and-set.
+ *
+ * Returns true  → we won the race, safe to send the Telegram message.
+ * Returns false → another process already stamped this candle, skip.
+ */
+async function tryStampNotifiedTime(strategyId: string, openTimeMs: number): Promise<boolean> {
+  const { rowCount } = await db.query(
     `UPDATE strategies
      SET last_notified_trade_time = to_timestamp($2::bigint / 1000.0)
-     WHERE id = $1`,
+     WHERE id = $1
+       AND (
+         last_notified_trade_time IS NULL
+         OR last_notified_trade_time < to_timestamp($2::bigint / 1000.0)
+       )`,
     [strategyId, openTimeMs],
   );
+  return (rowCount ?? 0) > 0;
 }
 
 export async function getNotifiableStrategies(): Promise<

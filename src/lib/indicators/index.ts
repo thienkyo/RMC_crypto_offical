@@ -7,14 +7,15 @@
  * To add a new indicator: implement the Indicator<P> interface,
  * import it here, and add it to INDICATORS.
  */
-export { ema }      from './ema';
-export { sma }      from './sma';
-export { rsi }      from './rsi';
-export { macd }     from './macd';
-export { bollinger } from './bollinger';
-export { bbpct }    from './bbpct';
-export { adx }      from './adx';
-export { stochrsi } from './stochrsi';
+export { ema }         from './ema';
+export { sma }         from './sma';
+export { rsi }         from './rsi';
+export { macd }        from './macd';
+export { bollinger }   from './bollinger';
+export { bbpct }       from './bbpct';
+export { adx }         from './adx';
+export { stochrsi }    from './stochrsi';
+export { time_of_day } from './time_of_day';
 
 // Patterns
 export {
@@ -39,14 +40,15 @@ export type {
   ParamMeta,
 } from './types';
 
-import { ema }      from './ema';
-import { sma }      from './sma';
-import { rsi }      from './rsi';
-import { macd }     from './macd';
-import { bollinger } from './bollinger';
-import { bbpct }    from './bbpct';
-import { adx }      from './adx';
-import { stochrsi } from './stochrsi';
+import { ema }         from './ema';
+import { sma }         from './sma';
+import { rsi }         from './rsi';
+import { macd }        from './macd';
+import { bollinger }   from './bollinger';
+import { bbpct }       from './bbpct';
+import { adx }         from './adx';
+import { stochrsi }    from './stochrsi';
+import { time_of_day } from './time_of_day';
 import type { Indicator } from './types';
 import {
   abandonedBabyBearish,
@@ -75,6 +77,7 @@ export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
   [bbpct.id]:                bbpct,
   [adx.id]:                  adx,
   [stochrsi.id]:             stochrsi,
+  [time_of_day.id]:          time_of_day,
   [abandonedBabyBearish.id]: abandonedBabyBearish,
   [abandonedBabyBullish.id]: abandonedBabyBullish,
   [identicalThreeCrows.id]:  identicalThreeCrows,

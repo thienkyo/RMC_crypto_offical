@@ -42,13 +42,16 @@ export type IndicatorResult = IndicatorSeries[];
 /**
  * Metadata about a single configurable parameter.
  * Used to auto-generate the config popup UI.
+ *
+ * type 'number'  (default) — renders a numeric spinner.
+ * type 'time'              — renders an HH:MM time picker; value is stored as
+ *                            total minutes from midnight (0–1439), e.g. 480 = 08:00.
+ * type 'select'            — renders a <select> dropdown; value is a number.
  */
-export interface ParamMeta {
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-}
+export type ParamMeta =
+  | { type?: 'number'; label: string; min: number; max: number; step: number }
+  | { type: 'time';   label: string }
+  | { type: 'select'; label: string; options: { label: string; value: number }[] }
 
 /**
  * The contract every indicator must implement.
@@ -64,6 +67,12 @@ export interface Indicator<P extends Record<string, number> = Record<string, num
    * Rendered as a colored pill tag in the IndicatorSelector dropdown.
    */
   bias?: 'bullish' | 'bearish';
+  /**
+   * When true the operator + threshold fields are hidden in the condition row
+   * UI and locked to `gt / 0.5`.  Use for binary (0/1) indicators like
+   * time_of_day where the threshold is always the same.
+   */
+  hideThreshold?: true;
   defaultParams: P;
   /** Metadata for each param key — drives the config popup UI. */
   paramsMeta: Record<keyof P, ParamMeta>;

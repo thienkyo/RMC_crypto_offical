@@ -212,6 +212,21 @@ export function conditionLabel(c: { indicatorId: string; params: Record<string, 
   };
   const op = opSym[c.operator] ?? c.operator;
   if (c.indicatorId === '__price__') return `Price ${op} ${c.value}`;
+
+  if (c.indicatorId === 'time_of_day') {
+    const fmt = (totalMins: number) => {
+      const h = Math.floor(totalMins / 60).toString().padStart(2, '0');
+      const m = (totalMins % 60).toString().padStart(2, '0');
+      return `${h}:${m}`;
+    };
+    const start  = c.params['start']          ?? 480;
+    const end    = c.params['end']            ?? 1320;
+    const tz     = c.params['timezoneOffset'] ?? 7;
+    const src    = c.params['timeType'] === 0 ? 'open' : 'close';
+    const tzStr  = tz >= 0 ? `UTC+${tz}` : `UTC${tz}`;
+    return `Time ${fmt(start)}–${fmt(end)} (${tzStr}, ${src})`;
+  }
+
   const paramStr = Object.values(c.params).join(',');
   const series   = c.seriesIndex > 0 ? `[${c.seriesIndex}]` : '';
   return `${c.indicatorId.toUpperCase()}(${paramStr})${series} ${op} ${c.value}`;

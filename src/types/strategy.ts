@@ -53,14 +53,38 @@ export interface StrategyCondition {
 }
 
 /**
- * A group of conditions — ALL must be satisfied (AND logic within group).
- * Between groups it is OR logic (any group firing triggers the action).
+ * A group of conditions with configurable inter-group and intra-group logic.
+ *
+ * operator (inter-group role):
+ *   'or'  (default) — alternative setup; any OR group firing is sufficient.
+ *                     Conditions inside default to AND.
+ *   'and'           — required filter; ALL AND groups must fire.
+ *                     Conditions inside default to OR.
+ *
+ * conditionOperator (intra-group):
+ *   Overrides the derived default when set explicitly.
+ *
+ * Evaluation across all groups:
+ *   result = (orGroups.length === 0 || any orGroup fires)
+ *         && every andGroup fires
  */
 export interface ConditionGroup {
   id: string;
   /** Optional human label, e.g. "Oversold zone". */
   label: string;
   conditions: StrategyCondition[];
+  /**
+   * How this group connects with others.
+   * 'or' (default) — participates in OR logic across groups.
+   * 'and'          — required filter; must fire alongside all other AND groups.
+   */
+  operator?: 'or' | 'and';
+  /**
+   * How conditions within this group are combined.
+   * Defaults to 'and' for OR groups, 'or' for AND groups.
+   * Can be overridden independently.
+   */
+  conditionOperator?: 'and' | 'or';
 }
 
 // ── Action types ──────────────────────────────────────────────────────────────

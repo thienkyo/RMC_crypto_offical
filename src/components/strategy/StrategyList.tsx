@@ -209,7 +209,10 @@ function StrategyRow({ s, active, allSymbols, onSelect, onToggle, onDuplicate, o
           <div className="flex items-center gap-1.5">
             <span className="text-sm text-text-primary truncate">{s.name}</span>
             {(s.isActive ?? false) && (
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0 animate-pulse" />
+              <span className={`text-[9px] font-bold flex-shrink-0 animate-pulse
+                               ${s.action.type === 'enter_long' ? 'text-emerald-400' : 'text-red-400'}`}>
+                {s.action.type === 'enter_long' ? '▲' : '▼'}
+              </span>
             )}
           </div>
           <div className="text-xs text-text-muted font-mono">{s.timeframe}</div>
@@ -335,8 +338,9 @@ export function StrategyList() {
   const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
   const toggleStrategyActive = useStrategyStore((s) => s.toggleStrategyActive);
   const duplicateStrategy    = useStrategyStore((s) => s.duplicateStrategy);
-  const copyGroupToSymbol    = useStrategyStore((s) => s.copyGroupToSymbol);
+  const copyGroupToSymbol     = useStrategyStore((s) => s.copyGroupToSymbol);
   const cloneStrategyToSymbol = useStrategyStore((s) => s.cloneStrategyToSymbol);
+  const setGroupActive        = useStrategyStore((s) => s.setGroupActive);
   const cloneFromTemplate    = useStrategyStore((s) => s.cloneFromTemplate);
   const loadStarterTemplates = useStrategyStore((s) => s.loadStarterTemplates);
 
@@ -557,9 +561,19 @@ export function StrategyList() {
           )}
 
           {Array.from(groups.entries()).map(([symbol, list]) => {
-            const isCollapsed  = !expandedGroups.has(symbol);
-            const activeCount  = list.filter((s) => s.isActive ?? false).length;
-            const popoverOpen  = clonePopoverSymbol === symbol;
+            const isCollapsed   = !expandedGroups.has(symbol);
+            const activeLongs   = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_long').length;
+            const activeShorts  = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_short').length;
+            const anyActive     = activeLongs + activeShorts > 0;
+            const popoverOpen   = clonePopoverSymbol === symbol;
+
+            // Sort: longs first then shorts, alphabetically within each group
+            const sorted = [...list].sort((a, b) => {
+              const aLong = a.action.type === 'enter_long' ? 0 : 1;
+              const bLong = b.action.type === 'enter_long' ? 0 : 1;
+              if (aLong !== bLong) return aLong - bLong;
+              return a.name.localeCompare(b.name);
+            });
 
             return (
               <div key={symbol} className="relative">
@@ -579,12 +593,41 @@ export function StrategyList() {
                     <span className="text-[11px] font-mono font-semibold text-text-secondary truncate">
                       {symbol}
                     </span>
-                    {activeCount > 0 && (
-                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0 animate-pulse" />
+                    {activeLongs > 0 && (
+                      <span className="text-[9px] font-bold text-emerald-400 flex-shrink-0 animate-pulse">▲</span>
+                    )}
+                    {activeShorts > 0 && (
+                      <span className="text-[9px] font-bold text-red-400 flex-shrink-0 animate-pulse">▼</span>
                     )}
                     <span className="text-[10px] font-mono text-text-muted flex-shrink-0">
                       {list.length}
                     </span>
+                  </button>
+
+                  {/* Toggle-all button — always visible when any active, hover otherwise */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const updated = list.map((s) => ({ ...s, isActive: !anyActive }));
+                      setGroupActive(symbol);
+                      // DB sync for each strategy
+                      updated.forEach((s) =>
+                        fetch('/api/strategies', {
+                          method:  'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body:    JSON.stringify(s),
+                        }).catch((err) => console.warn('[strategy-list:group-toggle] DB sync failed:', err)),
+                      );
+                    }}
+                    title={anyActive ? 'Turn off all in group' : 'Turn on all in group'}
+                    className={`btn-icon-xs flex-shrink-0 transition-colors
+                      ${anyActive
+                        ? 'text-emerald-400 hover:text-red-400'
+                        : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-emerald-400'
+                      }`}
+                  >
+                    ⏻
                   </button>
 
                   {/* Clone-group button — visible on group hover */}
@@ -617,7 +660,7 @@ export function StrategyList() {
                 )}
 
                 {/* Strategy rows */}
-                {!isCollapsed && list.map((s) => (
+                {!isCollapsed && sorted.map((s) => (
                   <StrategyRow
                     key={s.id}
                     s={s}

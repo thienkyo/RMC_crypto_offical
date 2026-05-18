@@ -229,3 +229,37 @@ CREATE TABLE IF NOT EXISTS backfill_status (
 
   PRIMARY KEY (symbol, timeframe)
 );
+
+-- ─── Strategy signals ─────────────────────────────────────────────────────────
+-- One row per cron-fired entry signal that was delivered via Telegram.
+-- Outcomes (P&L %) are filled in manually via the UI or future Telegram webhook.
+CREATE TABLE IF NOT EXISTS strategy_signals (
+  id               SERIAL        PRIMARY KEY,
+  strategy_id      TEXT          NOT NULL,
+  strategy_name    TEXT          NOT NULL,
+  symbol           TEXT          NOT NULL,
+  timeframe        TEXT          NOT NULL,
+  direction        TEXT          NOT NULL CHECK (direction IN ('long', 'short')),
+  entry_price      NUMERIC(20,8) NOT NULL,
+  stop_loss_pct    NUMERIC(8,4)  NOT NULL DEFAULT 0,
+  take_profit_pct  NUMERIC(8,4)  NOT NULL DEFAULT 0,
+  -- Candle that triggered the signal (openTime, Unix ms stored as TIMESTAMPTZ)
+  candle_time      TIMESTAMPTZ   NOT NULL,
+  fired_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  -- Manual outcome — NULL = still open, positive = win, negative = loss
+  pnl_pct          NUMERIC(10,4),
+  outcome_note     TEXT,
+  outcome_at       TIMESTAMPTZ,
+  -- Delivery status
+  telegram_delivered BOOLEAN     NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS strategy_signals_by_strategy
+  ON strategy_signals (strategy_id, fired_at DESC);
+
+CREATE INDEX IF NOT EXISTS strategy_signals_by_symbol
+  ON strategy_signals (symbol, fired_at DESC);
+
+-- ALTER for existing DBs (idempotent):
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS outcome_note TEXT;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS outcome_at   TIMESTAMPTZ;

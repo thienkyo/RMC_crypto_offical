@@ -20,6 +20,7 @@ import { getEnabledAlertRules, logAlertFired, markAlertDelivered } from '@/lib/d
 import { evaluateAlertRule } from '@/lib/alerts/evaluate';
 import { getNotifiableStrategies, evaluateStrategySignal } from '@/lib/strategy/notify';
 import { sendTelegramAlert } from '@/lib/alerts/telegram';
+import { logStrategySignal } from '@/lib/db/signals';
 
 export const maxDuration = 60;
 
@@ -114,6 +115,20 @@ async function runCheckAlerts(): Promise<Response> {
     if (!telegramResult.ok) {
       console.error(`[cron:check-alerts] Telegram failed: ${telegramResult.error}`);
     }
+
+    // Log signal to DB — non-blocking, never fails the cron
+    logStrategySignal({
+      strategyId:        evalResult.strategy.id,
+      strategyName:      evalResult.strategy.name,
+      symbol:            evalResult.strategy.symbol,
+      timeframe:         evalResult.strategy.timeframe,
+      direction:         evalResult.strategy.action.type === 'enter_long' ? 'long' : 'short',
+      entryPrice:        evalResult.entryPrice,
+      stopLossPct:       evalResult.strategy.risk.stopLossPct,
+      takeProfitPct:     evalResult.strategy.risk.takeProfitPct,
+      candleTime:        evalResult.candleTime,
+      telegramDelivered: telegramResult.ok,
+    }).catch((err) => console.error('[cron:check-alerts] logStrategySignal failed:', err));
 
     strategyDebug.push({
       name:      evalResult.strategy.name,

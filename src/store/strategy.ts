@@ -80,6 +80,11 @@ interface StrategyState {
   clearBacktestHistory: (strategyId: string) => void;
   /** Toggle the live-monitor ON/OFF flag for a strategy. */
   toggleStrategyActive: (id: string) => void;
+  /**
+   * Set all non-template strategies in a symbol group to the given active state.
+   * If `active` is undefined, it flips: if ANY are on → turn all off; if all off → turn all on.
+   */
+  setGroupActive: (symbol: string, active?: boolean) => void;
   /** Clone a strategy with a new id and " (copy)" suffix. */
   duplicateStrategy: (id: string) => void;
   /**
@@ -172,6 +177,18 @@ export const useStrategyStore = create<StrategyState>()(
             x.id === id ? { ...x, isActive: !(x.isActive ?? false) } : x,
           ),
         })),
+
+      setGroupActive: (symbol, active) =>
+        set((s) => {
+          const group = s.strategies.filter((x) => !x.isTemplate && x.symbol === symbol);
+          // If active is unspecified, flip: any on → all off; all off → all on
+          const target = active ?? !group.some((x) => x.isActive ?? false);
+          return {
+            strategies: s.strategies.map((x) =>
+              !x.isTemplate && x.symbol === symbol ? { ...x, isActive: target } : x,
+            ),
+          };
+        }),
 
       duplicateStrategy: (id) =>
         set((s) => {

@@ -36,7 +36,7 @@ import type { Candle, Timeframe }      from '@/types/market';
 const CANDLE_WINDOW = 1_000;
 
 export type StrategyNotifyResult =
-  | { fired: true;  strategy: Strategy; message: string; debug?: StrategyNotifyDebug }
+  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; candleTime: number; debug?: StrategyNotifyDebug }
   | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error'; debug?: StrategyNotifyDebug };
 
 /** Debug context surfaced in the cron Manual response. */
@@ -182,7 +182,7 @@ export async function evaluateStrategySignal(
     timestamp:     lastClosed.closeTime + 1,
   });
 
-  return { fired: true, strategy, message, debug: fullDebug };
+  return { fired: true, strategy, message, entryPrice: lastClosed.close, candleTime: lastClosed.openTime, debug: fullDebug };
 }
 
 // ─── Per-condition check ──────────────────────────────────────────────────────

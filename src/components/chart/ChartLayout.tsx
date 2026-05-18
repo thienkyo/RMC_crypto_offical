@@ -111,6 +111,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // IDs of chips whose tooltip is currently pinned open (click to pin, click outside to close all).
   const [pinnedChipIds, setPinnedChipIds] = useState<Set<string>>(new Set());
   const chipsRef = useRef<HTMLDivElement>(null);
+  // Signal strip — visible by default, toggled by the "Signals N" button
+  const [stripVisible, setStripVisible] = useState(true);
 
   // Reset dismissals + pins whenever the chart context changes
   useEffect(() => {
@@ -422,64 +424,122 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
   const liveStrategies = useLiveStrategies();
 
-  const strategyMarkers = useMemo((): SeriesMarker<LWCTimestamp>[] => {
-    if (liveStrategies.length === 0) return [];
-    const markers: SeriesMarker<LWCTimestamp>[] = [];
+  // ── Marker visibility controls ────────────────────────────────────────────
+  const [markerVisibility, setMarkerVisibility] = useState({
+    rawSignals:   true,  // amber squares — every candle entry conditions fired
+    tradeEntries: true,  // arrows — backtest trade entries
+    tradeExits:   true,  // circles — backtest trade exits with P&L
+    patterns:     true,  // arrows — candlestick pattern detections
+  });
+  const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
+  const markerMenuRef = useRef<HTMLDivElement>(null);
 
-    for (let idx = 0; idx < liveStrategies.length; idx++) {
-      const { strategy, trades } = liveStrategies[idx]!;
-      const chipColor = STRATEGY_COLORS[idx % STRATEGY_COLORS.length]!;
-      // Short label: first word of strategy name, up to 4 chars, uppercase.
-      const label = (strategy.name.split(' ')[0] ?? 'S').slice(0, 4).toUpperCase();
-
-      // ── Raw condition-signal markers ──────────────────────────────────────
-      // Small squares painted at EVERY candle where entry conditions fired.
-      // These are independent of position management (SL/TP, one-at-a-time).
-      // They show exactly which candles would trigger a Telegram notification.
-      const rawSignals = computeSignalCandles(strategy, candles);
-      for (const signal of rawSignals) {
-        const isLong = signal.direction === 'long';
-        markers.push({
-          time:     Math.floor(signal.openTimeMs / 1000) as LWCTimestamp,
-          position: isLong ? 'belowBar' : 'aboveBar',
-          color:    '#fbbf24',  // amber-400 — yellow square
-          shape:    'square',
-          text:     '',
-          size:     1,
-        });
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (markerMenuRef.current && !markerMenuRef.current.contains(e.target as Node)) {
+        setMarkerMenuOpen(false);
       }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
 
-      // ── Backtest trade markers ─────────────────────────────────────────────
-      // Entry arrow + exit circle from the full position-managed backtest.
-      // Larger / labelled so they stand out from the raw signal dots.
-      for (const trade of trades) {
-        const isLong = trade.direction === 'long';
-        markers.push({
-          time:     Math.floor(trade.entryTime / 1000) as LWCTimestamp,
-          position: isLong ? 'belowBar' : 'aboveBar',
-          color:    isLong ? '#10b981' : '#ef4444',
-          shape:    isLong ? 'arrowUp' : 'arrowDown',
-          text:     `${label} ${isLong ? '▲' : '▼'}`,
-          size:     2,
-        });
-        if (trade.exitReason !== 'end_of_data') {
-          markers.push({
-            time:     Math.floor(trade.exitTime / 1000) as LWCTimestamp,
-            position: isLong ? 'aboveBar' : 'belowBar',
-            color:    trade.pnlPct >= 0 ? '#10b981' : '#ef4444',
-            shape:    'circle',
-            text:     `${label} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%`,
+  function toggleMarker(key: keyof typeof markerVisibility) {
+    setMarkerVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  // Marker category metadata — descriptions shown in the popover
+  const MARKER_CATEGORIES: Array<{
+    key:   keyof typeof markerVisibility;
+    label: string;
+    desc:  string;
+    color: string;
+    shape: string; // display glyph in the popover
+  }> = [
+    {
+      key:   'rawSignals',
+      label: 'Signal candles',
+      desc:  'Every candle where all entry conditions fired. These are the exact candles that would trigger a Telegram alert — independent of position management.',
+      color: '#fbbf24',
+      shape: '■',
+    },
+    {
+      key:   'tradeEntries',
+      label: 'Trade entries',
+      desc:  'Backtest trade entry points after position management (SL/TP, one-at-a-time). ▲ = long entry, ▼ = short entry.',
+      color: '#10b981',
+      shape: '▲',
+    },
+    {
+      key:   'tradeExits',
+      label: 'Trade exits',
+      desc:  'Backtest trade exits. Shows the strategy label and realised P&L %. Green = profit, red = loss.',
+      color: '#94a3b8',
+      shape: '●',
+    },
+    {
+      key:   'patterns',
+      label: 'Candlestick patterns',
+      desc:  'Pattern detections from active pattern indicators (Engulfing, Hammer, Shooting Star, Three White Soldiers, etc.).',
+      color: '#a78bfa',
+      shape: '▲',
+    },
+  ];
+
+  // ── Categorised strategy markers ─────────────────────────────────────────
+  // Split into three separate arrays so each category can be toggled independently.
+  const { rawSignalMarkers, tradeEntryMarkers, tradeExitMarkers } =
+    useMemo(() => {
+      const raw:     SeriesMarker<LWCTimestamp>[] = [];
+      const entries: SeriesMarker<LWCTimestamp>[] = [];
+      const exits:   SeriesMarker<LWCTimestamp>[] = [];
+
+      if (liveStrategies.length === 0) return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
+
+      for (let idx = 0; idx < liveStrategies.length; idx++) {
+        const { strategy, trades } = liveStrategies[idx]!;
+        const label = (strategy.name.split(' ')[0] ?? 'S').slice(0, 4).toUpperCase();
+
+        // Raw condition-signal markers — amber squares
+        const rawSignals = computeSignalCandles(strategy, candles);
+        for (const signal of rawSignals) {
+          const isLong = signal.direction === 'long';
+          raw.push({
+            time:     Math.floor(signal.openTimeMs / 1000) as LWCTimestamp,
+            position: isLong ? 'belowBar' : 'aboveBar',
+            color:    '#fbbf24',
+            shape:    'square',
+            text:     '',
             size:     1,
           });
         }
+
+        // Backtest entry/exit markers
+        for (const trade of trades) {
+          const isLong = trade.direction === 'long';
+          entries.push({
+            time:     Math.floor(trade.entryTime / 1000) as LWCTimestamp,
+            position: isLong ? 'belowBar' : 'aboveBar',
+            color:    isLong ? '#10b981' : '#ef4444',
+            shape:    isLong ? 'arrowUp' : 'arrowDown',
+            text:     `${label} ${isLong ? '▲' : '▼'}`,
+            size:     2,
+          });
+          if (trade.exitReason !== 'end_of_data') {
+            exits.push({
+              time:     Math.floor(trade.exitTime / 1000) as LWCTimestamp,
+              position: isLong ? 'aboveBar' : 'belowBar',
+              color:    trade.pnlPct >= 0 ? '#10b981' : '#ef4444',
+              shape:    'circle',
+              text:     `${label} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%`,
+              size:     1,
+            });
+          }
+        }
       }
-    }
-    return markers.sort((a, b) => (a.time as number) - (b.time as number));
-  // STRATEGY_COLORS is a module-level const — safe to omit
-  // candles is read via closure; liveStrategies recomputes on bar close so we
-  // always get fresh data without subscribing to every live tick.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStrategies, candles]);
+      return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [liveStrategies, candles]);
 
   // ── Pattern markers on price chart ───────────────────────────────────────
   // Extract IndicatorMarker[] from any indicator series that carries them
@@ -616,217 +676,99 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           <span className="text-xs text-down ml-2">{error.message}</span>
         )}
 
-        {/* Strategy chips — one per strategy on this symbol/TF (active or not).
-            ⏻ toggles live monitoring; chip stays but dims when off.
-            × dismisses the chip for this session. ⚙ jumps to settings. */}
-        {chartStrategies.length > 0 && (
-          <div ref={chipsRef} className="flex items-center gap-1.5 flex-wrap">
-            {chartStrategies.map((strategy, idx) => {
-              const isActive   = strategy.isActive ?? false;
-              const isPinned   = pinnedChipIds.has(strategy.id);
-              const liveState  = liveStrategies.find((ls) => ls.strategy.id === strategy.id);
-              const lastSignal = liveState?.lastSignal ?? null;
-              const color      = STRATEGY_COLORS[idx % STRATEGY_COLORS.length]!;
-
-              // ── Tooltip helpers ────────────────────────────────────────
-              const allConditions    = strategy.entryConditions.flatMap((g) => g.conditions);
-              const totalConditions  = allConditions.length;
-              const activeConditions = allConditions.filter((c) => c.enabled !== false).length;
-              const rating           = Math.min(5, Math.max(1, activeConditions));
-              const stars            = '⭐'.repeat(rating);
-              const opSym: Record<string, string> = {
-                gt: '>', lt: '<', gte: '≥', lte: '≤',
-                crosses_above: '↑ crosses above', crosses_below: '↓ crosses below',
-              };
-              const fmtCond = (c: (typeof allConditions)[number]) => {
-                const op = opSym[c.operator] ?? c.operator;
-                if (c.indicatorId === '__price__') return `Price ${op} ${c.value}`;
-                const params = Object.values(c.params).join(',');
-                const mode   = c.checkMode === 'lookback' ? ` [L${c.checkCandles ?? 1}]` : c.checkCandles && c.checkCandles > 1 ? ` [C${c.checkCandles}]` : '';
-                return `${c.indicatorId.toUpperCase()}(${params}) ${op} ${c.value}${mode}`;
-              };
-
-              return (
-                <div
-                  key={strategy.id}
-                  className={`group relative flex items-center gap-1 px-2 py-0.5 rounded
-                              border cursor-pointer select-none transition-all
-                              ${isPinned
-                                ? 'bg-surface-2 border-accent/50'
-                                : 'bg-surface-2 border-surface-border hover:border-accent/30'}`}
-                  onClick={() => togglePin(strategy.id)}
-                >
-                  {/* Visual content — dimmed when inactive, but container stays
-                      at full opacity so the tooltip inside is never affected. */}
-                  <div className={`flex items-center gap-1 transition-opacity ${isActive ? '' : 'opacity-40'}`}>
-                    {/* Dot — pulses when active */}
-                    <span
-                      className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'animate-pulse' : ''}`}
-                      style={{ backgroundColor: isActive ? color : '#4b5563' }}
-                    />
-
-                    {/* Strategy name */}
-                    <span className="text-xs font-mono text-text-secondary truncate max-w-[90px]">
-                      {strategy.name}
-                    </span>
-
-                    {/* Last signal badge */}
-                    {isActive && lastSignal && (
-                      <span
-                        className="text-[10px] font-mono font-medium"
-                        style={{
-                          color: lastSignal.exitReason === 'end_of_data'
-                            ? color
-                            : lastSignal.pnlPct >= 0 ? '#10b981' : '#ef4444',
-                        }}
-                      >
-                        {lastSignal.exitReason === 'end_of_data'
-                          ? `● ${lastSignal.direction === 'long' ? 'L' : 'S'}`
-                          : `${lastSignal.pnlPct >= 0 ? '+' : ''}${lastSignal.pnlPct.toFixed(1)}%`}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* ── Tooltip — hover preview, click to pin ───────────── */}
-                  <div
-                    className={`absolute top-full left-0 mt-1.5 z-50
-                                w-64 rounded border border-surface-border
-                                bg-surface shadow-xl text-xs text-text-primary
-                                transition-opacity duration-150
-                                ${isPinned
-                                  ? 'visible opacity-100'
-                                  : 'invisible group-hover:visible opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto'}`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {/* Header */}
-                    <div className="px-3 py-2 border-b border-surface-border">
-                      <div className="font-mono font-medium truncate">{strategy.name}</div>
-                      {strategy.longName && (
-                        <div className="text-text-muted truncate mt-0.5">{strategy.longName}</div>
-                      )}
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-text-muted">{strategy.symbol} · {strategy.timeframe}</span>
-                        <span
-                          className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded"
-                          style={{ backgroundColor: color + '22', color }}
-                        >
-                          {strategy.action.type === 'enter_long' ? 'LONG' : 'SHORT'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="px-3 py-2 border-b border-surface-border flex items-center gap-2">
-                      {/* Toggle live monitor */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          toggleStrategyActive(strategy.id);
-                          // Pin the tooltip so it stays visible after the action —
-                          // user can immediately click Activate/Deactivate again.
-                          setPinnedChipIds((prev) => new Set([...prev, strategy.id]));
-                          const updated = { ...strategy, isActive: !(strategy.isActive ?? false) };
-                          fetch('/api/strategies', {
-                            method:  'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body:    JSON.stringify(updated),
-                          }).catch((err) => console.warn('[strategy-toggle] DB sync failed:', err));
-                        }}
-                        className={`flex items-center gap-1 px-2 py-1 rounded border text-[11px]
-                                    font-mono transition-colors
-                                    ${isActive
-                                      ? 'border-down/40 text-down hover:bg-down/10'
-                                      : 'border-up/40 text-up hover:bg-up/10'}`}
-                      >
-                        <span>⏻</span>
-                        <span>{isActive ? 'Deactivate' : 'Activate'}</span>
-                      </button>
-
-                      {/* Settings */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveStrategy(strategy.id);
-                          router.push('/strategy');
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 rounded border
-                                   border-surface-border text-[11px] font-mono text-text-muted
-                                   hover:text-text-primary hover:border-accent/40 transition-colors"
-                      >
-                        <span>⚙</span>
-                        <span>Settings</span>
-                      </button>
-
-                      {/* Dismiss */}
-                      <button
-                        type="button"
-                        onClick={() => dismissChip(strategy.id)}
-                        className="ml-auto flex items-center justify-center w-6 h-6 rounded
-                                   border border-surface-border text-[11px] text-text-muted
-                                   hover:text-down hover:border-down/40 transition-colors"
-                        title="Hide chip"
-                      >
-                        ×
-                      </button>
-                    </div>
-
-                    {/* Rating + conditions */}
-                    <div className="px-3 py-2 border-b border-surface-border space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-text-muted">Rating</span>
-                        <span>
-                          {stars}{' '}
-                          <span className="text-text-muted">
-                            ({activeConditions < totalConditions
-                              ? `${activeConditions}/${totalConditions}`
-                              : totalConditions})
-                          </span>
-                        </span>
-                      </div>
-                      {allConditions.length === 0 ? (
-                        <div className="text-text-muted italic">No entry conditions</div>
-                      ) : (
-                        allConditions.map((c) => {
-                          const enabled = c.enabled !== false;
-                          return (
-                            <div
-                              key={c.id}
-                              className="flex items-start gap-1 font-mono text-[10px]"
-                            >
-                              <span className={`mt-px ${enabled ? 'text-up' : 'text-text-muted'}`}>
-                                {enabled ? '✓' : '○'}
-                              </span>
-                              <span className={`${enabled ? 'text-text-secondary' : 'text-text-muted line-through'}`}>
-                                {fmtCond(c)}
-                              </span>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-
-                    {/* Risk + notify */}
-                    <div className="px-3 py-2 flex items-center gap-3">
-                      <span className="text-text-muted">SL</span>
-                      <span className={strategy.risk.stopLossPct > 0 ? 'text-down' : 'text-text-muted'}>
-                        {strategy.risk.stopLossPct > 0 ? `${strategy.risk.stopLossPct}%` : '—'}
-                      </span>
-                      <span className="text-text-muted">TP</span>
-                      <span className={strategy.risk.takeProfitPct > 0 ? 'text-up' : 'text-text-muted'}>
-                        {strategy.risk.takeProfitPct > 0 ? `${strategy.risk.takeProfitPct}%` : '—'}
-                      </span>
-                      {strategy.notifyOnSignal && (
-                        <span className="ml-auto text-[10px] text-text-muted">🔔 notify</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
         <div className="ml-auto flex items-center gap-3">
+          {/* Signals strip toggle */}
+          {chartStrategies.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setStripVisible((v) => !v)}
+              className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
+                          ${stripVisible
+                            ? 'border-accent/40 text-accent bg-accent/5 hover:bg-accent/10'
+                            : 'border-surface-border text-text-muted hover:text-text-primary hover:border-accent/30'}`}
+              title="Toggle signal strip"
+            >
+              Signals {chartStrategies.length} {stripVisible ? '▾' : '▸'}
+            </button>
+          )}
+
+          {/* Markers toggle popover */}
+          <div ref={markerMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setMarkerMenuOpen((v) => !v)}
+              className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
+                          ${markerMenuOpen
+                            ? 'border-accent/40 text-accent bg-accent/5'
+                            : Object.values(markerVisibility).some((v) => !v)
+                              ? 'border-amber-500/40 text-amber-400 hover:bg-amber-500/5'
+                              : 'border-surface-border text-text-muted hover:text-text-primary hover:border-accent/30'}`}
+              title="Toggle chart markers"
+            >
+              Markers {markerMenuOpen ? '▾' : '▸'}
+            </button>
+
+            {markerMenuOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 w-72
+                              rounded border border-surface-border bg-surface
+                              shadow-xl overflow-hidden">
+                <div className="px-3 py-2 border-b border-surface-border flex items-center justify-between">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted">
+                    Chart markers
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allOn = Object.values(markerVisibility).every(Boolean);
+                      const next = Object.fromEntries(
+                        Object.keys(markerVisibility).map((k) => [k, !allOn])
+                      ) as typeof markerVisibility;
+                      setMarkerVisibility(next);
+                    }}
+                    className="text-[10px] font-mono text-text-muted hover:text-text-primary transition-colors"
+                  >
+                    {Object.values(markerVisibility).every(Boolean) ? 'hide all' : 'show all'}
+                  </button>
+                </div>
+                {MARKER_CATEGORIES.map((cat) => (
+                  <div
+                    key={cat.key}
+                    className="flex items-start gap-3 px-3 py-2.5 border-b border-surface-border
+                               last:border-b-0 hover:bg-surface-2 transition-colors cursor-pointer"
+                    onClick={() => toggleMarker(cat.key)}
+                  >
+                    {/* Toggle checkbox */}
+                    <div className={`mt-0.5 w-3.5 h-3.5 rounded flex-shrink-0 border flex items-center justify-center
+                                    transition-colors ${markerVisibility[cat.key]
+                                      ? 'border-accent bg-accent/20'
+                                      : 'border-surface-border bg-transparent'}`}>
+                      {markerVisibility[cat.key] && (
+                        <span className="text-[8px] text-accent leading-none">✓</span>
+                      )}
+                    </div>
+                    {/* Glyph */}
+                    <span
+                      className="text-sm flex-shrink-0 w-4 text-center leading-none mt-px"
+                      style={{ color: markerVisibility[cat.key] ? cat.color : '#4b5563' }}
+                    >
+                      {cat.shape}
+                    </span>
+                    {/* Label + description */}
+                    <div className="min-w-0">
+                      <div className={`text-[11px] font-mono font-medium transition-colors
+                                       ${markerVisibility[cat.key] ? 'text-text-primary' : 'text-text-muted'}`}>
+                        {cat.label}
+                      </div>
+                      <div className="text-[10px] text-text-muted leading-relaxed mt-0.5">
+                        {cat.desc}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <IndicatorSelector />
           <TimeframeSelector />
           {/* Scroll back to the most recent candle — all panes together */}
@@ -850,6 +792,203 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           </button>
         </div>
       </div>
+
+      {/* ── Signal strip ─────────────────────────────────────────────────── */}
+      {stripVisible && chartStrategies.length > 0 && (
+        <div
+          ref={chipsRef}
+          className="flex items-center gap-1.5 flex-wrap px-3 py-1.5
+                     border-b border-surface-border bg-surface/60"
+        >
+          {chartStrategies.map((strategy, idx) => {
+            const isActive   = strategy.isActive ?? false;
+            const isPinned   = pinnedChipIds.has(strategy.id);
+            const liveState  = liveStrategies.find((ls) => ls.strategy.id === strategy.id);
+            const lastSignal = liveState?.lastSignal ?? null;
+            const color      = STRATEGY_COLORS[idx % STRATEGY_COLORS.length]!;
+
+            const allConditions    = strategy.entryConditions.flatMap((g) => g.conditions);
+            const totalConditions  = allConditions.length;
+            const activeConditions = allConditions.filter((c) => c.enabled !== false).length;
+            const rating           = Math.min(5, Math.max(1, activeConditions));
+            const stars            = '⭐'.repeat(rating);
+            const opSym: Record<string, string> = {
+              gt: '>', lt: '<', gte: '≥', lte: '≤',
+              crosses_above: '↑ crosses above', crosses_below: '↓ crosses below',
+            };
+            const fmtCond = (c: (typeof allConditions)[number]) => {
+              const op = opSym[c.operator] ?? c.operator;
+              if (c.indicatorId === '__price__') return `Price ${op} ${c.value}`;
+              const params = Object.values(c.params).join(',');
+              const mode   = c.checkMode === 'lookback' ? ` [L${c.checkCandles ?? 1}]` : c.checkCandles && c.checkCandles > 1 ? ` [C${c.checkCandles}]` : '';
+              return `${c.indicatorId.toUpperCase()}(${params}) ${op} ${c.value}${mode}`;
+            };
+
+            return (
+              <div
+                key={strategy.id}
+                className={`group relative flex items-center gap-1 px-2 py-0.5 rounded
+                            border cursor-pointer select-none transition-all
+                            ${isPinned
+                              ? 'bg-surface-2 border-accent/50'
+                              : 'bg-surface-2 border-surface-border hover:border-accent/30'}`}
+                onClick={() => togglePin(strategy.id)}
+              >
+                {/* Visual content — dimmed when inactive */}
+                <div className={`flex items-center gap-1 transition-opacity ${isActive ? '' : 'opacity-40'}`}>
+                  <span
+                    className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'animate-pulse' : ''}`}
+                    style={{ backgroundColor: isActive ? color : '#4b5563' }}
+                  />
+                  <span className="text-xs font-mono text-text-secondary truncate max-w-[90px]">
+                    {strategy.name}
+                  </span>
+                  {isActive && lastSignal && (
+                    <span
+                      className="text-[10px] font-mono font-medium"
+                      style={{
+                        color: lastSignal.exitReason === 'end_of_data'
+                          ? color
+                          : lastSignal.pnlPct >= 0 ? '#10b981' : '#ef4444',
+                      }}
+                    >
+                      {lastSignal.exitReason === 'end_of_data'
+                        ? `● ${lastSignal.direction === 'long' ? 'L' : 'S'}`
+                        : `${lastSignal.pnlPct >= 0 ? '+' : ''}${lastSignal.pnlPct.toFixed(1)}%`}
+                    </span>
+                  )}
+                </div>
+
+                {/* ── Tooltip — hover preview, click to pin ───────────── */}
+                <div
+                  className={`absolute top-full left-0 mt-1.5 z-50
+                              w-64 rounded border border-surface-border
+                              bg-surface shadow-xl text-xs text-text-primary
+                              transition-opacity duration-150
+                              ${isPinned
+                                ? 'visible opacity-100'
+                                : 'invisible group-hover:visible opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto'}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Header */}
+                  <div className="px-3 py-2 border-b border-surface-border">
+                    <div className="font-mono font-medium truncate">{strategy.name}</div>
+                    {strategy.longName && (
+                      <div className="text-text-muted truncate mt-0.5">{strategy.longName}</div>
+                    )}
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-text-muted">{strategy.symbol} · {strategy.timeframe}</span>
+                      <span
+                        className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: color + '22', color }}
+                      >
+                        {strategy.action.type === 'enter_long' ? 'LONG' : 'SHORT'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="px-3 py-2 border-b border-surface-border flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toggleStrategyActive(strategy.id);
+                        setPinnedChipIds((prev) => new Set([...prev, strategy.id]));
+                        const updated = { ...strategy, isActive: !(strategy.isActive ?? false) };
+                        fetch('/api/strategies', {
+                          method:  'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body:    JSON.stringify(updated),
+                        }).catch((err) => console.warn('[strategy-toggle] DB sync failed:', err));
+                      }}
+                      className={`flex items-center gap-1 px-2 py-1 rounded border text-[11px]
+                                  font-mono transition-colors
+                                  ${isActive
+                                    ? 'border-down/40 text-down hover:bg-down/10'
+                                    : 'border-up/40 text-up hover:bg-up/10'}`}
+                    >
+                      <span>⏻</span>
+                      <span>{isActive ? 'Deactivate' : 'Activate'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveStrategy(strategy.id);
+                        router.push('/strategy');
+                      }}
+                      className="flex items-center gap-1 px-2 py-1 rounded border
+                                 border-surface-border text-[11px] font-mono text-text-muted
+                                 hover:text-text-primary hover:border-accent/40 transition-colors"
+                    >
+                      <span>⚙</span>
+                      <span>Settings</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => dismissChip(strategy.id)}
+                      className="ml-auto flex items-center justify-center w-6 h-6 rounded
+                                 border border-surface-border text-[11px] text-text-muted
+                                 hover:text-down hover:border-down/40 transition-colors"
+                      title="Hide chip"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* Rating + conditions */}
+                  <div className="px-3 py-2 border-b border-surface-border space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-text-muted">Rating</span>
+                      <span>
+                        {stars}{' '}
+                        <span className="text-text-muted">
+                          ({activeConditions < totalConditions
+                            ? `${activeConditions}/${totalConditions}`
+                            : totalConditions})
+                        </span>
+                      </span>
+                    </div>
+                    {allConditions.length === 0 ? (
+                      <div className="text-text-muted italic">No entry conditions</div>
+                    ) : (
+                      allConditions.map((c) => {
+                        const enabled = c.enabled !== false;
+                        return (
+                          <div key={c.id} className="flex items-start gap-1 font-mono text-[10px]">
+                            <span className={`mt-px ${enabled ? 'text-up' : 'text-text-muted'}`}>
+                              {enabled ? '✓' : '○'}
+                            </span>
+                            <span className={`${enabled ? 'text-text-secondary' : 'text-text-muted line-through'}`}>
+                              {fmtCond(c)}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* Risk + notify */}
+                  <div className="px-3 py-2 flex items-center gap-3">
+                    <span className="text-text-muted">SL</span>
+                    <span className={strategy.risk.stopLossPct > 0 ? 'text-down' : 'text-text-muted'}>
+                      {strategy.risk.stopLossPct > 0 ? `${strategy.risk.stopLossPct}%` : '—'}
+                    </span>
+                    <span className="text-text-muted">TP</span>
+                    <span className={strategy.risk.takeProfitPct > 0 ? 'text-up' : 'text-text-muted'}>
+                      {strategy.risk.takeProfitPct > 0 ? `${strategy.risk.takeProfitPct}%` : '—'}
+                    </span>
+                    {strategy.notifyOnSignal && (
+                      <span className="ml-auto text-[10px] text-text-muted">🔔 notify</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Stale data banner ────────────────────────────────────────────── */}
       {isStale && <StaleDataBanner />}
@@ -890,9 +1029,12 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             onCrosshair={handleCrosshair}
             crosshairTime={crosshairTime}
             showTimeAxis={subPaneGroups.size === 0}
-            markers={[...strategyMarkers, ...patternMarkers].sort(
-              (a, b) => (a.time as number) - (b.time as number),
-            )}
+            markers={[
+              ...(markerVisibility.rawSignals   ? rawSignalMarkers   : []),
+              ...(markerVisibility.tradeEntries ? tradeEntryMarkers  : []),
+              ...(markerVisibility.tradeExits   ? tradeExitMarkers   : []),
+              ...(markerVisibility.patterns     ? patternMarkers     : []),
+            ].sort((a, b) => (a.time as number) - (b.time as number))}
           />
 
           {/* Candle countdown — positioned on the price axis just below the live price label */}

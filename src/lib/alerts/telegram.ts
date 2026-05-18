@@ -37,42 +37,66 @@ export interface TelegramSendResult {
  *
  * Returns ok:true as long as at least one delivery succeeded. Never throws.
  */
+/**
+ * Send an HTML-mode message, routing to the appropriate chat IDs.
+ *
+ * Routing priority (highest first):
+ *   1. Name contains "test" (case-insensitive) → Test chat IDs
+ *   2. channel === 'alert'                     → Alert chat IDs
+ *   3. channel === 'signal' (default)          → Signal chat IDs
+ *
+ * Returns ok:true as long as at least one delivery succeeded. Never throws.
+ */
 export async function sendTelegramAlert(
   text:       string,
   targetName: string,
+  channel:    'signal' | 'alert' = 'signal',
 ): Promise<TelegramSendResult> {
   if (!BOT_TOKEN) {
     return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set in .env.local' };
   }
 
   // ── Load chat IDs from DB ─────────────────────────────────────────────────
-  let personalIds: string[] = [];
-  let groupIds:    string[] = [];
+  let testIds:   string[] = [];
+  let signalIds: string[] = [];
+  let alertIds:  string[] = [];
   try {
     const { rows } = await db.query<{ key: string; value: string | null }>(
       `SELECT key, value FROM settings
-       WHERE key IN ('telegram_personal_chat_id', 'telegram_group_chat_id')`,
+       WHERE key IN ('telegram_personal_chat_id', 'telegram_group_chat_id', 'telegram_alert_chat_id')`,
     );
-    const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-    personalIds = parseChatIds(map['telegram_personal_chat_id']);
-    groupIds    = parseChatIds(map['telegram_group_chat_id']);
+    const map  = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    testIds    = parseChatIds(map['telegram_personal_chat_id']);
+    signalIds  = parseChatIds(map['telegram_group_chat_id']);
+    alertIds   = parseChatIds(map['telegram_alert_chat_id']);
   } catch (err) {
     return { ok: false, error: `Failed to load chat IDs from DB: ${String(err)}` };
   }
 
-  // ── Route by name ─────────────────────────────────────────────────────────
-  const isTest  = isTestTarget(targetName);
-  const chatIds = isTest ? personalIds : groupIds;
-  const channel = isTest ? 'personal' : 'group';
+  // ── Route ─────────────────────────────────────────────────────────────────
+  const isTest = isTestTarget(targetName);
+  let chatIds: string[];
+  let channelLabel: string;
+
+  if (isTest) {
+    chatIds      = testIds;
+    channelLabel = 'test';
+  } else if (channel === 'alert') {
+    chatIds      = alertIds;
+    channelLabel = 'alert';
+  } else {
+    chatIds      = signalIds;
+    channelLabel = 'signal';
+  }
 
   if (chatIds.length === 0) {
-    const msg = `No ${channel} chat IDs configured — add them on the Settings page`;
+    const msg = `No ${channelLabel} chat IDs configured — add them on the Settings page`;
     console.warn(`[telegram] ${msg} (target: "${targetName}")`);
     return { ok: false, error: msg };
   }
 
   console.log(
-    `[telegram] "${targetName}" → ${channel} (${chatIds.length} chat(s), isTest=${isTest})`,
+    `[telegram] "${targetName}" → ${channelLabel} (${chatIds.length} chat(s), isTest=${isTest})`,
   );
 
   // ── Send in parallel ──────────────────────────────────────────────────────

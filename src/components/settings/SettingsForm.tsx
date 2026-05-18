@@ -16,13 +16,15 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 export function SettingsForm({ initial }: Props) {
   const [personalIds, setPersonalIds] = useState(initial.telegram_personal_chat_id ?? '');
   const [groupIds,    setGroupIds]    = useState(initial.telegram_group_chat_id    ?? '');
+  const [alertIds,    setAlertIds]    = useState(initial.telegram_alert_chat_id    ?? '');
   const [saveState,   setSaveState]   = useState<SaveState>('idle');
   const [errorMsg,    setErrorMsg]    = useState('');
   const [, startTransition]           = useTransition();
 
   const isDirty =
     personalIds !== (initial.telegram_personal_chat_id ?? '') ||
-    groupIds    !== (initial.telegram_group_chat_id    ?? '');
+    groupIds    !== (initial.telegram_group_chat_id    ?? '') ||
+    alertIds    !== (initial.telegram_alert_chat_id    ?? '');
 
   async function handleSave() {
     setSaveState('saving');
@@ -35,6 +37,7 @@ export function SettingsForm({ initial }: Props) {
         body: JSON.stringify({
           telegram_personal_chat_id: personalIds,
           telegram_group_chat_id:    groupIds,
+          telegram_alert_chat_id:    alertIds,
         }),
       });
 
@@ -84,26 +87,37 @@ export function SettingsForm({ initial }: Props) {
 
         <div className="flex flex-col gap-6">
 
-          {/* Personal chat IDs */}
+          {/* Test chat IDs */}
           <ChatIdField
-            label="Personal Chat IDs"
+            label="Test Chat IDs"
             badge="test signals"
             badgeColor="text-amber-400 border-amber-400/30 bg-amber-400/5"
-            hint='Receives alerts whose name contains "test". One chat ID per line.'
+            hint='Receives any alert or strategy signal whose name contains "test" (case-insensitive). Accepts private and group chat IDs. One per line.'
             value={personalIds}
             onChange={setPersonalIds}
-            placeholder={'123456789\n987654321'}
+            placeholder={'123456789\n-1001234567890'}
           />
 
-          {/* Group chat IDs */}
+          {/* Signal chat IDs */}
           <ChatIdField
-            label="Group Chat IDs"
-            badge="live signals"
+            label="Signal Chat IDs"
+            badge="strategy signals"
             badgeColor="text-emerald-400 border-emerald-400/30 bg-emerald-400/5"
-            hint="Receives all other alerts. One chat ID per line. Use negative IDs for group chats/channels."
+            hint="Receives strategy entry signals (non-test). Accepts private and group chat IDs. One per line."
             value={groupIds}
             onChange={setGroupIds}
-            placeholder={'-1001234567890\n-1009876543210'}
+            placeholder={'123456789\n-1001234567890'}
+          />
+
+          {/* Alert chat IDs */}
+          <ChatIdField
+            label="Alert Chat IDs"
+            badge="indicator alerts"
+            badgeColor="text-blue-400 border-blue-400/30 bg-blue-400/5"
+            hint="Receives indicator-based alerts (price, RSI, etc.). Accepts private and group chat IDs. One per line."
+            value={alertIds}
+            onChange={setAlertIds}
+            placeholder={'123456789\n-1001234567890'}
           />
 
         </div>

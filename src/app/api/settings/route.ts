@@ -5,6 +5,7 @@ import { db } from '@/lib/db/client';
 const ALLOWED_KEYS = [
   'telegram_personal_chat_id',
   'telegram_group_chat_id',
+  'telegram_alert_chat_id',
 ] as const;
 
 export type SettingKey = (typeof ALLOWED_KEYS)[number];
@@ -13,6 +14,7 @@ export type SettingKey = (typeof ALLOWED_KEYS)[number];
 export interface AppSettings {
   telegram_personal_chat_id: string | null;
   telegram_group_chat_id:    string | null;
+  telegram_alert_chat_id:    string | null;
 }
 
 // ── GET /api/settings ─────────────────────────────────────────────────────────
@@ -30,6 +32,7 @@ export async function GET() {
     const settings: AppSettings = {
       telegram_personal_chat_id: map['telegram_personal_chat_id'] ?? null,
       telegram_group_chat_id:    map['telegram_group_chat_id']    ?? null,
+      telegram_alert_chat_id:    map['telegram_alert_chat_id']    ?? null,
     };
 
     return NextResponse.json(settings);

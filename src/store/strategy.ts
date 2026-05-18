@@ -83,6 +83,20 @@ interface StrategyState {
   /** Clone a strategy with a new id and " (copy)" suffix. */
   duplicateStrategy: (id: string) => void;
   /**
+   * Clone every strategy belonging to `fromSymbol` to `targetSymbol`.
+   * All conditions, risk params, and action are copied verbatim.
+   * Each copy gets a new id, starts inactive, and is named identically
+   * (the symbol change is visible from the group it lands in).
+   * Returns the number of strategies cloned.
+   */
+  copyGroupToSymbol: (fromSymbol: string, targetSymbol: string) => number;
+  /**
+   * Clone a single strategy to a different symbol.
+   * Copies all conditions, risk params, and action verbatim; assigns a new id,
+   * sets the symbol to targetSymbol, and starts inactive.
+   */
+  cloneStrategyToSymbol: (id: string, targetSymbol: string) => void;
+  /**
    * Clone a template into a regular working strategy.
    * Sets isTemplate to false, prefixes name with "Copy of ", assigns a new id.
    */
@@ -179,6 +193,33 @@ export const useStrategyStore = create<StrategyState>()(
           };
         }),
 
+      copyGroupToSymbol: (fromSymbol, targetSymbol) => {
+        const sym = targetSymbol.toUpperCase().trim();
+        let cloned = 0;
+        set((s) => {
+          const sources = s.strategies.filter(
+            (x) => !x.isTemplate && x.symbol === fromSymbol,
+          );
+          if (!sym || sym === fromSymbol || sources.length === 0) return {};
+          const copies = sources.map((original) => ({
+            ...original,
+            id:        `strategy_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            symbol:    sym,
+            version:   1,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            isActive:  false,
+          }));
+          cloned = copies.length;
+          // Select the first copy so the user lands somewhere useful
+          return {
+            strategies:       [...s.strategies, ...copies],
+            activeStrategyId: copies[0]?.id ?? s.activeStrategyId,
+          };
+        });
+        return cloned;
+      },
+
       loadStarterTemplates: () =>
         set((s) => {
           const now = Date.now();
@@ -195,6 +236,28 @@ export const useStrategyStore = create<StrategyState>()(
               ...s.strategies.filter((x) => !starterIds.has(x.id)),
               ...stamped,
             ],
+          };
+        }),
+
+      cloneStrategyToSymbol: (id, targetSymbol) =>
+        set((s) => {
+          const original = s.strategies.find((x) => x.id === id);
+          if (!original) return {};
+          const sym = targetSymbol.toUpperCase().trim();
+          if (!sym || sym === original.symbol) return {};
+          const now = Date.now();
+          const copy: typeof original = {
+            ...original,
+            id:        `strategy_${now}_${Math.random().toString(36).slice(2, 6)}`,
+            symbol:    sym,
+            version:   1,
+            createdAt: now,
+            updatedAt: now,
+            isActive:  false,
+          };
+          return {
+            strategies:       [...s.strategies, copy],
+            activeStrategyId: copy.id,
           };
         }),
 

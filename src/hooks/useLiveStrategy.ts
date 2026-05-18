@@ -72,9 +72,12 @@ export function useLiveStrategies(): LiveStrategyState[] {
   return useMemo((): LiveStrategyState[] => {
     if (activeStrategies.length === 0 || barCloseCount < 2) return [];
 
-    // candles[length-1] is the currently FORMING bar; include it so the most
-    // recent closed bar (length-2) is always in the window.
-    const window = candles.slice(-MAX_CANDLES);
+    // Only evaluate fully closed candles — matches the notify cron's behaviour.
+    // Excluding the forming bar prevents "ghost" signals that appear mid-candle
+    // and disappear before the bar closes, and ensures chart markers and
+    // Telegram alerts fire on the exact same bars.
+    const now = Date.now();
+    const window = candles.filter((c) => c.closeTime < now).slice(-MAX_CANDLES);
 
     return activeStrategies.map((strategy): LiveStrategyState => {
       let trades: BacktestTrade[] = [];

@@ -430,7 +430,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     tradeEntries: true,  // arrows — backtest trade entries
     tradeExits:   true,  // circles — backtest trade exits with P&L
     patterns:     true,  // arrows — candlestick pattern detections
+    dropLines:    true,  // vertical lines + name labels at the bottom of the price pane
   });
+  // When false, strategy name labels are stripped from marker text (arrows/circles
+  // still render — only the text overlay is suppressed).
+  const [showMarkerLabels, setShowMarkerLabels] = useState(true);
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
   const markerMenuRef = useRef<HTMLDivElement>(null);
 
@@ -484,6 +488,13 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       color: '#a78bfa',
       shape: '▲',
     },
+    {
+      key:   'dropLines',
+      label: 'Drop-lines',
+      desc:  'Vertical lines + strategy name labels drawn at the bottom of the price pane for every trade entry/exit timestamp.',
+      color: '#3b82f6',
+      shape: '▏',
+    },
   ];
 
   // ── Categorised strategy markers ─────────────────────────────────────────
@@ -522,7 +533,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             position: isLong ? 'belowBar' : 'aboveBar',
             color:    isLong ? '#10b981' : '#ef4444',
             shape:    isLong ? 'arrowUp' : 'arrowDown',
-            text:     `${label} ${isLong ? '▲' : '▼'}`,
+            text:     showMarkerLabels ? `${label} ${isLong ? '▲' : '▼'}` : '',
             size:     2,
           });
           if (trade.exitReason !== 'end_of_data') {
@@ -531,7 +542,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               position: isLong ? 'aboveBar' : 'belowBar',
               color:    trade.pnlPct >= 0 ? '#10b981' : '#ef4444',
               shape:    'circle',
-              text:     `${label} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%`,
+              text:     showMarkerLabels ? `${label} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%` : '',
               size:     1,
             });
           }
@@ -539,7 +550,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       }
       return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveStrategies, candles]);
+    }, [liveStrategies, candles, showMarkerLabels]);
 
   // ── Pattern markers on price chart ───────────────────────────────────────
   // Extract IndicatorMarker[] from any indicator series that carries them
@@ -712,10 +723,22 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               <div className="absolute right-0 top-full mt-1.5 z-50 w-72
                               rounded border border-surface-border bg-surface
                               shadow-xl overflow-hidden">
-                <div className="px-3 py-2 border-b border-surface-border flex items-center justify-between">
+                <div className="px-3 py-2 border-b border-surface-border flex items-center justify-between gap-2">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted">
                     Chart markers
                   </span>
+                  {/* Label toggle — hides/shows strategy name text on arrows & circles */}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setShowMarkerLabels((v) => !v); }}
+                    title="Toggle marker labels"
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono transition-colors
+                                ${showMarkerLabels
+                                  ? 'border-accent/40 text-accent bg-accent/5 hover:bg-accent/10'
+                                  : 'border-surface-border text-text-muted hover:text-text-primary'}`}
+                  >
+                    Aa {showMarkerLabels ? 'on' : 'off'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -1057,7 +1080,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               Each line runs from top to bottom of the price pane with the
               strategy label at the foot, positioned at the marker's x coordinate.
               Re-rendered on every scroll/zoom via recomputeSignalLines. */}
-          {signalLines.map((line, i) => (
+          {markerVisibility.dropLines && signalLines.map((line, i) => (
             <div
               key={i}
               className="absolute top-0 bottom-0 w-0 pointer-events-none z-10 overflow-visible"

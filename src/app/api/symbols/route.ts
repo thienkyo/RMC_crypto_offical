@@ -73,47 +73,83 @@ interface CoinGeckoMarket {
 
 const CRYPTO_LIST_SIZE = 20;
 
+/**
+ * Fetch the set of all active USDT spot symbols from Binance.
+ *
+ * Uses the lightweight price-ticker endpoint (~200 KB vs ~2 MB for exchangeInfo).
+ * Cached for 1 hour alongside the symbol list — only refetched when CoinGecko is
+ * also being re-evaluated.
+ *
+ * Returns an empty Set on failure so the caller can gracefully skip validation
+ * rather than crash the whole route.
+ */
+async function fetchActiveBinanceUsdtSymbols(): Promise<Set<string>> {
+  try {
+    const res = await fetch('https://api.binance.com/api/v3/ticker/price', {
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) throw new Error(`Binance ticker/price ${res.status}`);
+    const pairs = (await res.json()) as Array<{ symbol: string }>;
+    return new Set(pairs.map((p) => p.symbol));
+  } catch (err) {
+    console.warn('[api/symbols] Binance ticker/price fetch failed, skipping validation:', err);
+    return new Set(); // empty = skip validation, accept all
+  }
+}
+
 export async function GET() {
   let crypto: MarketSymbol[] = CRYPTO_FALLBACK;
   let stale = false;
 
   try {
-    // Fetch top 40 so we have enough headroom after filtering stablecoins.
-    // The list refreshes every hour via Next.js ISR revalidation.
-    const res = await fetch(
-      'https://api.coingecko.com/api/v3/coins/markets' +
-      '?vs_currency=usd&order=market_cap_desc&per_page=40&page=1&sparkline=false',
-      {
-        next: { revalidate: 3600 },
-        headers: { Accept: 'application/json' },
-      },
-    );
+    // Fetch top 60 from CoinGecko — extra headroom so we can still fill 20
+    // valid Binance pairs after filtering stablecoins + unlisted tokens.
+    const [coingeckoRes, activeBinanceSymbols] = await Promise.all([
+      fetch(
+        'https://api.coingecko.com/api/v3/coins/markets' +
+        '?vs_currency=usd&order=market_cap_desc&per_page=60&page=1&sparkline=false',
+        { next: { revalidate: 3600 }, headers: { Accept: 'application/json' } },
+      ),
+      fetchActiveBinanceUsdtSymbols(),
+    ]);
 
-    if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
+    if (!coingeckoRes.ok) throw new Error(`CoinGecko ${coingeckoRes.status}`);
 
-    const coins = (await res.json()) as CoinGeckoMarket[];
+    const coins = (await coingeckoRes.json()) as CoinGeckoMarket[];
 
-    // Pinned base assets — always excluded from the ranked pool so they
-    // don't occupy a slot, then added back explicitly at the end.
     const pinnedBases = new Set(PINNED.map((p) => p.baseAsset));
+    const want = CRYPTO_LIST_SIZE - PINNED.length;
 
-    // Filter out stablecoins and pinned coins, then cap at CRYPTO_LIST_SIZE - pinned.length
-    const ranked: MarketSymbol[] = coins
-      .filter((c) => {
-        const base = c.symbol.toUpperCase();
-        return !STABLECOINS.has(base) && !pinnedBases.has(base);
-      })
-      .slice(0, CRYPTO_LIST_SIZE - PINNED.length)
-      .map((c) => ({
-        symbol:      `${c.symbol.toUpperCase()}USDT`,
-        baseAsset:   c.symbol.toUpperCase(),
+    // Walk the CoinGecko list in rank order, skipping:
+    //   1. Stablecoins
+    //   2. Pinned coins (added back explicitly below)
+    //   3. Coins with no active USDT spot pair on Binance
+    //      (only enforced when we successfully fetched the Binance list)
+    const ranked: MarketSymbol[] = [];
+    for (const c of coins) {
+      if (ranked.length >= want) break;
+      const base          = c.symbol.toUpperCase();
+      const binanceSymbol = `${base}USDT`;
+
+      if (STABLECOINS.has(base))  continue;
+      if (pinnedBases.has(base))  continue;
+
+      // Skip if we have Binance data and the pair isn't active
+      if (activeBinanceSymbols.size > 0 && !activeBinanceSymbols.has(binanceSymbol)) {
+        console.log(`[api/symbols] skipping ${binanceSymbol} — not on Binance spot`);
+        continue;
+      }
+
+      ranked.push({
+        symbol:      binanceSymbol,
+        baseAsset:   base,
         quoteAsset:  'USDT',
         source:      'binance' as const,
         displayName: c.name,
         rank:        c.market_cap_rank,
-      }));
+      });
+    }
 
-    // Append pinned coins (PAXG etc.) at the end
     crypto = [...ranked, ...PINNED];
   } catch (err) {
     console.warn('[api/symbols] CoinGecko unavailable, using fallback:', err);

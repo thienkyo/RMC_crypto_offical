@@ -240,9 +240,6 @@ export function formatStrategySignalMessage(opts: {
 
   const lines: string[] = [`📈 Strategy Signal — "${strategyName}"`];
 
-  const verboseName = longName?.trim();
-  if (verboseName) lines.push(verboseName);
-
   lines.push(
     `${lbl('Rating:', W)}${stars}`,
     `${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,

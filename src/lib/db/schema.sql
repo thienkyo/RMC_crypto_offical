@@ -246,7 +246,13 @@ CREATE TABLE IF NOT EXISTS strategy_signals (
   -- Candle that triggered the signal (openTime, Unix ms stored as TIMESTAMPTZ)
   candle_time      TIMESTAMPTZ   NOT NULL,
   fired_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-  -- Manual outcome — NULL = still open, positive = win, negative = loss
+  -- Snapshot of the conditions that fired — frozen at signal time so edits to
+  -- the strategy don't rewrite history. Stored as JSONB array of ConditionSnapshotGroup.
+  conditions_snapshot JSONB,
+  -- Actual trade prices entered by the user (may differ from signal entry_price)
+  actual_entry_price NUMERIC(20,8),
+  actual_exit_price  NUMERIC(20,8),
+  -- P&L % — auto-computed from actual prices when both are set; NULL = still open
   pnl_pct          NUMERIC(10,4),
   outcome_note     TEXT,
   outcome_at       TIMESTAMPTZ,
@@ -261,5 +267,8 @@ CREATE INDEX IF NOT EXISTS strategy_signals_by_symbol
   ON strategy_signals (symbol, fired_at DESC);
 
 -- ALTER for existing DBs (idempotent):
-ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS outcome_note TEXT;
-ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS outcome_at   TIMESTAMPTZ;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS outcome_note        TEXT;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS outcome_at          TIMESTAMPTZ;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS conditions_snapshot JSONB;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS actual_entry_price  NUMERIC(20,8);
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS actual_exit_price   NUMERIC(20,8);

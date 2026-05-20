@@ -9,6 +9,21 @@
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/** One condition inside a snapshot group. */
+export interface ConditionSnapshotItem {
+  label:   string;
+  passed:  boolean;
+  value?:  number;   // indicator value at fire time (undefined for pattern indicators)
+}
+
+/** One condition group as recorded when the signal fired. */
+export interface ConditionSnapshotGroup {
+  label?:            string;           // optional group label
+  groupOperator:     'or' | 'and';
+  conditionOperator: 'and' | 'or';
+  conditions:        ConditionSnapshotItem[];
+}
+
 export interface StrategySignalRow {
   id:                 number;
   strategy_id:        string;
@@ -21,7 +36,10 @@ export interface StrategySignalRow {
   take_profit_pct:    number;
   candle_time:        number; // Unix ms
   fired_at:           number; // Unix ms
-  pnl_pct:            number | null;
+  conditions_snapshot: ConditionSnapshotGroup[] | null; // frozen at fire time
+  actual_entry_price:  number | null; // user's actual Binance buy price
+  actual_exit_price:   number | null; // user's actual Binance exit price
+  pnl_pct:            number | null; // computed from actual prices; null = still open
   outcome_note:       string | null;
   outcome_at:         number | null; // Unix ms
   telegram_delivered: boolean;

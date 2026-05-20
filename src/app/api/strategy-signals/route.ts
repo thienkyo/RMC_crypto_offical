@@ -22,36 +22,39 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ── PATCH /api/strategy-signals — update outcome ──────────────────────────────
+// ── PATCH /api/strategy-signals — record actual trade prices ─────────────────
 //
-// Body: { id: number; pnlPct: number | null; note?: string }
+// Body: {
+//   id:               number;
+//   direction:        'long' | 'short';
+//   actualEntryPrice: number | null;   // user's actual Binance buy price
+//   actualExitPrice:  number | null;   // user's actual Binance exit price
+//   note?:            string;
+// }
 //
-// pnlPct parsing rules (matches what the user types in UI or Telegram):
-//   "+3.5"   → 3.5
-//   "-2.1"   → -2.1
-//   "+3.5%"  → 3.5
-//   "3.5%"   → 3.5      (positive assumed when no sign)
-//   "-2.1%"  → -2.1
-//   null     → null      (clears the outcome)
+// pnl_pct is computed server-side: pass null for both prices to clear outcome.
 
 export async function PATCH(req: NextRequest) {
   try {
-    const body = (await req.json()) as { id: number; pnlPct: string | number | null; note?: string };
+    const body = (await req.json()) as {
+      id:               number;
+      direction:        'long' | 'short';
+      actualEntryPrice: number | null;
+      actualExitPrice:  number | null;
+      note?:            string;
+    };
 
     if (typeof body.id !== 'number') {
       return NextResponse.json({ error: 'id (number) is required' }, { status: 400 });
     }
-
-    let pnlPct: number | null = null;
-    if (body.pnlPct !== null && body.pnlPct !== undefined && body.pnlPct !== '') {
-      const parsed = parsePnl(String(body.pnlPct));
-      if (parsed === null) {
-        return NextResponse.json({ error: `Cannot parse pnlPct: "${body.pnlPct}"` }, { status: 400 });
-      }
-      pnlPct = parsed;
+    if (body.direction !== 'long' && body.direction !== 'short') {
+      return NextResponse.json({ error: 'direction must be "long" or "short"' }, { status: 400 });
     }
 
-    await updateSignalOutcome(body.id, pnlPct, body.note);
+    const entryPrice = typeof body.actualEntryPrice === 'number' ? body.actualEntryPrice : null;
+    const exitPrice  = typeof body.actualExitPrice  === 'number' ? body.actualExitPrice  : null;
+
+    await updateSignalOutcome(body.id, entryPrice, exitPrice, body.direction, body.note);
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error('[api/strategy-signals] PATCH error:', err);
@@ -78,16 +81,3 @@ export async function DELETE(req: NextRequest) {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Parse user-entered P&L strings into a float.
- * Accepts: "+3.5", "-2.1", "+3.5%", "-2.1%", "3.5", "3.5%"
- * Returns null if the string cannot be parsed.
- */
-function parsePnl(raw: string): number | null {
-  const cleaned = raw.trim().replace(/%$/, '');   // strip trailing %
-  const value   = parseFloat(cleaned);
-  if (isNaN(value)) return null;
-  return value;
-}

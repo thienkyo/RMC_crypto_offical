@@ -118,16 +118,17 @@ async function runCheckAlerts(): Promise<Response> {
 
     // Log signal to DB — non-blocking, never fails the cron
     logStrategySignal({
-      strategyId:        evalResult.strategy.id,
-      strategyName:      evalResult.strategy.name,
-      symbol:            evalResult.strategy.symbol,
-      timeframe:         evalResult.strategy.timeframe,
-      direction:         evalResult.strategy.action.type === 'enter_long' ? 'long' : 'short',
-      entryPrice:        evalResult.entryPrice,
-      stopLossPct:       evalResult.strategy.risk.stopLossPct,
-      takeProfitPct:     evalResult.strategy.risk.takeProfitPct,
-      candleTime:        evalResult.candleTime,
-      telegramDelivered: telegramResult.ok,
+      strategyId:          evalResult.strategy.id,
+      strategyName:        evalResult.strategy.name,
+      symbol:              evalResult.strategy.symbol,
+      timeframe:           evalResult.strategy.timeframe,
+      direction:           evalResult.strategy.action.type === 'enter_long' ? 'long' : 'short',
+      entryPrice:          evalResult.entryPrice,
+      stopLossPct:         evalResult.strategy.risk.stopLossPct,
+      takeProfitPct:       evalResult.strategy.risk.takeProfitPct,
+      candleTime:          evalResult.candleTime,
+      telegramDelivered:   telegramResult.ok,
+      conditionsSnapshot:  evalResult.conditionGroups,
     }).catch((err) => console.error('[cron:check-alerts] logStrategySignal failed:', err));
 
     strategyDebug.push({

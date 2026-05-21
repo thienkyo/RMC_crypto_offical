@@ -1,20 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  getAllSignals,
   getSignalsForStrategy,
   updateSignalOutcome,
   deleteSignal,
 } from '@/lib/db/signals';
 
-// ── GET /api/strategy-signals?strategyId=xxx ──────────────────────────────────
+// ── GET /api/strategy-signals[?strategyId=xxx] ────────────────────────────────
+//
+// Without strategyId → returns ALL signals across all strategies (portfolio view).
+// With    strategyId → returns signals for that strategy only.
 
 export async function GET(req: NextRequest) {
   const strategyId = req.nextUrl.searchParams.get('strategyId');
-  if (!strategyId) {
-    return NextResponse.json({ error: 'strategyId is required' }, { status: 400 });
-  }
 
   try {
-    const signals = await getSignalsForStrategy(strategyId);
+    const signals = strategyId
+      ? await getSignalsForStrategy(strategyId)
+      : await getAllSignals();
     return NextResponse.json(signals);
   } catch (err) {
     console.error('[api/strategy-signals] GET error:', err);

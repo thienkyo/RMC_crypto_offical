@@ -16,12 +16,14 @@
 
 import { useState, useEffect } from 'react';
 import { useStrategyStore, selectActiveStrategy, createDefaultStrategy } from '@/store/strategy';
-import { StrategyList }   from './StrategyList';
-import { StrategyForm }   from './StrategyForm';
-import { BacktestPanel }  from './BacktestPanel';
-import { SignalHistory }  from './SignalHistory';
+import { StrategyList }     from './StrategyList';
+import { StrategyForm }     from './StrategyForm';
+import { BacktestPanel }    from './BacktestPanel';
+import { SignalHistory }    from './SignalHistory';
+import { PortfolioOverview } from './PortfolioOverview';
 
-type RightTab = 'signals' | 'backtest';
+type RightTab   = 'signals' | 'backtest';
+type TopTab     = 'strategies' | 'portfolio';
 
 export function StrategyBuilder() {
   const activeStrategy       = useStrategyStore(selectActiveStrategy);
@@ -31,6 +33,7 @@ export function StrategyBuilder() {
   const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
 
+  const [topTab,        setTopTab]        = useState<TopTab>('strategies');
   const [activeTab,     setActiveTab]     = useState<RightTab>('signals');
   const [rightVisible,  setRightVisible]  = useState(true);
 
@@ -59,89 +62,137 @@ export function StrategyBuilder() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
 
-      {/* ── Left rail: strategy list ────────────────────────────────── */}
-      <StrategyList />
+      {/* ── Top-level tab bar: Strategies | Portfolio ───────────────── */}
+      <div className="flex-shrink-0 flex border-b border-surface-border bg-surface">
+        <TopTabButton
+          label="Strategies"
+          active={topTab === 'strategies'}
+          onClick={() => setTopTab('strategies')}
+        />
+        <TopTabButton
+          label="Portfolio"
+          active={topTab === 'portfolio'}
+          onClick={() => setTopTab('portfolio')}
+        />
+      </div>
 
-      {/* ── Centre: form editor ─────────────────────────────────────── */}
-      <main className="flex-1 min-w-0 overflow-hidden border-r border-surface-border flex flex-col">
-        {activeStrategy ? (
-          <StrategyForm key={activeStrategy.id} strategy={activeStrategy} />
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted">
-            <span className="text-4xl">📐</span>
-            <p className="text-sm">No strategy selected.</p>
-            <button
-              type="button"
-              onClick={handleNew}
-              className="btn-sm btn-primary"
-            >
-              + New Strategy
-            </button>
-          </div>
-        )}
-      </main>
+      {/* ── Portfolio view ──────────────────────────────────────────── */}
+      {topTab === 'portfolio' && (
+        <div className="flex-1 overflow-hidden">
+          <PortfolioOverview />
+        </div>
+      )}
 
-      {/* ── Right panel: toggle with ] key ─────────────────────────── */}
-      {activeStrategy && rightVisible && (
-        <aside className="w-[40rem] flex-shrink-0 flex flex-col bg-surface border-l border-surface-border">
+      {/* ── Strategies view ─────────────────────────────────────────── */}
+      {topTab === 'strategies' && (
+        <div className="flex flex-1 overflow-hidden">
 
-          {/* Tab bar */}
-          <div className="flex-shrink-0 flex border-b border-surface-border">
-            <TabButton
-              label="Signals"
-              active={activeTab === 'signals'}
-              onClick={() => setActiveTab('signals')}
-            />
-            <TabButton
-              label={`Backtest${history.length > 0 ? ` (${history.length})` : ''}`}
-              active={activeTab === 'backtest'}
-              onClick={() => setActiveTab('backtest')}
-              highlight={history.length > 0 || isBacktesting}
-            />
-          </div>
+          {/* Left rail: strategy list */}
+          <StrategyList />
 
-          {/* Tab content */}
-          <div className="flex-1 overflow-hidden flex flex-col">
-            {activeTab === 'signals' && (
-              <SignalHistory strategyId={activeStrategy.id} />
+          {/* Centre: form editor */}
+          <main className="flex-1 min-w-0 overflow-hidden border-r border-surface-border flex flex-col">
+            {activeStrategy ? (
+              <StrategyForm key={activeStrategy.id} strategy={activeStrategy} />
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted">
+                <span className="text-4xl">📐</span>
+                <p className="text-sm">No strategy selected.</p>
+                <button
+                  type="button"
+                  onClick={handleNew}
+                  className="btn-sm btn-primary"
+                >
+                  + New Strategy
+                </button>
+              </div>
             )}
+          </main>
 
-            {activeTab === 'backtest' && (
-              <>
-                {isBacktesting && (
-                  <div className="flex items-center justify-center gap-2 text-text-muted text-sm
-                                  animate-pulse px-4 py-3 border-b border-surface-border">
-                    Running backtest…
-                  </div>
+          {/* Right panel: toggle with ] key */}
+          {activeStrategy && rightVisible && (
+            <aside className="w-[40rem] flex-shrink-0 flex flex-col bg-surface border-l border-surface-border">
+
+              {/* Tab bar */}
+              <div className="flex-shrink-0 flex border-b border-surface-border">
+                <TabButton
+                  label="Signals"
+                  active={activeTab === 'signals'}
+                  onClick={() => setActiveTab('signals')}
+                />
+                <TabButton
+                  label={`Backtest${history.length > 0 ? ` (${history.length})` : ''}`}
+                  active={activeTab === 'backtest'}
+                  onClick={() => setActiveTab('backtest')}
+                  highlight={history.length > 0 || isBacktesting}
+                />
+              </div>
+
+              {/* Tab content */}
+              <div className="flex-1 overflow-hidden flex flex-col">
+                {activeTab === 'signals' && (
+                  <SignalHistory strategyId={activeStrategy.id} />
                 )}
-                {history.length > 0 ? (
-                  <BacktestPanel
-                    history={history}
-                    onClearHistory={() => clearBacktestHistory(activeStrategy.id)}
-                  />
-                ) : (
-                  !isBacktesting && (
-                    <div className="flex flex-col items-center justify-center h-full gap-2 text-text-muted">
-                      <span className="text-2xl">📊</span>
-                      <p className="text-xs">No backtest run yet.</p>
-                      <p className="text-xs text-text-muted/60">
-                        Run one from the strategy editor.
-                      </p>
-                    </div>
-                  )
+
+                {activeTab === 'backtest' && (
+                  <>
+                    {isBacktesting && (
+                      <div className="flex items-center justify-center gap-2 text-text-muted text-sm
+                                      animate-pulse px-4 py-3 border-b border-surface-border">
+                        Running backtest…
+                      </div>
+                    )}
+                    {history.length > 0 ? (
+                      <BacktestPanel
+                        history={history}
+                        onClearHistory={() => clearBacktestHistory(activeStrategy.id)}
+                      />
+                    ) : (
+                      !isBacktesting && (
+                        <div className="flex flex-col items-center justify-center h-full gap-2 text-text-muted">
+                          <span className="text-2xl">📊</span>
+                          <p className="text-xs">No backtest run yet.</p>
+                          <p className="text-xs text-text-muted/60">
+                            Run one from the strategy editor.
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </div>
-        </aside>
+              </div>
+            </aside>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Tab button ────────────────────────────────────────────────────────────────
+// ── Top-level tab button ──────────────────────────────────────────────────────
+
+interface TopTabButtonProps { label: string; active: boolean; onClick: () => void }
+
+function TopTabButton({ label, active, onClick }: TopTabButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition-colors
+                  border-b-2 select-none
+                  ${active
+                    ? 'border-blue-500 text-blue-400'
+                    : 'border-transparent text-text-muted hover:text-text-secondary'
+                  }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ── Strategy-panel tab button ─────────────────────────────────────────────────
 
 interface TabButtonProps {
   label:      string;

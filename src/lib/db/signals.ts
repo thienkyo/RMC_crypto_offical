@@ -60,6 +60,61 @@ export async function logStrategySignal(input: LogSignalInput): Promise<number> 
   return rows[0]!.id;
 }
 
+/** Fetch every signal across all strategies, newest first. Used by the Portfolio view. */
+export async function getAllSignals(): Promise<StrategySignalRow[]> {
+  const { rows } = await db.query<{
+    id:                  number;
+    strategy_id:         string;
+    strategy_name:       string;
+    symbol:              string;
+    timeframe:           string;
+    direction:           string;
+    entry_price:         string;
+    stop_loss_pct:       string;
+    take_profit_pct:     string;
+    candle_time:         Date;
+    fired_at:            Date;
+    conditions_snapshot: ConditionSnapshotGroup[] | null;
+    actual_entry_price:  string | null;
+    actual_exit_price:   string | null;
+    pnl_pct:             string | null;
+    outcome_note:        string | null;
+    outcome_at:          Date | null;
+    telegram_delivered:  boolean;
+  }>(
+    `SELECT id, strategy_id, strategy_name, symbol, timeframe, direction,
+            entry_price, stop_loss_pct, take_profit_pct,
+            candle_time, fired_at,
+            conditions_snapshot,
+            actual_entry_price, actual_exit_price,
+            pnl_pct, outcome_note, outcome_at,
+            telegram_delivered
+     FROM strategy_signals
+     ORDER BY fired_at DESC`,
+  );
+
+  return rows.map((r) => ({
+    id:                  r.id,
+    strategy_id:         r.strategy_id,
+    strategy_name:       r.strategy_name,
+    symbol:              r.symbol,
+    timeframe:           r.timeframe,
+    direction:           r.direction as 'long' | 'short',
+    entry_price:         parseFloat(r.entry_price),
+    stop_loss_pct:       parseFloat(r.stop_loss_pct),
+    take_profit_pct:     parseFloat(r.take_profit_pct),
+    candle_time:         r.candle_time.getTime(),
+    fired_at:            r.fired_at.getTime(),
+    conditions_snapshot: r.conditions_snapshot ?? null,
+    actual_entry_price:  r.actual_entry_price !== null ? parseFloat(r.actual_entry_price) : null,
+    actual_exit_price:   r.actual_exit_price  !== null ? parseFloat(r.actual_exit_price)  : null,
+    pnl_pct:             r.pnl_pct !== null ? parseFloat(r.pnl_pct) : null,
+    outcome_note:        r.outcome_note,
+    outcome_at:          r.outcome_at ? r.outcome_at.getTime() : null,
+    telegram_delivered:  r.telegram_delivered,
+  }));
+}
+
 /** Fetch all signals for a strategy, newest first. */
 export async function getSignalsForStrategy(strategyId: string): Promise<StrategySignalRow[]> {
   const { rows } = await db.query<{

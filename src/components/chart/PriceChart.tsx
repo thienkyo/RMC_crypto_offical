@@ -78,7 +78,14 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
     const overlayRefs  = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
 
-    const loadedKeyRef = useRef<string | null>(null);
+    const loadedKeyRef    = useRef<string | null>(null);
+    // Track how many candles we last called setData with so we can skip
+    // calling it on every live tick (same bar updating).  ChartLayout already
+    // handles the per-tick surgical update via updateCandle(); only calling
+    // setData() when the bar count grows or the context changes prevents
+    // LWC's timescale from firing subscribeVisibleLogicalRangeChange on every
+    // tick, which was the root cause of the React "maximum update depth" loop.
+    const loadedLengthRef = useRef<number>(0);
 
     useImperativeHandle(ref, () => ({
       getChart: () => chartRef.current,
@@ -233,6 +240,14 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
 
       const chart        = chartRef.current;
       const isNewContext = loadedKeyRef.current !== contextKey;
+      const isNewBar     = candles.length !== loadedLengthRef.current;
+
+      // Skip setData when only the last candle's price changed (same bar tick).
+      // ChartLayout already surgically updates the forming bar via updateCandle().
+      // Calling setData() on every tick would cause LWC to refit its timescale
+      // on every tick, which fires subscribeVisibleLogicalRangeChange and
+      // triggers a setSignalLines → re-render → setData loop.
+      if (!isNewContext && !isNewBar) return;
 
       const rawSavedRange = (!isNewContext && chart)
         ? chart.timeScale().getVisibleLogicalRange()
@@ -251,6 +266,8 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
           close: c.close,
         })),
       );
+
+      loadedLengthRef.current = candles.length;
 
       if (isNewContext || !savedRange) {
         chart?.priceScale('right').applyOptions({ autoScale: true });

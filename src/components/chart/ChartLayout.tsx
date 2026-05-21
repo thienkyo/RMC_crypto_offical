@@ -94,7 +94,18 @@ interface ChartLayoutProps {
 }
 
 export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
-  const { candles, activeIndicators, isStale, setStale, symbol, timeframe, updateLastCandle } = useChartStore();
+  // Use individual selectors instead of useChartStore() (whole-store) to avoid
+  // re-rendering on every tick.  With no selector, any set() call — including
+  // lastTickAt: Date.now() on every WebSocket tick — creates a new state object
+  // and forces a re-render.  Per-field selectors only re-render when that specific
+  // field changes.
+  const candles          = useChartStore((s) => s.candles);
+  const activeIndicators = useChartStore((s) => s.activeIndicators);
+  const isStale          = useChartStore((s) => s.isStale);
+  const setStale         = useChartStore((s) => s.setStale);
+  const symbol           = useChartStore((s) => s.symbol);
+  const timeframe        = useChartStore((s) => s.timeframe);
+  const updateLastCandle = useChartStore((s) => s.updateLastCandle);
   const { isLoading, error } = useCandles();
   const toggleStrategyActive = useStrategyStore((s) => s.toggleStrategyActive);
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);

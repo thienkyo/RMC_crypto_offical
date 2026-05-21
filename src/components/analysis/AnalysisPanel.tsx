@@ -167,7 +167,9 @@ interface Props {
 }
 
 export function AnalysisPanel({ getScreenshot }: Props) {
-  const { symbol, timeframe, candles } = useChartStore();
+  const symbol    = useChartStore((s) => s.symbol);
+  const timeframe = useChartStore((s) => s.timeframe);
+  const candles   = useChartStore((s) => s.candles);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result,      setResult]      = useState<AnalyzeChartResponse | null>(null);

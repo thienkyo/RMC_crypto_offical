@@ -28,7 +28,7 @@ const SOURCE_FILTERS = [
 ] as const;
 
 export function NewsFeed() {
-  const { symbol } = useChartStore();
+  const symbol = useChartStore((s) => s.symbol);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>(undefined);
 
   const { data, isLoading, error, dataUpdatedAt } = useNewsFeed(symbol, sourceFilter);

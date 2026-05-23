@@ -129,8 +129,6 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // IDs of chips whose tooltip is currently pinned open (click to pin, click outside to close all).
   const [pinnedChipIds, setPinnedChipIds] = useState<Set<string>>(new Set());
   const chipsRef = useRef<HTMLDivElement>(null);
-  // Signal strip — init from persisted store preference
-  const [stripVisible, setStripVisible] = useState(savedMarkerSettings.stripVisible);
 
   // Reset dismissals + pins whenever the chart context changes
   useEffect(() => {
@@ -188,18 +186,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   [subHeights]);
 
   const handlePaneDelta = useCallback((id: string, delta: number) => {
-    setSubHeights((prev) => {
-      const next = Math.max(
-        SUB_HEIGHT_MIN,
-        Math.min(SUB_HEIGHT_MAX, (prev[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK) + delta),
-      );
-      // Persist the new height immediately — store write is cheap and debouncing
-      // adds no value here since the user has already stopped dragging by the time
-      // React batches these calls.
-      setSubPaneHeight(id, next);
-      return { ...prev, [id]: next };
-    });
-  }, [setSubPaneHeight]);
+    const current = subHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK;
+    const next = Math.max(SUB_HEIGHT_MIN, Math.min(SUB_HEIGHT_MAX, current + delta));
+    setSubHeights((prev) => ({ ...prev, [id]: next }));
+    setSubPaneHeight(id, next);
+  }, [subHeights, setSubPaneHeight]);
 
   // Last live tick stored here (not in Zustand candles) so the header price
   // updates without triggering a full candles→setData() re-render cycle.
@@ -482,10 +473,6 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const liveStrategies = useLiveStrategies();
 
   // ── Marker visibility controls — init from persisted store ──────────────
-  const [markerVisibility, setMarkerVisibility] = useState(savedMarkerSettings.visibility);
-  // When false, strategy name labels are stripped from marker text (arrows/circles
-  // still render — only the text overlay is suppressed).
-  const [showMarkerLabels, setShowMarkerLabels] = useState(savedMarkerSettings.showLabels);
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
   const markerMenuRef = useRef<HTMLDivElement>(null);
 
@@ -499,18 +486,17 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
-  function toggleMarker(key: keyof typeof markerVisibility) {
-    setMarkerVisibility((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      // Cast is safe — key is a known keyof MarkerVisibility and value is boolean.
-      setMarkerSettings({ visibility: { [key]: next[key] } as Partial<MarkerVisibility> });
-      return next;
+  function toggleMarker(key: keyof MarkerVisibility) {
+    setMarkerSettings({
+      visibility: {
+        [key]: !savedMarkerSettings.visibility[key]
+      }
     });
   }
 
   // Marker category metadata — descriptions shown in the popover
   const MARKER_CATEGORIES: Array<{
-    key:   keyof typeof markerVisibility;
+    key:   keyof MarkerVisibility;
     label: string;
     desc:  string;
     color: string;
@@ -589,7 +575,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             position: isLong ? 'belowBar' : 'aboveBar',
             color:    isLong ? '#10b981' : '#ef4444',
             shape:    isLong ? 'arrowUp' : 'arrowDown',
-            text:     showMarkerLabels ? `${label} ${isLong ? '▲' : '▼'}` : '',
+            text:     savedMarkerSettings.showLabels ? `${label} ${isLong ? '▲' : '▼'}` : '',
             size:     2,
           });
           if (trade.exitReason !== 'end_of_data') {
@@ -598,7 +584,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               position: isLong ? 'aboveBar' : 'belowBar',
               color:    trade.pnlPct >= 0 ? '#10b981' : '#ef4444',
               shape:    'circle',
-              text:     showMarkerLabels ? `${label} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%` : '',
+              text:     savedMarkerSettings.showLabels ? `${label} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%` : '',
               size:     1,
             });
           }
@@ -606,7 +592,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       }
       return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveStrategies, candles, showMarkerLabels]);
+    }, [liveStrategies, candles, savedMarkerSettings.showLabels]);
 
   // ── Pattern markers on price chart ───────────────────────────────────────
   // Extract IndicatorMarker[] from any indicator series that carries them
@@ -762,14 +748,14 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           {chartStrategies.length > 0 && (
             <button
               type="button"
-              onClick={() => setStripVisible((v) => { setMarkerSettings({ stripVisible: !v }); return !v; })}
+              onClick={() => setMarkerSettings({ stripVisible: !savedMarkerSettings.stripVisible })}
               className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
-                          ${stripVisible
+                          ${savedMarkerSettings.stripVisible
                             ? 'border-accent/40 text-accent bg-accent/5 hover:bg-accent/10'
                             : 'border-surface-border text-text-muted hover:text-text-primary hover:border-accent/30'}`}
               title="Toggle signal strip"
             >
-              Signals {chartStrategies.length} {stripVisible ? '▾' : '▸'}
+              Signals {chartStrategies.length} {savedMarkerSettings.stripVisible ? '▾' : '▸'}
             </button>
           )}
 
@@ -781,7 +767,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
                           ${markerMenuOpen
                             ? 'border-accent/40 text-accent bg-accent/5'
-                            : Object.values(markerVisibility).some((v) => !v)
+                            : Object.values(savedMarkerSettings.visibility).some((v) => !v)
                               ? 'border-amber-500/40 text-amber-400 hover:bg-amber-500/5'
                               : 'border-surface-border text-text-muted hover:text-text-primary hover:border-accent/30'}`}
               title="Toggle chart markers"
@@ -800,28 +786,27 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                   {/* Label toggle — hides/shows strategy name text on arrows & circles */}
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); setShowMarkerLabels((v) => { setMarkerSettings({ showLabels: !v }); return !v; }); }}
+                    onClick={(e) => { e.stopPropagation(); setMarkerSettings({ showLabels: !savedMarkerSettings.showLabels }); }}
                     title="Toggle marker labels"
                     className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono transition-colors
-                                ${showMarkerLabels
+                                ${savedMarkerSettings.showLabels
                                   ? 'border-accent/40 text-accent bg-accent/5 hover:bg-accent/10'
                                   : 'border-surface-border text-text-muted hover:text-text-primary'}`}
                   >
-                    Aa {showMarkerLabels ? 'on' : 'off'}
+                    Aa {savedMarkerSettings.showLabels ? 'on' : 'off'}
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      const allOn = Object.values(markerVisibility).every(Boolean);
+                      const allOn = Object.values(savedMarkerSettings.visibility).every(Boolean);
                       const next = Object.fromEntries(
-                        Object.keys(markerVisibility).map((k) => [k, !allOn])
+                        Object.keys(savedMarkerSettings.visibility).map((k) => [k, !allOn])
                       ) as unknown as MarkerVisibility;
-                      setMarkerVisibility(next);
                       setMarkerSettings({ visibility: next });
                     }}
                     className="text-[10px] font-mono text-text-muted hover:text-text-primary transition-colors"
                   >
-                    {Object.values(markerVisibility).every(Boolean) ? 'hide all' : 'show all'}
+                    {Object.values(savedMarkerSettings.visibility).every(Boolean) ? 'hide all' : 'show all'}
                   </button>
                 </div>
                 {/* ── Signal candles ── */}
@@ -835,18 +820,18 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                       onClick={() => toggleMarker(cat.key)}
                     >
                       <div className={`mt-0.5 w-3.5 h-3.5 rounded flex-shrink-0 border flex items-center justify-center
-                                      transition-colors ${markerVisibility[cat.key]
+                                      transition-colors ${savedMarkerSettings.visibility[cat.key]
                                         ? 'border-accent bg-accent/20'
                                         : 'border-surface-border bg-transparent'}`}>
-                        {markerVisibility[cat.key] && <span className="text-[8px] text-accent leading-none">✓</span>}
+                        {savedMarkerSettings.visibility[cat.key] && <span className="text-[8px] text-accent leading-none">✓</span>}
                       </div>
                       <span className="text-sm flex-shrink-0 w-4 text-center leading-none mt-px"
-                            style={{ color: markerVisibility[cat.key] ? cat.color : '#4b5563' }}>
+                            style={{ color: savedMarkerSettings.visibility[cat.key] ? cat.color : '#4b5563' }}>
                         {cat.shape}
                       </span>
                       <div className="min-w-0">
                         <div className={`text-[11px] font-mono font-medium transition-colors
-                                         ${markerVisibility[cat.key] ? 'text-text-primary' : 'text-text-muted'}`}>
+                                         ${savedMarkerSettings.visibility[cat.key] ? 'text-text-primary' : 'text-text-muted'}`}>
                           {cat.label}
                         </div>
                         <div className="text-[10px] text-text-muted leading-relaxed mt-0.5">{cat.desc}</div>
@@ -857,12 +842,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
                 {/* ── Backtest trades section ── */}
                 {(() => {
-                  const sectionOn = markerVisibility.tradeEntries && markerVisibility.tradeExits;
-                  const sectionMixed = markerVisibility.tradeEntries !== markerVisibility.tradeExits;
+                  const sectionOn = savedMarkerSettings.visibility.tradeEntries && savedMarkerSettings.visibility.tradeExits;
+                  const sectionMixed = savedMarkerSettings.visibility.tradeEntries !== savedMarkerSettings.visibility.tradeExits;
                   const toggleSection = () => {
                     const next = !sectionOn;
-                    setMarkerVisibility((prev) => ({ ...prev, tradeEntries: next, tradeExits: next }));
-                    setMarkerSettings({ visibility: { tradeEntries: next, tradeExits: next } as Partial<MarkerVisibility> });
+                    setMarkerSettings({ visibility: { tradeEntries: next, tradeExits: next } });
                   };
                   const subCats = MARKER_CATEGORIES.filter(
                     (c) => c.key === 'tradeEntries' || c.key === 'tradeExits',
@@ -899,8 +883,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                       </div>
                       {/* Sub-rows */}
                       {subCats.map((cat) => {
-                        const subOn = markerVisibility[cat.key];
-                        const sectionOff = !markerVisibility.tradeEntries && !markerVisibility.tradeExits;
+                        const subOn = savedMarkerSettings.visibility[cat.key];
+                        const sectionOff = !savedMarkerSettings.visibility.tradeEntries && !savedMarkerSettings.visibility.tradeExits;
                         return (
                           <div
                             key={cat.key}
@@ -943,18 +927,18 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                     onClick={() => toggleMarker(cat.key)}
                   >
                     <div className={`mt-0.5 w-3.5 h-3.5 rounded flex-shrink-0 border flex items-center justify-center
-                                    transition-colors ${markerVisibility[cat.key]
+                                    transition-colors ${savedMarkerSettings.visibility[cat.key]
                                       ? 'border-accent bg-accent/20'
                                       : 'border-surface-border bg-transparent'}`}>
-                      {markerVisibility[cat.key] && <span className="text-[8px] text-accent leading-none">✓</span>}
+                      {savedMarkerSettings.visibility[cat.key] && <span className="text-[8px] text-accent leading-none">✓</span>}
                     </div>
                     <span className="text-sm flex-shrink-0 w-4 text-center leading-none mt-px"
-                          style={{ color: markerVisibility[cat.key] ? cat.color : '#4b5563' }}>
+                          style={{ color: savedMarkerSettings.visibility[cat.key] ? cat.color : '#4b5563' }}>
                       {cat.shape}
                     </span>
                     <div className="min-w-0">
                       <div className={`text-[11px] font-mono font-medium transition-colors
-                                       ${markerVisibility[cat.key] ? 'text-text-primary' : 'text-text-muted'}`}>
+                                       ${savedMarkerSettings.visibility[cat.key] ? 'text-text-primary' : 'text-text-muted'}`}>
                         {cat.label}
                       </div>
                       <div className="text-[10px] text-text-muted leading-relaxed mt-0.5">{cat.desc}</div>
@@ -990,7 +974,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       </div>
 
       {/* ── Signal strip ─────────────────────────────────────────────────── */}
-      {stripVisible && chartStrategies.length > 0 && (
+      {savedMarkerSettings.stripVisible && chartStrategies.length > 0 && (
         <div
           ref={chipsRef}
           className="flex items-center gap-1.5 flex-wrap px-3 py-1.5
@@ -1226,10 +1210,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             crosshairTime={crosshairTime}
             showTimeAxis={subPaneGroups.size === 0}
             markers={[
-              ...(markerVisibility.rawSignals   ? rawSignalMarkers   : []),
-              ...(markerVisibility.tradeEntries ? tradeEntryMarkers  : []),
-              ...(markerVisibility.tradeExits   ? tradeExitMarkers   : []),
-              ...(markerVisibility.patterns     ? patternMarkers     : []),
+              ...(savedMarkerSettings.visibility.rawSignals   ? rawSignalMarkers   : []),
+              ...(savedMarkerSettings.visibility.tradeEntries ? tradeEntryMarkers  : []),
+              ...(savedMarkerSettings.visibility.tradeExits   ? tradeExitMarkers   : []),
+              ...(savedMarkerSettings.visibility.patterns     ? patternMarkers     : []),
             ].sort((a, b) => (a.time as number) - (b.time as number))}
             savedBarSpacing={savedBarSpacing}
             onBarSpacingChange={setBarSpacing}
@@ -1255,7 +1239,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               Each line runs from top to bottom of the price pane with the
               strategy label at the foot, positioned at the marker's x coordinate.
               Re-rendered on every scroll/zoom via recomputeSignalLines. */}
-          {markerVisibility.dropLines && signalLines.map((line, i) => (
+          {savedMarkerSettings.visibility.dropLines && signalLines.map((line, i) => (
             <div
               key={i}
               className="absolute top-0 bottom-0 w-0 pointer-events-none z-10 overflow-visible"

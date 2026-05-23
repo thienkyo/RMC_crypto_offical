@@ -3,6 +3,7 @@
 import {
   useEffect,
   useRef,
+  useCallback,
   useImperativeHandle,
   forwardRef,
 } from 'react';
@@ -51,6 +52,13 @@ interface Props {
   showTimeAxis?: boolean;
   /** Strategy entry/exit markers painted on the candlestick series. */
   markers?: SeriesMarker<UTCTimestamp>[];
+  /**
+   * Persisted bar spacing (candle width in px) from the chart store.
+   * Applied after the first setData() on mount or context change.
+   */
+  savedBarSpacing?: number;
+  /** Called (debounced) when the user scrolls or zooms, so the new spacing can be persisted. */
+  onBarSpacingChange?: (barSpacing: number) => void;
 }
 
 /** Binary search for a candle at an exact unix-second timestamp. */
@@ -72,7 +80,7 @@ const toSec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 const INITIAL_BARS = 100;
 
 export const PriceChart = forwardRef<PriceChartHandle, Props>(
-  function PriceChart({ candles, overlays, contextKey, onCrosshair, crosshairTime, showTimeAxis = true, markers }, ref) {
+  function PriceChart({ candles, overlays, contextKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -86,6 +94,25 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
     // LWC's timescale from firing subscribeVisibleLogicalRangeChange on every
     // tick, which was the root cause of the React "maximum update depth" loop.
     const loadedLengthRef = useRef<number>(0);
+
+    // ── Bar spacing capture (debounced) ────────────────────────────────────
+    // Keep a stable ref to onBarSpacingChange so the LWC subscription never
+    // needs to be re-registered when the callback identity changes.
+    const onBarSpacingChangeRef = useRef(onBarSpacingChange);
+    useEffect(() => { onBarSpacingChangeRef.current = onBarSpacingChange; }, [onBarSpacingChange]);
+
+    const barSpacingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const captureBarSpacing = useCallback(() => {
+      const chart = chartRef.current;
+      if (!chart) return;
+      // LWC exposes barSpacing via timeScale().options()
+      const spacing = (chart.timeScale().options() as { barSpacing?: number }).barSpacing;
+      if (typeof spacing !== 'number') return;
+      if (barSpacingTimerRef.current) clearTimeout(barSpacingTimerRef.current);
+      barSpacingTimerRef.current = setTimeout(() => {
+        onBarSpacingChangeRef.current?.(spacing);
+      }, 600);
+    }, []);
 
     useImperativeHandle(ref, () => ({
       getChart: () => chartRef.current,
@@ -197,7 +224,12 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       });
       ro.observe(containerRef.current);
 
+      // Capture bar spacing whenever the user scrolls or zooms
+      chart.timeScale().subscribeVisibleLogicalRangeChange(captureBarSpacing);
+
       return () => {
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(captureBarSpacing);
+        if (barSpacingTimerRef.current) clearTimeout(barSpacingTimerRef.current);
         ro.disconnect();
         chart.remove();
         chartRef.current    = null;
@@ -271,16 +303,24 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
 
       if (isNewContext || !savedRange) {
         chart?.priceScale('right').applyOptions({ autoScale: true });
-        const total = candles.length;
-        chart?.timeScale().setVisibleLogicalRange({
-          from: total - INITIAL_BARS - 1,
-          to:   total + 3,
-        });
+        if (savedBarSpacing) {
+          // Restore the user's preferred candle width and scroll to the latest bar.
+          // applyOptions({ barSpacing }) keeps the rightmost bar pinned, so we
+          // explicitly scroll to real time afterwards to always land on the latest candle.
+          chart?.timeScale().applyOptions({ barSpacing: savedBarSpacing });
+          chart?.timeScale().scrollToRealTime();
+        } else {
+          const total = candles.length;
+          chart?.timeScale().setVisibleLogicalRange({
+            from: total - INITIAL_BARS - 1,
+            to:   total + 3,
+          });
+        }
         loadedKeyRef.current = contextKey;
       } else {
         chart?.timeScale().setVisibleLogicalRange(savedRange);
       }
-    }, [candles, contextKey]);
+    }, [candles, contextKey, savedBarSpacing]);
 
     // ── Render/update overlay indicators ───────────────────────────────────
     useEffect(() => {

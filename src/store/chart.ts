@@ -2,6 +2,32 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Candle, Timeframe } from '@/types/market';
 
+export interface MarkerVisibility {
+  rawSignals:   boolean;  // amber squares — every candle where entry conditions fired
+  tradeEntries: boolean;  // arrows  — backtest trade entries
+  tradeExits:   boolean;  // circles — backtest trade exits with P&L
+  patterns:     boolean;  // arrows  — candlestick pattern detections
+  dropLines:    boolean;  // vertical lines + name labels at bottom of price pane
+}
+
+export interface MarkerSettings {
+  visibility:   MarkerVisibility;
+  showLabels:   boolean;  // strategy name text on arrows/circles
+  stripVisible: boolean;  // signal strip below the chart header
+}
+
+const DEFAULT_MARKER_SETTINGS: MarkerSettings = {
+  visibility: {
+    rawSignals:   true,
+    tradeEntries: true,
+    tradeExits:   true,
+    patterns:     true,
+    dropLines:    true,
+  },
+  showLabels:   true,
+  stripVisible: true,
+};
+
 export interface ActiveIndicator {
   /** Matches a key in INDICATORS registry, e.g. "ema", "rsi", "macd". */
   id: string;
@@ -25,6 +51,14 @@ interface ChartState {
   // ── Indicators ────────────────────────────────────────────────────────────
   activeIndicators: ActiveIndicator[];
 
+  // ── Viewport preferences (persisted) ─────────────────────────────────────
+  /** Last bar spacing (candle width in px) set by the user. Restored on mount. */
+  barSpacing: number;
+  /** Sub-pane pixel heights keyed by indicator id (e.g. { rsi: 120, macd: 140 }). */
+  subPaneHeights: Record<string, number>;
+  /** Marker / signal overlay visibility preferences. */
+  markerSettings: MarkerSettings;
+
   // ── Actions ───────────────────────────────────────────────────────────────
   setSymbol:    (symbol: string) => void;
   setTimeframe: (tf: Timeframe) => void;
@@ -44,6 +78,11 @@ interface ChartState {
   removeIndicator:       (id: string) => void;
   toggleIndicator:       (id: string) => void;
   updateIndicatorParams: (id: string, params: Record<string, number>) => void;
+
+  setBarSpacing:    (barSpacing: number) => void;
+  setSubPaneHeight: (id: string, height: number) => void;
+  /** Merge a partial update into markerSettings. */
+  setMarkerSettings: (patch: { visibility?: Partial<MarkerVisibility>; showLabels?: boolean; stripVisible?: boolean }) => void;
 }
 
 /** Default indicator set shown on first load. */
@@ -67,6 +106,10 @@ export const useChartStore = create<ChartState>()(
       lastTickAt: null,
 
       activeIndicators: DEFAULT_INDICATORS,
+
+      barSpacing:     8,   // LWC default is ~6; 8 is slightly wider and feels better
+      subPaneHeights: {},  // empty = fall back to SUB_HEIGHT_DEFAULT in ChartLayout
+      markerSettings: DEFAULT_MARKER_SETTINGS,
 
       // ── Actions ─────────────────────────────────────────────────────────────
 
@@ -129,6 +172,24 @@ export const useChartStore = create<ChartState>()(
             i.id === id ? { ...i, params: { ...i.params, ...params } } : i,
           ),
         })),
+
+      setBarSpacing: (barSpacing) => set({ barSpacing }),
+
+      setSubPaneHeight: (id, height) =>
+        set((s) => ({ subPaneHeights: { ...s.subPaneHeights, [id]: height } })),
+
+      setMarkerSettings: (patch) =>
+        set((s) => ({
+          markerSettings: {
+            ...s.markerSettings,
+            ...patch,
+            // Deep-merge visibility so callers can pass a single key without
+            // wiping the other four.
+            visibility: patch.visibility
+              ? { ...s.markerSettings.visibility, ...patch.visibility }
+              : s.markerSettings.visibility,
+          },
+        })),
     }),
     {
       name: 'rmc-chart',
@@ -138,6 +199,9 @@ export const useChartStore = create<ChartState>()(
         symbol:           s.symbol,
         timeframe:        s.timeframe,
         activeIndicators: s.activeIndicators,
+        barSpacing:       s.barSpacing,
+        subPaneHeights:   s.subPaneHeights,
+        markerSettings:   s.markerSettings,
       }),
     },
   ),

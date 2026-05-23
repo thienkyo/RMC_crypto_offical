@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { LogicalRange, IChartApi, Logical, SeriesMarker, UTCTimestamp as LWCTimestamp } from 'lightweight-charts';
 import { format } from 'date-fns';
 import { useChartStore } from '@/store/chart';
+import type { MarkerVisibility } from '@/store/chart';
 import { useStrategyStore } from '@/store/strategy';
 import { useLayoutStore } from '@/store/layout';
 import { useCandles }    from '@/hooks/useCandles';
@@ -99,13 +100,19 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // lastTickAt: Date.now() on every WebSocket tick — creates a new state object
   // and forces a re-render.  Per-field selectors only re-render when that specific
   // field changes.
-  const candles          = useChartStore((s) => s.candles);
-  const activeIndicators = useChartStore((s) => s.activeIndicators);
-  const isStale          = useChartStore((s) => s.isStale);
-  const setStale         = useChartStore((s) => s.setStale);
-  const symbol           = useChartStore((s) => s.symbol);
-  const timeframe        = useChartStore((s) => s.timeframe);
-  const updateLastCandle = useChartStore((s) => s.updateLastCandle);
+  const candles            = useChartStore((s) => s.candles);
+  const activeIndicators   = useChartStore((s) => s.activeIndicators);
+  const isStale            = useChartStore((s) => s.isStale);
+  const setStale           = useChartStore((s) => s.setStale);
+  const symbol             = useChartStore((s) => s.symbol);
+  const timeframe          = useChartStore((s) => s.timeframe);
+  const updateLastCandle   = useChartStore((s) => s.updateLastCandle);
+  const savedBarSpacing    = useChartStore((s) => s.barSpacing);
+  const savedSubHeights    = useChartStore((s) => s.subPaneHeights);
+  const savedMarkerSettings = useChartStore((s) => s.markerSettings);
+  const setBarSpacing      = useChartStore((s) => s.setBarSpacing);
+  const setSubPaneHeight   = useChartStore((s) => s.setSubPaneHeight);
+  const setMarkerSettings  = useChartStore((s) => s.setMarkerSettings);
   const { isLoading, error } = useCandles();
   const toggleStrategyActive = useStrategyStore((s) => s.toggleStrategyActive);
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
@@ -122,8 +129,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // IDs of chips whose tooltip is currently pinned open (click to pin, click outside to close all).
   const [pinnedChipIds, setPinnedChipIds] = useState<Set<string>>(new Set());
   const chipsRef = useRef<HTMLDivElement>(null);
-  // Signal strip — visible by default, toggled by the "Signals N" button
-  const [stripVisible, setStripVisible] = useState(true);
+  // Signal strip — init from persisted store preference
+  const [stripVisible, setStripVisible] = useState(savedMarkerSettings.stripVisible);
 
   // Reset dismissals + pins whenever the chart context changes
   useEffect(() => {
@@ -172,22 +179,27 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const priceRef = useRef<PriceChartHandle>(null);
   const subRefs  = useRef<Map<string, SubChartHandle>>(new Map());
 
-  // ── Sub-pane heights (resizable via drag) ─────────────────────────────────
-  const [subHeights, setSubHeights] = useState<Record<string, number>>({});
+  // ── Sub-pane heights (resizable via drag, persisted to store) ────────────
+  // Initialise from the persisted store values so heights survive a page reload.
+  const [subHeights, setSubHeights] = useState<Record<string, number>>(savedSubHeights);
 
   const getSubHeight = useCallback((id: string) =>
     subHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK,
   [subHeights]);
 
   const handlePaneDelta = useCallback((id: string, delta: number) => {
-    setSubHeights((prev) => ({
-      ...prev,
-      [id]: Math.max(
+    setSubHeights((prev) => {
+      const next = Math.max(
         SUB_HEIGHT_MIN,
         Math.min(SUB_HEIGHT_MAX, (prev[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK) + delta),
-      ),
-    }));
-  }, []);
+      );
+      // Persist the new height immediately — store write is cheap and debouncing
+      // adds no value here since the user has already stopped dragging by the time
+      // React batches these calls.
+      setSubPaneHeight(id, next);
+      return { ...prev, [id]: next };
+    });
+  }, [setSubPaneHeight]);
 
   // Last live tick stored here (not in Zustand candles) so the header price
   // updates without triggering a full candles→setData() re-render cycle.
@@ -336,18 +348,52 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     [allSeries],
   );
 
+  // Sub-pane series — computed from CLOSED candles only (bar-close stable).
+  // Live tick updates reach SubCharts surgically via updateSeriesPoint() in the
+  // WS handler, so we don't need full setData() on every price tick.
+  //
+  // Root-cause guard: previously this depended on [allSeries, activeIndicators],
+  // and allSeries depended on [candles, liveCandle, activeIndicators].  Since
+  // liveCandle changes on every tick, subPaneGroups was a new Map every tick →
+  // SubChart's useEffect([series]) fired every tick → series.setData() → LWC
+  // fired subscribeVisibleLogicalRangeChange → setSignalLines / setTimerY →
+  // re-render → repeat.  Using candles.length (stable between same-bar ticks)
+  // breaks the cycle while keeping sub-pane data correct.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const subPaneGroups = useMemo(() => {
     const groups = new Map<string, IndicatorSeries[]>();
-    for (const s of allSeries.filter((s) => s.panel === 'sub')) {
-      const indicatorId = activeIndicators.find((ai) => s.id.startsWith(ai.id))?.id ?? s.id;
-      // Pattern indicators (bias set) render only as arrow markers on the price chart —
-      // no sub-pane needed; the histogram signal data is irrelevant for display.
-      if (INDICATORS[indicatorId]?.bias !== undefined) continue;
-      if (!groups.has(indicatorId)) groups.set(indicatorId, []);
-      groups.get(indicatorId)!.push(s);
+    if (candles.length === 0) return groups;
+
+    for (const ai of activeIndicators) {
+      if (!ai.visible) continue;
+      const indicator = INDICATORS[ai.id];
+      // Pattern indicators (bias set) render only as price-chart arrow markers —
+      // no sub-pane needed.
+      if (!indicator || indicator.bias !== undefined) continue;
+      try {
+        const computed = indicator.compute(candles, ai.params);
+        for (const s of computed) {
+          if (s.panel !== 'sub') continue;
+          // Pad leading NaN so logical indices align with the price chart
+          if (s.data.length > 0 && s.data.length < candles.length) {
+            const missingCount = candles.length - s.data.length;
+            const pad: IndicatorPoint[] = [];
+            for (let i = 0; i < missingCount; i++) {
+              pad.push({ time: candles[i]!.openTime, value: NaN });
+            }
+            s.data = [...pad, ...s.data];
+          }
+          if (!groups.has(ai.id)) groups.set(ai.id, []);
+          groups.get(ai.id)!.push(s);
+        }
+      } catch (err) {
+        console.error(`[subchart-indicator:${ai.id}] compute failed:`, err);
+      }
     }
     return groups;
-  }, [allSeries, activeIndicators]);
+    // candles.length (not the array ref) — intentionally excludes same-bar tick
+    // changes so SubCharts only call setData() on new-bar events.
+  }, [candles.length, activeIndicators]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Time-axis synchronization across panes (bidirectional) ───────────────
   //
@@ -435,17 +481,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
   const liveStrategies = useLiveStrategies();
 
-  // ── Marker visibility controls ────────────────────────────────────────────
-  const [markerVisibility, setMarkerVisibility] = useState({
-    rawSignals:   true,  // amber squares — every candle entry conditions fired
-    tradeEntries: true,  // arrows — backtest trade entries
-    tradeExits:   true,  // circles — backtest trade exits with P&L
-    patterns:     true,  // arrows — candlestick pattern detections
-    dropLines:    true,  // vertical lines + name labels at the bottom of the price pane
-  });
+  // ── Marker visibility controls — init from persisted store ──────────────
+  const [markerVisibility, setMarkerVisibility] = useState(savedMarkerSettings.visibility);
   // When false, strategy name labels are stripped from marker text (arrows/circles
   // still render — only the text overlay is suppressed).
-  const [showMarkerLabels, setShowMarkerLabels] = useState(true);
+  const [showMarkerLabels, setShowMarkerLabels] = useState(savedMarkerSettings.showLabels);
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
   const markerMenuRef = useRef<HTMLDivElement>(null);
 
@@ -460,7 +500,12 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   }, []);
 
   function toggleMarker(key: keyof typeof markerVisibility) {
-    setMarkerVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
+    setMarkerVisibility((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      // Cast is safe — key is a known keyof MarkerVisibility and value is boolean.
+      setMarkerSettings({ visibility: { [key]: next[key] } as Partial<MarkerVisibility> });
+      return next;
+    });
   }
 
   // Marker category metadata — descriptions shown in the popover
@@ -591,24 +636,34 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // it stays glued to the label even as the scale changes.
   const [timerY, setTimerY] = useState<number | null>(null);
 
+  // Root-cause guard: candles removed from deps — use candlesRef.current (already
+  // kept in sync) so this callback doesn't recreate on every tick.  Previously
+  // [livePrice, candles] caused recreation every tick → useEffect fired →
+  // setTimerY → re-render → subscription re-registered → immediate fire → loop.
   const recomputeTimerY = useCallback(() => {
-    const price = livePrice ?? candles[candles.length - 1]?.close;
+    const price = livePrice ?? candlesRef.current[candlesRef.current.length - 1]?.close;
     if (price == null) { setTimerY(null); return; }
     const y = priceRef.current?.priceToCoordinate(price) ?? null;
     setTimerY(y);
-  }, [livePrice, candles]);
+  }, [livePrice]); // candles removed — read via candlesRef.current
 
   // Update on every live tick (livePrice changes)
   useEffect(() => { recomputeTimerY(); }, [recomputeTimerY]);
 
-  // Update on scroll/zoom — reuse the same logical-range-change subscription
+  // Stable wrapper for the timer-Y scroll/zoom subscription — never changes
+  // reference so the LWC listener doesn't unsubscribe/resubscribe on every tick.
+  const recomputeTimerYRef = useRef(recomputeTimerY);
+  useEffect(() => { recomputeTimerYRef.current = recomputeTimerY; }, [recomputeTimerY]);
+  const stableTimerY = useCallback(() => { recomputeTimerYRef.current(); }, []);
+
+  // Update on scroll/zoom — stable subscription, only re-registers on new bar
   useEffect(() => {
     const chart = priceRef.current?.getChart();
     if (!chart) return;
-    chart.timeScale().subscribeVisibleLogicalRangeChange(recomputeTimerY);
-    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(recomputeTimerY);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(stableTimerY);
+    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(stableTimerY);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.length, recomputeTimerY]);
+  }, [candles.length]);
 
   // ── Signal drop-lines ─────────────────────────────────────────────────────
   // For each live marker, compute its x pixel via timeToCoordinate so we can
@@ -650,15 +705,19 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // Recompute whenever strategies/trades change
   useEffect(() => { recomputeSignalLines(); }, [recomputeSignalLines]);
 
-  // Recompute on every chart scroll/zoom (the range-change event fires on pan/scale)
+  // Stable wrapper so the LWC subscription identity never changes between ticks
+  const recomputeSignalLinesRef = useRef(recomputeSignalLines);
+  useEffect(() => { recomputeSignalLinesRef.current = recomputeSignalLines; }, [recomputeSignalLines]);
+  const stableSignalLines = useCallback(() => { recomputeSignalLinesRef.current(); }, []);
+
+  // Recompute on every chart scroll/zoom — stable subscription, only re-registers on new bar
   useEffect(() => {
     const chart = priceRef.current?.getChart();
     if (!chart) return;
-    chart.timeScale().subscribeVisibleLogicalRangeChange(recomputeSignalLines);
-    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(recomputeSignalLines);
-  // Re-subscribe when candles load (timescale gets data) or strategies change
+    chart.timeScale().subscribeVisibleLogicalRangeChange(stableSignalLines);
+    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(stableSignalLines);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.length, recomputeSignalLines]);
+  }, [candles.length]);
 
   // ── Header price ──────────────────────────────────────────────────────────
   const lastCandle   = candles[candles.length - 1];
@@ -703,7 +762,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           {chartStrategies.length > 0 && (
             <button
               type="button"
-              onClick={() => setStripVisible((v) => !v)}
+              onClick={() => setStripVisible((v) => { setMarkerSettings({ stripVisible: !v }); return !v; })}
               className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
                           ${stripVisible
                             ? 'border-accent/40 text-accent bg-accent/5 hover:bg-accent/10'
@@ -741,7 +800,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                   {/* Label toggle — hides/shows strategy name text on arrows & circles */}
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); setShowMarkerLabels((v) => !v); }}
+                    onClick={(e) => { e.stopPropagation(); setShowMarkerLabels((v) => { setMarkerSettings({ showLabels: !v }); return !v; }); }}
                     title="Toggle marker labels"
                     className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono transition-colors
                                 ${showMarkerLabels
@@ -756,8 +815,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                       const allOn = Object.values(markerVisibility).every(Boolean);
                       const next = Object.fromEntries(
                         Object.keys(markerVisibility).map((k) => [k, !allOn])
-                      ) as typeof markerVisibility;
+                      ) as unknown as MarkerVisibility;
                       setMarkerVisibility(next);
+                      setMarkerSettings({ visibility: next });
                     }}
                     className="text-[10px] font-mono text-text-muted hover:text-text-primary transition-colors"
                   >
@@ -802,6 +862,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                   const toggleSection = () => {
                     const next = !sectionOn;
                     setMarkerVisibility((prev) => ({ ...prev, tradeEntries: next, tradeExits: next }));
+                    setMarkerSettings({ visibility: { tradeEntries: next, tradeExits: next } as Partial<MarkerVisibility> });
                   };
                   const subCats = MARKER_CATEGORIES.filter(
                     (c) => c.key === 'tradeEntries' || c.key === 'tradeExits',
@@ -1170,6 +1231,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               ...(markerVisibility.tradeExits   ? tradeExitMarkers   : []),
               ...(markerVisibility.patterns     ? patternMarkers     : []),
             ].sort((a, b) => (a.time as number) - (b.time as number))}
+            savedBarSpacing={savedBarSpacing}
+            onBarSpacingChange={setBarSpacing}
           />
 
           {/* Candle countdown — positioned on the price axis just below the live price label */}

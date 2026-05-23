@@ -817,24 +817,158 @@ const meanReversionS: Strategy = {
   risk:   { stopLossPct: 3, takeProfitPct: 8 },
 };
 
+// ─── L7: MACD Cross + Trend Filter — LONG ─────────────────────────────────────
+//
+// Standalone, minimal version of the classic MACD-with-trend-filter setup
+// (formerly baked into the MACD indicator as "Strategy Signal").
+//
+// Three conditions must align:
+//  • MACD Histogram crosses above 0 — MACD line crossed signal line from below.
+//  • MACD Line ≤ 0 at the cross    — the cross happened in bearish territory,
+//                                     so this is a reversal signal not a
+//                                     continuation pop.
+//  • EMA Dev(200) > 0              — close is above the 200-period EMA, i.e.
+//                                     structural uptrend bias is intact.
+
+const macdCrossTrendLong: Strategy = {
+  ...BASE,
+  id:          'starter_macd_cross_trend_long',
+  name:        'MACD Cross + Trend Filter',
+  longName:    '📈 LONG — MACD bullish cross below zero + price above 200 EMA',
+  description:
+    'Classic MACD reversal setup with a 200-EMA trend filter. Enters when MACD ' +
+    'momentum flips bullish from below zero while the larger trend still leans up.\n\n' +
+    '• MACD Histogram crosses above 0: MACD line crossed up through the signal line.\n' +
+    '• MACD Line ≤ 0: the cross happened below zero (reversal, not continuation).\n' +
+    '• EMA Dev(200) > 0: close is above the 200-period EMA — uptrend bias confirmed.\n\n' +
+    'Mirror of the SHORT "MACD Cross + Trend Filter" template. ' +
+    'Best used as a building block — pair with your own pattern or volume filter.',
+  symbol:    'BTCUSDT',
+  timeframe: '4h',
+  entryConditions: [
+    {
+      id:    'starter_mctl_group_1',
+      label: 'Bullish Cross + Uptrend',
+      conditions: [
+        {
+          id:           'starter_mctl_cond_hist',
+          indicatorId:  'macd',
+          params:       { fast: 12, slow: 26, signal: 9, trendEma: 200 },
+          seriesIndex:  2,  // Histogram — crosses above 0 = bullish MACD cross
+          operator:     'crosses_above',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mctl_cond_macd_below_zero',
+          indicatorId:  'macd',
+          params:       { fast: 12, slow: 26, signal: 9, trendEma: 200 },
+          seriesIndex:  0,  // MACD Line — must be ≤ 0 when the cross happens
+          operator:     'lte',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mctl_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 200 },
+          seriesIndex:  0,  // EMA Dev % — > 0 = close above 200 EMA
+          operator:     'gt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
+};
+
+// ─── S7: MACD Cross + Trend Filter — SHORT ────────────────────────────────────
+// Mirror of L7: bearish cross from above zero, with price below the 200 EMA.
+
+const macdCrossTrendShort: Strategy = {
+  ...BASE,
+  id:          'starter_macd_cross_trend_short',
+  name:        'MACD Cross + Trend Filter',
+  longName:    '📉 SHORT — MACD bearish cross above zero + price below 200 EMA',
+  description:
+    'Classic MACD reversal setup with a 200-EMA trend filter. Enters when MACD ' +
+    'momentum flips bearish from above zero while the larger trend still leans down.\n\n' +
+    '• MACD Histogram crosses below 0: MACD line crossed down through the signal line.\n' +
+    '• MACD Line ≥ 0: the cross happened above zero (reversal, not continuation).\n' +
+    '• EMA Dev(200) < 0: close is below the 200-period EMA — downtrend bias confirmed.\n\n' +
+    'Mirror of the LONG "MACD Cross + Trend Filter" template. ' +
+    'Best used as a building block — pair with your own pattern or volume filter.',
+  symbol:    'BTCUSDT',
+  timeframe: '4h',
+  entryConditions: [
+    {
+      id:    'starter_mcts_group_1',
+      label: 'Bearish Cross + Downtrend',
+      conditions: [
+        {
+          id:           'starter_mcts_cond_hist',
+          indicatorId:  'macd',
+          params:       { fast: 12, slow: 26, signal: 9, trendEma: 200 },
+          seriesIndex:  2,
+          operator:     'crosses_below',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mcts_cond_macd_above_zero',
+          indicatorId:  'macd',
+          params:       { fast: 12, slow: 26, signal: 9, trendEma: 200 },
+          seriesIndex:  0,
+          operator:     'gte',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mcts_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 200 },
+          seriesIndex:  0,
+          operator:     'lt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Exported list — LONG first, then SHORT ─────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const STARTER_TEMPLATES: Strategy[] = [
   // ── LONG ────────────────────────────────────────────────────────────────────
-  trendReversalLong,    // L1 — Three White Soldiers + RSI oversold + MACD bullish
+  trendReversalLong,    // L1 — Three White Soldiers + RSI oversold + MACD bullish cross + above 200 EMA
   goldenTrioLong,       // L2 — BB %B below lower band + MACD bullish + RSI oversold
   adxTrendLong,         // L3 — ADX strong trend + StochRSI oversold dip
   volatilitySqueezeL,   // L4 — BB squeeze + RSI crosses above 50 + volume spike
   trendSniperL,         // L5 — ADX + MACD hist bullish + Bullish Engulfing
   meanReversionL,       // L6 — Stochastic oversold + Hammer + EMA Dev < -5%
+  macdCrossTrendLong,   // L7 — MACD bullish cross below 0 + close above 200 EMA
 
   // ── SHORT ───────────────────────────────────────────────────────────────────
-  trendReversal,        // S1 — Three Crows + RSI overbought + MACD bearish
+  trendReversal,        // S1 — Three Crows + RSI overbought + MACD bearish cross + below 200 EMA
   goldenTrio,           // S2 — BB %B above upper band + MACD bearish + RSI overbought
   adxTrend,             // S3 — ADX strong trend + StochRSI overbought rip
   volatilitySqueezeS,   // S4 — BB squeeze + RSI crosses below 50 + volume spike
   trendSniperS,         // S5 — ADX + MACD hist bearish + Bearish Engulfing
   meanReversionS,       // S6 — Stochastic overbought + Shooting Star + EMA Dev > +5%
+  macdCrossTrendShort,  // S7 — MACD bearish cross above 0 + close below 200 EMA
 ];

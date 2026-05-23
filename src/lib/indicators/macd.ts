@@ -58,38 +58,38 @@ Note: Selecting MACD Line, Signal, or Histogram ignores the Trend EMA and functi
     const fastEma  = emaArray(closes, fast);
     const slowEma  = emaArray(closes, slow);
     const trendEmaArr = emaArray(closes, trendEma);
-    
+
     const macdLine = fastEma.map((f, i) => f - slowEma[i]!);
 
     const macdValid  = macdLine.slice(slow - 1);
     const signalArr  = emaArray(macdValid, signal);
-    
+
     // Create full-length arrays for easier indexing
     const fullMacd = [...Array(slow - 1).fill(NaN), ...macdValid];
     const fullSignal = [...Array(slow - 1).fill(NaN), ...signalArr];
     const fullHist = fullMacd.map((m, i) => m - fullSignal[i]!);
-    
+
     const strategySignals: number[] = new Array(candles.length).fill(0);
     const times = candles.map((c) => c.openTime);
-    
+
     for (let i = minRequired; i < candles.length; i++) {
         const prevMacd = fullMacd[i - 1]!;
         const currMacd = fullMacd[i]!;
         const prevSig = fullSignal[i - 1]!;
         const currSig = fullSignal[i]!;
-        
+
         const isBullishCross = prevMacd < prevSig && currMacd > currSig;
         const isBearishCross = prevMacd > prevSig && currMacd < currSig;
-        
+
         const close = closes[i]!;
         const emaVal = trendEmaArr[i]!;
-        
+
         let sig = 0;
-        // Phase 2 logic: 
+        // Phase 2 logic:
         // Long: Bullish cross AND MACD <= 0 AND Close > Trend EMA
         if (isBullishCross && currMacd <= 0 && close > emaVal) {
             sig = 1;
-        } 
+        }
         // Short: Bearish cross AND MACD >= 0 AND Close < Trend EMA
         else if (isBearishCross && currMacd >= 0 && close < emaVal) {
             sig = -1;

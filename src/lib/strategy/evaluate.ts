@@ -79,8 +79,20 @@ export function buildIndicatorCache(
     }
 
     const result = indicator.compute(candles, condition.params);
-    const series = result[condition.seriesIndex] ?? result[0];
-    if (!series) continue;
+    // Strict series lookup. We previously fell back to result[0] when the
+    // requested seriesIndex was out of range, but that silently re-routes
+    // stale conditions to a different series (e.g. an old macd seriesIndex:3
+    // would have evaluated against MACD Line). Skip instead, so the condition
+    // simply returns false rather than firing against unrelated data.
+    const series = result[condition.seriesIndex];
+    if (!series) {
+      if (result.length > 0) {
+        console.warn(
+          `[evaluate] Condition ${condition.id} requests seriesIndex=${condition.seriesIndex} on indicator '${condition.indicatorId}' which only has ${result.length} series — skipping (condition will never fire). Edit the condition to pick a valid series.`,
+        );
+      }
+      continue;
+    }
 
     const timeMap: TimeValueMap = new Map();
     for (const point of series.data) {

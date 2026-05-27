@@ -8,7 +8,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Strategy, BacktestResult } from '@/types/strategy';
+import type { Strategy, BacktestResult, ConditionGroup } from '@/types/strategy';
 import type { Timeframe } from '@/types/market';
 import { STARTER_TEMPLATES } from '@/lib/strategy/starterTemplates';
 
@@ -112,6 +112,22 @@ interface StrategyState {
    * Regular strategies and custom templates are unaffected.
    */
   loadStarterTemplates: () => void;
+  /**
+   * Merge one or more single-group source strategies into a destination strategy.
+   *
+   * For each sourceId:
+   *   - The source must have exactly 1 entryConditions group (enforced here too,
+   *     not just in the UI). Sources with more than one group are silently skipped.
+   *   - That group is deep-cloned, assigned a new id, and appended to the
+   *     destination's entryConditions with operator:'or'.
+   *   - The group label defaults to the source strategy's name when the group
+   *     has no label, so the origin is traceable in the builder.
+   *
+   * Source strategies are unchanged (non-destructive).
+   * Destination version is bumped and updatedAt is refreshed.
+   * The destination becomes the active strategy after the merge.
+   */
+  mergeStrategy: (sourceIds: string[], destId: string) => void;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -296,6 +312,49 @@ export const useStrategyStore = create<StrategyState>()(
           return {
             strategies:       [...s.strategies, clone],
             activeStrategyId: clone.id,
+          };
+        }),
+
+      mergeStrategy: (sourceIds, destId) =>
+        set((s) => {
+          const dest = s.strategies.find((x) => x.id === destId);
+          if (!dest) return {};
+
+          const newGroups: ConditionGroup[] = [];
+          for (const srcId of sourceIds) {
+            const src = s.strategies.find((x) => x.id === srcId);
+            // Only accept single-group sources (same guard as the UI picker)
+            if (!src || src.entryConditions.length !== 1) continue;
+            const original = src.entryConditions[0];
+            // TypeScript doesn't narrow array[0] via length check — guard explicitly
+            if (!original) continue;
+            newGroups.push({
+              ...original,
+              // Deep-clone conditions so edits in dest don't mutate the source
+              conditions: original.conditions.map((c) => ({ ...c })),
+              id:         `group_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              operator:   'or' as const,
+              // Always use the source strategy's name so the group is identifiable
+              label:      src.name,
+            });
+          }
+
+          if (newGroups.length === 0) return {};
+
+          const now = Date.now();
+          return {
+            strategies: s.strategies.map((x) =>
+              x.id === destId
+                ? {
+                    ...x,
+                    entryConditions: [...x.entryConditions, ...newGroups],
+                    version:         x.version + 1,
+                    updatedAt:       now,
+                  }
+                : x,
+            ),
+            // Jump to the destination so the user sees the result immediately
+            activeStrategyId: destId,
           };
         }),
     }),

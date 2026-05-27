@@ -95,7 +95,7 @@ export function StrategyBuilder() {
           {/* Centre: form editor */}
           <main className="flex-1 min-w-0 overflow-hidden border-r border-surface-border flex flex-col">
             {activeStrategy ? (
-              <StrategyForm key={activeStrategy.id} strategy={activeStrategy} />
+              <StrategyForm key={`${activeStrategy.id}-${activeStrategy.version}`} strategy={activeStrategy} />
             ) : (
               <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted">
                 <span className="text-4xl">📐</span>

@@ -181,21 +181,268 @@ function CloneGroupPopover({ fromSymbol, allSymbols, count, onClone, onClose }: 
   );
 }
 
+// ── Options popover (⋯ menu on each strategy row) ────────────────────────────
+
+type PopoverView = 'main' | 'clone' | 'merge';
+
+interface OptionsPopoverProps {
+  strategy:        Strategy;
+  /** Full strategy list — used to derive clone quick-picks and merge candidates. */
+  allStrategies:   Strategy[];
+  onDuplicate:     () => void;
+  onDelete:        () => void;
+  onCloneToSymbol: (target: string) => void;
+  onMerge:         (sourceIds: string[]) => void;
+  onClose:         () => void;
+}
+
+function OptionsPopover({
+  strategy, allStrategies, onDuplicate, onDelete, onCloneToSymbol, onMerge, onClose,
+}: OptionsPopoverProps) {
+  const [view,            setView]            = useState<PopoverView>('main');
+  const [cloneInput,      setCloneInput]      = useState('');
+  const [cloneToast,      setCloneToast]      = useState<string | null>(null);
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cloneInputRef = useRef<HTMLInputElement>(null);
+
+  // Click-outside to close
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [onClose]);
+
+  // Auto-focus the clone input when that view opens
+  useEffect(() => {
+    if (view === 'clone') setTimeout(() => cloneInputRef.current?.focus(), 0);
+  }, [view]);
+
+  // Merge candidates: same symbol, same direction, not self, not template, exactly 1 entry group
+  const mergeEligible = allStrategies.filter(
+    (s) =>
+      !s.isTemplate &&
+      s.id !== strategy.id &&
+      s.symbol === strategy.symbol &&
+      s.action.type === strategy.action.type &&
+      s.entryConditions.length === 1,
+  );
+
+  // Symbols that already have strategies (for clone quick-picks)
+  const otherSymbols = Array.from(
+    new Set(
+      allStrategies
+        .filter((s) => !s.isTemplate && s.symbol !== strategy.symbol)
+        .map((s) => s.symbol),
+    ),
+  ).sort();
+
+  function commitClone(sym: string) {
+    const target = sym.trim().toUpperCase();
+    if (!target || target === strategy.symbol) return;
+    onCloneToSymbol(target);
+    setCloneToast(`Cloned to ${target}`);
+    setTimeout(onClose, 1000);
+  }
+
+  function toggleSource(id: string) {
+    setSelectedSources((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function commitMerge() {
+    if (selectedSources.size === 0) return;
+    onMerge(Array.from(selectedSources));
+    onClose();
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute right-0 top-full mt-0.5 z-[200] w-52
+                 bg-[#0a0e1a] border border-surface-border rounded-md
+                 shadow-[0_4px_24px_rgba(0,0,0,0.8)] p-1.5 flex flex-col gap-0.5"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* ── Main view ── */}
+      {view === 'main' && (
+        <>
+          <button type="button" onClick={() => setView('clone')}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
+                       text-text-secondary hover:bg-surface-2 hover:text-accent
+                       transition-colors text-left">
+            <span className="text-[12px] w-3 text-center">→</span>
+            <span className="text-[12px] font-mono">Clone to symbol</span>
+          </button>
+
+          <button type="button" onClick={() => { onDuplicate(); onClose(); }}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
+                       text-text-secondary hover:bg-surface-2 hover:text-accent
+                       transition-colors text-left">
+            <span className="text-[12px] w-3 text-center">⧉</span>
+            <span className="text-[12px] font-mono">Duplicate</span>
+          </button>
+
+          <button type="button" onClick={() => setView('merge')}
+            disabled={mergeEligible.length === 0}
+            title={mergeEligible.length === 0
+              ? 'No eligible strategies (need same symbol, 1 group)'
+              : `${mergeEligible.length} eligible ${mergeEligible.length === 1 ? 'strategy' : 'strategies'}`}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
+                       text-text-secondary hover:bg-surface-2 hover:text-blue-400
+                       transition-colors text-left
+                       disabled:opacity-30 disabled:cursor-not-allowed">
+            <span className="text-[12px] w-3 text-center">⊕</span>
+            <span className="text-[12px] font-mono">Merge into this…</span>
+            {mergeEligible.length > 0 && (
+              <span className="ml-auto text-[10px] font-mono text-text-muted">
+                {mergeEligible.length}
+              </span>
+            )}
+          </button>
+
+          <div className="h-px bg-surface-border my-0.5" />
+
+          <button type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm(`Delete "${strategy.name}"?`)) { onDelete(); onClose(); }
+            }}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
+                       text-text-secondary hover:bg-red-500/10 hover:text-red-400
+                       transition-colors text-left">
+            <span className="text-[12px] w-3 text-center">🗑</span>
+            <span className="text-[12px] font-mono">Delete</span>
+          </button>
+        </>
+      )}
+
+      {/* ── Clone sub-view ── */}
+      {view === 'clone' && (
+        cloneToast ? (
+          <p className="text-[11px] font-mono text-up text-center py-2">{cloneToast}</p>
+        ) : (
+          <>
+            <button type="button" onClick={() => setView('main')}
+              className="flex items-center gap-1 text-[10px] font-mono text-text-muted
+                         hover:text-text-primary mb-1 transition-colors">
+              ‹ back
+            </button>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted px-1 mb-1">
+              Clone to…
+            </p>
+            {otherSymbols.length > 0 && (
+              <div className="flex flex-wrap gap-1 px-1 mb-1">
+                {otherSymbols.map((sym) => (
+                  <button key={sym} type="button" onClick={() => commitClone(sym)}
+                    className="px-1.5 py-0.5 rounded border border-surface-border bg-surface-2
+                               text-[11px] font-mono text-text-secondary
+                               hover:border-accent/50 hover:text-accent hover:bg-accent/5
+                               transition-colors">
+                    {sym}
+                  </button>
+                ))}
+              </div>
+            )}
+            {otherSymbols.length > 0 && <div className="h-px bg-surface-border my-1" />}
+            <div className="flex gap-1 px-1">
+              <input ref={cloneInputRef} type="text" value={cloneInput}
+                onChange={(e) => setCloneInput(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter')  commitClone(cloneInput);
+                  if (e.key === 'Escape') setView('main');
+                }}
+                placeholder="SOLUSDT…"
+                className="flex-1 bg-surface-2 border border-surface-border rounded px-2 py-1
+                           text-xs font-mono text-text-primary placeholder:text-text-muted
+                           focus:outline-none focus:border-accent/60" />
+              <button type="button" onClick={() => commitClone(cloneInput)}
+                disabled={!cloneInput.trim()}
+                className="px-2 py-1 rounded border border-accent/40 bg-accent/10
+                           text-accent text-xs font-mono font-semibold
+                           hover:bg-accent/20 disabled:opacity-30 disabled:cursor-not-allowed
+                           transition-colors">
+                →
+              </button>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ── Merge sub-view ── */}
+      {view === 'merge' && (
+        <>
+          <button type="button"
+            onClick={() => { setView('main'); setSelectedSources(new Set()); }}
+            className="flex items-center gap-1 text-[10px] font-mono text-text-muted
+                       hover:text-text-primary mb-1 transition-colors">
+            ‹ back
+          </button>
+          <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted px-1 mb-1">
+            Merge into &ldquo;{strategy.name}&rdquo;
+          </p>
+          <p className="text-[10px] text-text-muted px-1 mb-1.5 leading-tight">
+            Each selected strategy&apos;s group is added as an OR group.
+          </p>
+          <div className="max-h-48 overflow-y-auto flex flex-col gap-0.5">
+            {mergeEligible.map((src) => (
+              <label key={src.id}
+                className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer
+                           hover:bg-surface-2 transition-colors select-none">
+                <input type="checkbox"
+                  checked={selectedSources.has(src.id)}
+                  onChange={() => toggleSource(src.id)}
+                  className="accent-accent flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-mono text-text-primary truncate">{src.name}</div>
+                  <div className="text-[10px] text-text-muted truncate">
+                    {src.entryConditions[0]?.label
+                      ? `"${src.entryConditions[0].label}"`
+                      : `${src.entryConditions[0]?.conditions.length ?? 0} conditions`}
+                    {' · '}{src.timeframe}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+          <div className="h-px bg-surface-border my-1" />
+          <button type="button" onClick={commitMerge}
+            disabled={selectedSources.size === 0}
+            className="w-full py-1.5 rounded bg-blue-500/15 text-blue-400 text-[11px] font-mono
+                       hover:bg-blue-500/25 disabled:opacity-30 disabled:cursor-not-allowed
+                       transition-colors">
+            Merge {selectedSources.size > 0 ? `${selectedSources.size} selected` : ''}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Strategy row ──────────────────────────────────────────────────────────────
 
 interface RowProps {
-  s:              Strategy;
-  active:         boolean;
-  allSymbols:     string[];
-  onSelect:       () => void;
-  onToggle:       () => void;
-  onDuplicate:    () => void;
-  onDelete:       () => void;
-  onCloneToSymbol:(targetSymbol: string) => void;
+  s:               Strategy;
+  active:          boolean;
+  /** Full strategy list passed through for the OptionsPopover. */
+  allStrategies:   Strategy[];
+  onSelect:        () => void;
+  onToggle:        () => void;
+  onDuplicate:     () => void;
+  onDelete:        () => void;
+  onCloneToSymbol: (targetSymbol: string) => void;
+  onMerge:         (sourceIds: string[]) => void;
 }
 
-function StrategyRow({ s, active, allSymbols, onSelect, onToggle, onDuplicate, onDelete, onCloneToSymbol }: RowProps) {
-  const [cloneOpen, setCloneOpen] = useState(false);
+function StrategyRow({
+  s, active, allStrategies, onSelect, onToggle, onDuplicate, onDelete, onCloneToSymbol, onMerge,
+}: RowProps) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   return (
     <div className="relative">
@@ -219,7 +466,7 @@ function StrategyRow({ s, active, allSymbols, onSelect, onToggle, onDuplicate, o
         </div>
 
         <div className="flex items-center gap-0.5 ml-1">
-          {/* Live monitor toggle */}
+          {/* Live monitor toggle — kept outside ⋯ for instant access */}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onToggle(); }}
@@ -233,53 +480,31 @@ function StrategyRow({ s, active, allSymbols, onSelect, onToggle, onDuplicate, o
             ⏻
           </button>
 
-          {/* Clone to another symbol */}
+          {/* ⋯ options menu */}
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); setCloneOpen((v) => !v); }}
-            className={`btn-icon-xs transition-colors ${
-              cloneOpen
+            onClick={(e) => { e.stopPropagation(); setOptionsOpen((v) => !v); }}
+            className={`btn-icon-xs transition-colors text-[16px] leading-none tracking-tighter ${
+              optionsOpen
                 ? 'text-accent opacity-100'
                 : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent'
             }`}
-            title="Clone to another symbol"
+            title="Options"
           >
-            →
-          </button>
-
-          {/* Duplicate (same symbol) */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-            className="btn-icon-xs text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary transition-opacity"
-            title="Duplicate (same symbol)"
-          >
-            ⧉
-          </button>
-
-          {/* Delete */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (confirm(`Delete "${s.name}"?`)) onDelete();
-            }}
-            className="btn-icon-xs text-text-muted opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
-            title="Delete"
-          >
-            🗑
+            ···
           </button>
         </div>
       </div>
 
-      {/* Clone-to-symbol popover */}
-      {cloneOpen && (
-        <CloneGroupPopover
-          fromSymbol={s.symbol}
-          allSymbols={allSymbols}
-          count={1}
-          onClone={(target) => { onCloneToSymbol(target); }}
-          onClose={() => setCloneOpen(false)}
+      {optionsOpen && (
+        <OptionsPopover
+          strategy={s}
+          allStrategies={allStrategies}
+          onDuplicate={onDuplicate}
+          onDelete={onDelete}
+          onCloneToSymbol={onCloneToSymbol}
+          onMerge={onMerge}
+          onClose={() => setOptionsOpen(false)}
         />
       )}
     </div>
@@ -331,18 +556,19 @@ function SectionHeader({ label, isCollapsed, onToggle, onAdd, addTitle, count, a
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function StrategyList() {
-  const strategies           = useStrategyStore((s) => s.strategies);
-  const activeId             = useStrategyStore((s) => s.activeStrategyId);
-  const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
-  const deleteStrategy       = useStrategyStore((s) => s.deleteStrategy);
-  const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
-  const toggleStrategyActive = useStrategyStore((s) => s.toggleStrategyActive);
-  const duplicateStrategy    = useStrategyStore((s) => s.duplicateStrategy);
-  const copyGroupToSymbol     = useStrategyStore((s) => s.copyGroupToSymbol);
-  const cloneStrategyToSymbol = useStrategyStore((s) => s.cloneStrategyToSymbol);
-  const setGroupActive        = useStrategyStore((s) => s.setGroupActive);
-  const cloneFromTemplate    = useStrategyStore((s) => s.cloneFromTemplate);
-  const loadStarterTemplates = useStrategyStore((s) => s.loadStarterTemplates);
+  const strategies            = useStrategyStore((s) => s.strategies);
+  const activeId              = useStrategyStore((s) => s.activeStrategyId);
+  const setActiveStrategy     = useStrategyStore((s) => s.setActiveStrategy);
+  const deleteStrategy        = useStrategyStore((s) => s.deleteStrategy);
+  const upsertStrategy        = useStrategyStore((s) => s.upsertStrategy);
+  const toggleStrategyActive  = useStrategyStore((s) => s.toggleStrategyActive);
+  const duplicateStrategy     = useStrategyStore((s) => s.duplicateStrategy);
+  const copyGroupToSymbol      = useStrategyStore((s) => s.copyGroupToSymbol);
+  const cloneStrategyToSymbol  = useStrategyStore((s) => s.cloneStrategyToSymbol);
+  const setGroupActive         = useStrategyStore((s) => s.setGroupActive);
+  const cloneFromTemplate     = useStrategyStore((s) => s.cloneFromTemplate);
+  const loadStarterTemplates  = useStrategyStore((s) => s.loadStarterTemplates);
+  const mergeStrategy         = useStrategyStore((s) => s.mergeStrategy);
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
   const [strategiesCollapsed,      setStrategiesCollapsed]      = useState(false);
@@ -375,7 +601,7 @@ export function StrategyList() {
     return map;
   }, [regularStrategies]);
 
-  // All unique symbols — quick-picks for the clone popover
+  // All unique symbols — quick-picks for the group-level clone-all popover
   const allSymbols = useMemo(
     () => Array.from(new Set(regularStrategies.map((s) => s.symbol))).sort(),
     [regularStrategies],
@@ -665,12 +891,13 @@ export function StrategyList() {
                     key={s.id}
                     s={s}
                     active={activeId === s.id}
-                    allSymbols={allSymbols}
+                    allStrategies={strategies}
                     onSelect={() => setActiveStrategy(s.id)}
                     onToggle={() => handleToggle(s)}
                     onDuplicate={() => duplicateStrategy(s.id)}
                     onDelete={() => handleDelete(s)}
                     onCloneToSymbol={(target) => cloneStrategyToSymbol(s.id, target)}
+                    onMerge={(sourceIds) => mergeStrategy(sourceIds, s.id)}
                   />
                 ))}
               </div>

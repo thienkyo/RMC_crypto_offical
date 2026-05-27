@@ -8,8 +8,8 @@
  * wrapper caps width so nothing stretches on wide monitors.
  */
 
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState, useCallback, Fragment } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AreaChart,
   Area,
@@ -163,17 +163,219 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+// ─── Trade recording helpers ──────────────────────────────────────────────────
+
+/** Strip leading $ and commas, return positive number or null. */
+function parsePrice(raw: string): number | null {
+  const v = parseFloat(raw.trim().replace(/^\$/, '').replace(/,/g, ''));
+  return isNaN(v) || v <= 0 ? null : v;
+}
+
+function calcPnl(entry: number, exit: number, direction: 'long' | 'short'): number {
+  return direction === 'long'
+    ? (exit - entry) / entry * 100
+    : (entry - exit) / entry * 100;
+}
+
+function fmtPx(n: number): string {
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (n >= 1)    return '$' + n.toFixed(2);
+  return '$' + n.toFixed(6);
+}
+
+// ─── Inline trade-record editor embedded in a table row ──────────────────────
+
+interface TradeEditorRowProps {
+  signal:    StrategySignalRow;
+  colSpan:   number;
+  onSave:    (id: number, entry: number | null, exit: number | null, direction: 'long' | 'short') => Promise<void>;
+  onCancel:  () => void;
+}
+
+function TradeEditorRow({ signal, colSpan, onSave, onCancel }: TradeEditorRowProps) {
+  const [entryInput, setEntryInput] = useState(
+    signal.actual_entry_price != null ? String(signal.actual_entry_price) : '',
+  );
+  const [exitInput, setExitInput] = useState(
+    signal.actual_exit_price != null ? String(signal.actual_exit_price) : '',
+  );
+  const [saving, setSaving] = useState(false);
+  const [err,    setErr]    = useState('');
+
+  const previewEntry = parsePrice(entryInput);
+  const previewExit  = parsePrice(exitInput);
+  const previewPnl   = previewEntry && previewExit
+    ? calcPnl(previewEntry, previewExit, signal.direction)
+    : null;
+
+  async function handleSave() {
+    const entry = parsePrice(entryInput);
+    if (!entry) { setErr('Enter a valid buy price'); return; }
+    setSaving(true);
+    setErr('');
+    try {
+      await onSave(signal.id, entry, parsePrice(exitInput), signal.direction);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <tr className="bg-surface-2 border-b border-surface-border">
+      <td colSpan={colSpan} className="px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+          {/* Buy price */}
+          <label className="flex items-center gap-1 text-text-muted">
+            Buy
+            <input
+              type="text"
+              placeholder="entry price"
+              value={entryInput}
+              onChange={(e) => setEntryInput(e.target.value)}
+              className="w-24 rounded border border-surface-border bg-surface px-1.5 py-0.5
+                         text-text-primary placeholder:text-text-muted/40 outline-none
+                         focus:border-blue-500/60 tabular-nums"
+            />
+          </label>
+
+          {/* Exit price */}
+          <label className="flex items-center gap-1 text-text-muted">
+            Exit
+            <input
+              type="text"
+              placeholder="optional"
+              value={exitInput}
+              onChange={(e) => setExitInput(e.target.value)}
+              className="w-24 rounded border border-surface-border bg-surface px-1.5 py-0.5
+                         text-text-primary placeholder:text-text-muted/40 outline-none
+                         focus:border-blue-500/60 tabular-nums"
+            />
+          </label>
+
+          {/* Live P&L preview */}
+          {previewPnl !== null && (
+            <span className={`font-semibold ${previewPnl >= 0 ? 'text-up' : 'text-down'}`}>
+              {previewPnl >= 0 ? '+' : ''}{previewPnl.toFixed(2)}%
+            </span>
+          )}
+          {previewEntry && !previewExit && (
+            <span className="text-blue-400 italic text-[10px]">in trade</span>
+          )}
+
+          {/* Actions */}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="rounded px-2 py-0.5 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30
+                       disabled:opacity-40 transition-colors text-[10px]"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded px-2 py-0.5 text-text-muted hover:text-text-secondary
+                       transition-colors text-[10px]"
+          >
+            Cancel
+          </button>
+
+          {/* Error */}
+          {err && <span className="text-down text-[10px]">{err}</span>}
+        </div>
+
+        {/* Show existing recorded prices if any */}
+        {signal.actual_entry_price != null && (
+          <div className="mt-1 text-[10px] text-text-muted font-mono">
+            Currently recorded: buy {fmtPx(signal.actual_entry_price)}
+            {signal.actual_exit_price != null && (
+              <> → exit {fmtPx(signal.actual_exit_price)}
+                <span className={`ml-1 font-semibold ${(signal.pnl_pct ?? 0) >= 0 ? 'text-up' : 'text-down'}`}>
+                  {signal.pnl_pct != null
+                    ? ((signal.pnl_pct >= 0 ? '+' : '') + signal.pnl_pct.toFixed(2) + '%')
+                    : ''}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export function PortfolioOverview() {
+  const queryClient = useQueryClient();
   const { data: signals = [], isLoading, error } = useAllSignals();
+
+  // ── Filter state ────────────────────────────────────────────────────────────
+  const [filterStrategy, setFilterStrategy] = useState('');
+  const [filterSymbol,   setFilterSymbol]   = useState('');
+  const [filterDir,      setFilterDir]      = useState<'all' | 'long' | 'short'>('all');
+  const [filterOutcome,  setFilterOutcome]  = useState<'all' | 'open' | 'win' | 'loss'>('all');
+
+  // Row currently open for trade recording (signal id or null)
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const metrics   = useMemo(() => computeSignalMetrics(signals), [signals]);
   const taken     = useMemo(() => signals.filter((s) => s.actual_entry_price !== null).length, [signals]);
   const curve     = useMemo(() => buildEquityPoints(signals), [signals]);
   const histogram = useMemo(() => buildPnlBuckets(signals),   [signals]);
   const breakdown = useMemo(() => buildBreakdown(signals),     [signals]);
-  const recent50  = useMemo(() => [...signals].slice(0, 50),   [signals]);
+
+  // Unfiltered top-50, then apply filters
+  const base50 = useMemo(() => [...signals].slice(0, 50), [signals]);
+
+  const filteredSignals = useMemo(() => {
+    const stratLower = filterStrategy.trim().toLowerCase();
+    const symLower   = filterSymbol.trim().toLowerCase();
+    return base50.filter((s) => {
+      if (stratLower && !s.strategy_name.toLowerCase().includes(stratLower)) return false;
+      if (symLower   && !s.symbol.toLowerCase().includes(symLower))          return false;
+      if (filterDir !== 'all' && s.direction !== filterDir)                  return false;
+      if (filterOutcome === 'open' && s.pnl_pct !== null)                    return false;
+      if (filterOutcome === 'win'  && (s.pnl_pct === null || s.pnl_pct <= 0)) return false;
+      if (filterOutcome === 'loss' && (s.pnl_pct === null || s.pnl_pct >= 0)) return false;
+      return true;
+    });
+  }, [base50, filterStrategy, filterSymbol, filterDir, filterOutcome]);
+
+  const hasFilters = filterStrategy !== '' || filterSymbol !== ''
+    || filterDir !== 'all' || filterOutcome !== 'all';
+
+  // ── Trade recording ─────────────────────────────────────────────────────────
+  const handleSaveTrade = useCallback(async (
+    id:         number,
+    entryPrice: number | null,
+    exitPrice:  number | null,
+    direction:  'long' | 'short',
+  ) => {
+    const res = await fetch('/api/strategy-signals', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id, direction, actualEntryPrice: entryPrice, actualExitPrice: exitPrice }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+      throw new Error((body['error'] as string | undefined) ?? 'Save failed');
+    }
+    setEditingId(null);
+    await queryClient.invalidateQueries({ queryKey: ['strategy-signals', 'portfolio'] });
+  }, [queryClient]);
+
+  const now = Date.now();
+  const signalsThisWeek  = useMemo(
+    () => signals.filter((s) => now - s.fired_at <= 7  * 24 * 60 * 60 * 1000).length,
+    [signals],
+  );
+  const signalsThisMonth = useMemo(
+    () => signals.filter((s) => now - s.fired_at <= 30 * 24 * 60 * 60 * 1000).length,
+    [signals],
+  );
 
   const lastVal    = curve[curve.length - 1]?.value ?? 0;
   const curveColor = lastVal >= 0 ? '#10b981' : '#ef4444';
@@ -236,6 +438,16 @@ export function PortfolioOverview() {
             label="Avg Loss"
             value={metrics.avgLoss < 0 ? `${metrics.avgLoss.toFixed(2)}%` : '—'}
             color="text-down"
+          />
+          <KpiCard
+            label="This Week"
+            value={signalsThisWeek.toString()}
+            sub="signals (7d)"
+          />
+          <KpiCard
+            label="This Month"
+            value={signalsThisMonth.toString()}
+            sub="signals (30d)"
           />
         </div>
 
@@ -359,49 +571,163 @@ export function PortfolioOverview() {
         {/* ── Recent signal feed ───────────────────────────────────────── */}
         <div>
           <SectionLabel>Recent Signals (last 50)</SectionLabel>
+
+          {/* ── Filter bar ─────────────────────────────────────────────── */}
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            {/* Strategy name filter */}
+            <input
+              type="text"
+              placeholder="Strategy…"
+              value={filterStrategy}
+              onChange={(e) => setFilterStrategy(e.target.value)}
+              className="h-6 rounded border border-surface-border bg-surface px-2 text-[10px]
+                         font-mono text-text-primary placeholder:text-text-muted/50 outline-none
+                         focus:border-blue-500/60 w-32"
+            />
+            {/* Symbol filter */}
+            <input
+              type="text"
+              placeholder="Symbol…"
+              value={filterSymbol}
+              onChange={(e) => setFilterSymbol(e.target.value)}
+              className="h-6 rounded border border-surface-border bg-surface px-2 text-[10px]
+                         font-mono text-text-primary placeholder:text-text-muted/50 outline-none
+                         focus:border-blue-500/60 w-24"
+            />
+            {/* Direction dropdown */}
+            <select
+              value={filterDir}
+              onChange={(e) => setFilterDir(e.target.value as 'all' | 'long' | 'short')}
+              className="h-6 rounded border border-surface-border bg-surface px-1.5 text-[10px]
+                         font-mono text-text-primary outline-none focus:border-blue-500/60 cursor-pointer"
+            >
+              <option value="all">All dirs</option>
+              <option value="long">Long</option>
+              <option value="short">Short</option>
+            </select>
+            {/* Outcome dropdown */}
+            <select
+              value={filterOutcome}
+              onChange={(e) => setFilterOutcome(e.target.value as 'all' | 'open' | 'win' | 'loss')}
+              className="h-6 rounded border border-surface-border bg-surface px-1.5 text-[10px]
+                         font-mono text-text-primary outline-none focus:border-blue-500/60 cursor-pointer"
+            >
+              <option value="all">All outcomes</option>
+              <option value="open">Open</option>
+              <option value="win">Win</option>
+              <option value="loss">Loss</option>
+            </select>
+            {/* Clear filters */}
+            {hasFilters && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterStrategy('');
+                  setFilterSymbol('');
+                  setFilterDir('all');
+                  setFilterOutcome('all');
+                }}
+                className="h-6 rounded px-2 text-[10px] font-mono text-text-muted
+                           hover:text-text-secondary transition-colors"
+              >
+                ✕ clear
+              </button>
+            )}
+            {/* Result count */}
+            <span className="text-[10px] text-text-muted font-mono ml-auto">
+              {filteredSignals.length} / {base50.length}
+            </span>
+          </div>
+
+          {/* ── Table ──────────────────────────────────────────────────── */}
           <table className="w-full text-[11px] font-mono border-collapse">
             <thead>
               <tr className="text-[9px] text-text-muted uppercase tracking-wider border-b border-surface-border">
                 <th className="text-left pb-1 pr-3 font-normal">Strategy</th>
                 <th className="text-left pb-1 pr-3 font-normal w-24">Symbol</th>
                 <th className="text-left pb-1 pr-3 font-normal w-12">Dir</th>
-                <th className="text-right pb-1 pr-3 font-normal w-28">Entry</th>
-                <th className="text-right pb-1 pr-3 font-normal w-16">P&amp;L</th>
-                <th className="text-right pb-1 font-normal w-28">Fired</th>
+                <th className="text-right pb-1 pr-3 font-normal w-28">Sig Price</th>
+                <th className="text-right pb-1 pr-3 font-normal w-20">P&amp;L</th>
+                <th className="text-right pb-1 pr-3 font-normal w-28">Fired</th>
+                <th className="text-right pb-1 font-normal w-24"></th>
               </tr>
             </thead>
             <tbody>
-              {recent50.map((s) => {
+              {filteredSignals.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-6 text-center text-[11px] text-text-muted">
+                    No signals match the current filters.
+                  </td>
+                </tr>
+              )}
+              {filteredSignals.map((s) => {
                 const pnlCls =
                   s.pnl_pct === null ? 'text-text-muted' :
                   s.pnl_pct > 0      ? 'text-up'         : 'text-down';
                 const pnlLabel =
-                  s.pnl_pct === null
+                  s.pnl_pct === null && s.actual_entry_price !== null
+                    ? 'in trade'
+                    : s.pnl_pct === null
                     ? 'open'
                     : `${s.pnl_pct >= 0 ? '+' : ''}${s.pnl_pct.toFixed(2)}%`;
+
+                const hasRecord = s.actual_entry_price !== null;
+                const isEditing = editingId === s.id;
+
                 return (
-                  <tr key={s.id} className="border-b border-surface-border/40 hover:bg-surface-2">
-                    <td className="py-1.5 pr-3 text-text-secondary truncate max-w-[160px]">
-                      {s.strategy_name}
-                    </td>
-                    <td className="py-1.5 pr-3 text-text-primary">{s.symbol}</td>
-                    <td className={`py-1.5 pr-3 uppercase font-bold text-[10px]
-                      ${s.direction === 'long' ? 'text-up' : 'text-down'}`}>
-                      {s.direction}
-                    </td>
-                    <td className="py-1.5 pr-3 text-right text-text-price tabular-nums">
-                      {s.entry_price.toLocaleString('en-US', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </td>
-                    <td className={`py-1.5 pr-3 text-right tabular-nums ${pnlCls}`}>
-                      {pnlLabel}
-                    </td>
-                    <td className="py-1.5 text-right text-text-muted tabular-nums">
-                      {format(new Date(s.fired_at), 'MM/dd HH:mm')}
-                    </td>
-                  </tr>
+                  <Fragment key={s.id}>
+                    <tr
+                      className={`border-b border-surface-border/40 hover:bg-surface-2
+                        ${isEditing ? 'bg-surface-2' : ''}`}
+                    >
+                      <td className="py-1.5 pr-3 text-text-secondary truncate max-w-[160px]">
+                        {s.strategy_name}
+                      </td>
+                      <td className="py-1.5 pr-3 text-text-primary">{s.symbol}</td>
+                      <td className={`py-1.5 pr-3 uppercase font-bold text-[10px]
+                        ${s.direction === 'long' ? 'text-up' : 'text-down'}`}>
+                        {s.direction}
+                      </td>
+                      <td className="py-1.5 pr-3 text-right text-text-price tabular-nums">
+                        {s.entry_price.toLocaleString('en-US', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className={`py-1.5 pr-3 text-right tabular-nums ${pnlCls}`}>
+                        {pnlLabel}
+                      </td>
+                      <td className="py-1.5 pr-3 text-right text-text-muted tabular-nums">
+                        {format(new Date(s.fired_at), 'MM/dd HH:mm')}
+                      </td>
+                      {/* Record / Edit trade button */}
+                      <td className="py-1.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(isEditing ? null : s.id)}
+                          className={`text-[10px] rounded px-1.5 py-0.5 transition-colors
+                            ${isEditing
+                              ? 'text-text-muted hover:text-text-secondary'
+                              : hasRecord
+                              ? 'text-blue-400/70 hover:text-blue-400'
+                              : 'text-text-muted hover:text-text-secondary'
+                            }`}
+                        >
+                          {isEditing ? 'cancel' : hasRecord ? 'edit trade' : '+ record'}
+                        </button>
+                      </td>
+                    </tr>
+
+                    {/* Inline editor row */}
+                    {isEditing && (
+                      <TradeEditorRow
+                        signal={s}
+                        colSpan={7}
+                        onSave={handleSaveTrade}
+                        onCancel={() => setEditingId(null)}
+                      />
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

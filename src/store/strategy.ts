@@ -128,6 +128,16 @@ interface StrategyState {
    * The destination becomes the active strategy after the merge.
    */
   mergeStrategy: (sourceIds: string[], destId: string) => void;
+  /**
+   * Import an array of strategies.
+   *
+   * 'merge'   (default) — upsert by id: incoming strategies overwrite any
+   *           existing entry with the same id; everything else is kept.
+   * 'replace' — wipe the current library and replace it with `incoming`.
+   *
+   * Returns the number of strategies actually written.
+   */
+  importStrategies: (incoming: Strategy[], mode?: 'merge' | 'replace') => number;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -357,6 +367,32 @@ export const useStrategyStore = create<StrategyState>()(
             activeStrategyId: destId,
           };
         }),
+
+      importStrategies: (incoming, mode = 'merge') => {
+        let written = 0;
+        set((s) => {
+          written = incoming.length;
+          if (mode === 'replace') {
+            // Also wipe backtestHistory so no orphaned entries eat localStorage.
+            // On same-machine restores the history is already gone (we just cleared
+            // strategies); on cross-machine it never existed.
+            return {
+              strategies:       incoming,
+              activeStrategyId: null,
+              backtestHistory:  {},
+            };
+          }
+          // merge: upsert by id — incoming overwrites existing entries with same id
+          const incomingIds = new Set(incoming.map((x) => x.id));
+          return {
+            strategies: [
+              ...s.strategies.filter((x) => !incomingIds.has(x.id)),
+              ...incoming,
+            ],
+          };
+        });
+        return written;
+      },
     }),
     {
       name: 'rmc-strategies',

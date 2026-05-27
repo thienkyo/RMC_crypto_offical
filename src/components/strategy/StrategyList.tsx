@@ -9,13 +9,14 @@
  * in that symbol to a different symbol in one action.
  */
 
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   useStrategyStore,
   createDefaultStrategy,
   createDefaultTemplate,
 } from '@/store/strategy';
 import type { Strategy } from '@/types/strategy';
+import { exportToFile, parseImportFile } from '@/lib/strategy/io';
 
 // ── Template row ──────────────────────────────────────────────────────────────
 
@@ -569,6 +570,7 @@ export function StrategyList() {
   const cloneFromTemplate     = useStrategyStore((s) => s.cloneFromTemplate);
   const loadStarterTemplates  = useStrategyStore((s) => s.loadStarterTemplates);
   const mergeStrategy         = useStrategyStore((s) => s.mergeStrategy);
+  const importStrategies      = useStrategyStore((s) => s.importStrategies);
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
   const [strategiesCollapsed,      setStrategiesCollapsed]      = useState(false);
@@ -578,6 +580,58 @@ export function StrategyList() {
   const [collapsedTplDir, setCollapsedTplDir] = useState<Set<'long' | 'short'>>(new Set(['long', 'short']));
   // Which symbol group's clone popover is open (null = none)
   const [clonePopoverSymbol, setClonePopoverSymbol]   = useState<string | null>(null);
+  // Import feedback banner — null = hidden (auto-clears after 3 s)
+  const [importFeedback, setImportFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  // Pending import: file parsed OK, waiting for user to choose merge vs replace
+  const [pendingImport, setPendingImport]   = useState<{ strategies: Strategy[]; count: number } | null>(null);
+  // Hidden file input for import
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  /** Show a transient feedback banner for 3 s then auto-dismiss. */
+  const showFeedback = useCallback((ok: boolean, msg: string) => {
+    setImportFeedback({ ok, msg });
+    setTimeout(() => setImportFeedback(null), 3000);
+  }, []);
+
+  /** Export all strategies (templates + regulars) to a dated JSON file. */
+  function handleExport() {
+    if (strategies.length === 0) {
+      showFeedback(false, 'Nothing to export — library is empty.');
+      return;
+    }
+    exportToFile(strategies);
+    showFeedback(true, `Exported ${strategies.length} ${strategies.length === 1 ? 'strategy' : 'strategies'}.`);
+  }
+
+  /** Read the selected .json file; on success, show the merge/replace choice panel. */
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input so the same file can be re-picked if needed
+    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = evt.target?.result;
+      if (typeof text !== 'string') return;
+      const result = parseImportFile(text);
+      if (!result.ok) {
+        showFeedback(false, result.error);
+        return;
+      }
+      // Don't import immediately — show the merge/replace choice first
+      setPendingImport({ strategies: result.strategies, count: result.count });
+    };
+    reader.readAsText(file);
+  }
+
+  /** Commit the pending import with the chosen mode. */
+  function commitImport(mode: 'merge' | 'replace') {
+    if (!pendingImport) return;
+    const written = importStrategies(pendingImport.strategies, mode);
+    setPendingImport(null);
+    const label = mode === 'replace' ? 'Replaced library with' : 'Merged';
+    showFeedback(true, `${label} ${written} ${written === 1 ? 'strategy' : 'strategies'}.`);
+  }
 
   function toggleGroup(symbol: string) {
     setExpandedGroups((prev) => {
@@ -638,6 +692,102 @@ export function StrategyList() {
 
   return (
     <aside className="w-52 flex-shrink-0 border-r border-surface-border flex flex-col bg-surface">
+
+      {/* ── Library toolbar: Export / Import ────────────────────────────────── */}
+      <div className="flex items-center justify-between px-3 py-1 border-b border-surface-border bg-surface-2/50">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted select-none">
+          Library
+        </span>
+        <div className="flex items-center gap-0.5">
+          {/* Export all */}
+          <button
+            type="button"
+            onClick={handleExport}
+            title={`Export all ${strategies.length} strategies to JSON`}
+            className="btn-icon-xs text-text-muted hover:text-text-primary transition-colors text-xs"
+          >
+            ↑
+          </button>
+
+          {/* Import from file */}
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            title="Import strategies from a JSON file"
+            className="btn-icon-xs text-text-muted hover:text-text-primary transition-colors text-xs"
+          >
+            ↓
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
+        </div>
+      </div>
+
+      {/* ── Pending import: merge / replace choice ──────────────────────────── */}
+      {pendingImport && (
+        <div className="px-3 py-2 border-b border-surface-border bg-accent/5 space-y-2">
+          <p className="text-[11px] font-mono text-text-secondary leading-snug">
+            Found <span className="text-accent font-semibold">{pendingImport.count}</span> strategies.
+            How do you want to import?
+          </p>
+          <div className="flex gap-1.5">
+            {/* Merge — safe default */}
+            <button
+              type="button"
+              onClick={() => commitImport('merge')}
+              className="flex-1 py-1 rounded border border-accent/40 bg-accent/10
+                         text-accent text-[11px] font-mono font-semibold
+                         hover:bg-accent/20 transition-colors"
+              title="Add or update by id — existing strategies not in the file are kept"
+            >
+              Merge
+            </button>
+            {/* Replace — destructive */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!confirm(
+                  `Replace ALL ${strategies.length} existing strategies with the ${pendingImport.count} from the file?\n\nThis also clears backtest history. This cannot be undone.`
+                )) return;
+                commitImport('replace');
+              }}
+              className="flex-1 py-1 rounded border border-red-500/40 bg-red-500/10
+                         text-red-400 text-[11px] font-mono font-semibold
+                         hover:bg-red-500/20 transition-colors"
+              title="Wipe library and backtest history, then import"
+            >
+              Replace all
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingImport(null)}
+              className="px-2 py-1 rounded border border-surface-border
+                         text-text-muted text-[11px] font-mono
+                         hover:text-text-primary transition-colors"
+              title="Cancel import"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Import / export feedback banner ─────────────────────────────────── */}
+      {importFeedback && (
+        <div className={`px-3 py-1.5 text-[11px] font-mono border-b border-surface-border ${
+          importFeedback.ok
+            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+            : 'bg-red-500/10 text-red-400 border-red-500/20'
+        }`}>
+          {importFeedback.msg}
+        </div>
+      )}
+
       {/* ── Templates section ───────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-surface-border">
         <button

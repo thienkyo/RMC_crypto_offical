@@ -16,6 +16,7 @@
 
 import { db } from '@/lib/db/client';
 import { parseChatIds, isTestTarget } from '@/lib/telegram';
+export { strategyRating } from '@/lib/strategy/rating';
 
 const BOT_TOKEN    = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -291,15 +292,6 @@ export function formatStrategySignalMessage(opts: {
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
 }
 
-/**
- * Compute a 1–7 star rating from total entry condition count and confirmation periods.
- * More conditions + longer confirmations = harder to satisfy = higher-confidence signal = more stars.
- * Each additional confirmation candle adds 0.5 to the difficulty score.
- */
-export function strategyRating(totalConditions: number, extraConfirmations: number = 0): number {
-  const score = totalConditions + (extraConfirmations * 0.5);
-  return Math.min(7, Math.max(1, Math.round(score)));
-}
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 

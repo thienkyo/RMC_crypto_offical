@@ -135,19 +135,6 @@ export async function evaluateStrategySignal(
   }
 
   // ── 7. Build message ───────────────────────────────────────────────────────
-  const activeConditions = strategy.entryConditions
-    .flatMap((g) => g.conditions)
-    .filter((c) => c.enabled !== false);
-
-  // Calculate extra confirmation score: only 'confirmation' mode increases difficulty.
-  const extraConfirmations = activeConditions.reduce((sum, c) => {
-    const mode = c.checkMode ?? 'confirmation';
-    if (mode === 'confirmation') {
-      return sum + Math.max(0, (c.checkCandles ?? 1) - 1);
-    }
-    return sum;
-  }, 0);
-
   // Map to structured display format for Telegram
   const conditionGroups = strategy.entryConditions
     .filter((g) => g.conditions.some((c) => c.enabled !== false))
@@ -172,7 +159,7 @@ export async function evaluateStrategySignal(
   const message = formatStrategySignalMessage({
     strategyName:  strategy.name,
     longName:      strategy.longName,
-    rating:        strategyRating(activeConditions.length, extraConfirmations),
+    rating:        strategyRating(strategy.entryConditions),
     symbol:        strategy.symbol,
     timeframe:     strategy.timeframe,
     direction:     strategy.action.type === 'enter_long' ? 'long' : 'short',

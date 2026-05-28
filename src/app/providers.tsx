@@ -1,7 +1,9 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
+import { useStrategyStore } from '@/store/strategy';
+import { syncStrategies } from '@/lib/strategy/sync';
 
 /**
  * TanStack Query provider.
@@ -26,6 +28,14 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       }),
   );
+
+  // Perform background synchronization on mount
+  useEffect(() => {
+    const state = useStrategyStore.getState();
+    syncStrategies(state.strategies, state.setStrategies).catch((err) =>
+      console.warn('[sync] Startup background sync failed:', err)
+    );
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

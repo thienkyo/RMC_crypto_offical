@@ -17,6 +17,7 @@ import {
 } from '@/store/strategy';
 import type { Strategy } from '@/types/strategy';
 import { exportToFile, parseImportFile } from '@/lib/strategy/io';
+import { syncStrategies } from '@/lib/strategy/sync';
 
 // ── Template row ──────────────────────────────────────────────────────────────
 
@@ -571,6 +572,7 @@ export function StrategyList() {
   const loadStarterTemplates  = useStrategyStore((s) => s.loadStarterTemplates);
   const mergeStrategy         = useStrategyStore((s) => s.mergeStrategy);
   const importStrategies      = useStrategyStore((s) => s.importStrategies);
+  const setStrategies         = useStrategyStore((s) => s.setStrategies);
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
   const [strategiesCollapsed,      setStrategiesCollapsed]      = useState(false);
@@ -582,6 +584,8 @@ export function StrategyList() {
   const [clonePopoverSymbol, setClonePopoverSymbol]   = useState<string | null>(null);
   // Import feedback banner — null = hidden (auto-clears after 3 s)
   const [importFeedback, setImportFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [isSyncing, setIsSyncing]           = useState(false);
+
   // Pending import: file parsed OK, waiting for user to choose merge vs replace
   const [pendingImport, setPendingImport]   = useState<{ strategies: Strategy[]; count: number } | null>(null);
   // Hidden file input for import
@@ -592,6 +596,23 @@ export function StrategyList() {
     setImportFeedback({ ok, msg });
     setTimeout(() => setImportFeedback(null), 3000);
   }, []);
+
+  const handleSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const result = await syncStrategies(strategies, setStrategies);
+      showFeedback(
+        true,
+        `Synced! Pulled ${result.pulled}, pushed ${result.pushed} strategies.`
+      );
+    } catch (err) {
+      console.error('[sync] Manual sync failed:', err);
+      showFeedback(false, 'Sync failed. Check database connection.');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [strategies, setStrategies, showFeedback, isSyncing]);
 
   /** Export all strategies (templates + regulars) to a dated JSON file. */
   function handleExport() {
@@ -699,6 +720,17 @@ export function StrategyList() {
           Library
         </span>
         <div className="flex items-center gap-0.5">
+          {/* Sync library */}
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={isSyncing}
+            title="Synchronize library with Database"
+            className="btn-icon-xs text-text-muted hover:text-text-primary transition-colors text-xs disabled:opacity-50"
+          >
+            {isSyncing ? '⌛' : '🔄'}
+          </button>
+
           {/* Export all */}
           <button
             type="button"

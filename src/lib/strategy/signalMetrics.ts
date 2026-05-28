@@ -11,9 +11,13 @@
 
 /** One condition inside a snapshot group. */
 export interface ConditionSnapshotItem {
-  label:   string;
-  passed:  boolean;
-  value?:  number;   // indicator value at fire time (undefined for pattern indicators)
+  label:         string;
+  passed:        boolean;
+  value?:        number;   // indicator value at fire time (undefined for pattern indicators)
+  /** Candles used for confirmation/lookback check. Default 1 (no extra). */
+  checkCandles?: number;
+  /** 'confirmation' (default) or 'lookback'. */
+  checkMode?:    'confirmation' | 'lookback';
 }
 
 /** One condition group as recorded when the signal fired. */
@@ -43,6 +47,10 @@ export interface StrategySignalRow {
   outcome_note:       string | null;
   outcome_at:         number | null; // Unix ms
   telegram_delivered: boolean;
+  /** Dynamic 1–7 star rating from conditions that actually fired (null for old rows). */
+  rating:             number | null;
+  /** Limit-order entry = signal price × 0.97 (null for old rows). */
+  entry_price_limit:  number | null;
 }
 
 export interface SignalMetrics {

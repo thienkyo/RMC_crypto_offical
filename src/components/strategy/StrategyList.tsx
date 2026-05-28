@@ -17,7 +17,12 @@ import {
 } from '@/store/strategy';
 import type { Strategy } from '@/types/strategy';
 import { exportToFile, parseImportFile } from '@/lib/strategy/io';
-import { syncStrategies } from '@/lib/strategy/sync';
+import {
+  pushStrategyToDb,
+  pushManyStrategiesToDb,
+  deleteStrategyFromDb,
+  deleteAllStrategiesFromDb,
+} from '@/lib/strategy/api';
 
 // ── Template row ──────────────────────────────────────────────────────────────
 
@@ -572,6 +577,7 @@ export function StrategyList() {
   const loadStarterTemplates  = useStrategyStore((s) => s.loadStarterTemplates);
   const mergeStrategy         = useStrategyStore((s) => s.mergeStrategy);
   const importStrategies      = useStrategyStore((s) => s.importStrategies);
+  const clearAllStrategies    = useStrategyStore((s) => s.clearAllStrategies);
   const setStrategies         = useStrategyStore((s) => s.setStrategies);
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
@@ -584,7 +590,8 @@ export function StrategyList() {
   const [clonePopoverSymbol, setClonePopoverSymbol]   = useState<string | null>(null);
   // Import feedback banner — null = hidden (auto-clears after 3 s)
   const [importFeedback, setImportFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [isSyncing, setIsSyncing]           = useState(false);
+  // True while import is pushing strategies to DB
+  const [importing, setImporting]           = useState(false);
 
   // Pending import: file parsed OK, waiting for user to choose merge vs replace
   const [pendingImport, setPendingImport]   = useState<{ strategies: Strategy[]; count: number } | null>(null);
@@ -597,22 +604,6 @@ export function StrategyList() {
     setTimeout(() => setImportFeedback(null), 3000);
   }, []);
 
-  const handleSync = useCallback(async () => {
-    if (isSyncing) return;
-    setIsSyncing(true);
-    try {
-      const result = await syncStrategies(strategies, setStrategies);
-      showFeedback(
-        true,
-        `Synced! Pulled ${result.pulled}, pushed ${result.pushed} strategies.`
-      );
-    } catch (err) {
-      console.error('[sync] Manual sync failed:', err);
-      showFeedback(false, 'Sync failed. Check database connection.');
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [strategies, setStrategies, showFeedback, isSyncing]);
 
   /** Export all strategies (templates + regulars) to a dated JSON file. */
   function handleExport() {
@@ -645,13 +636,28 @@ export function StrategyList() {
     reader.readAsText(file);
   }
 
-  /** Commit the pending import with the chosen mode. */
-  function commitImport(mode: 'merge' | 'replace') {
+  /** DB-first import: wipe/upsert in DB first, then update localStorage. */
+  async function commitImport(mode: 'merge' | 'replace') {
     if (!pendingImport) return;
-    const written = importStrategies(pendingImport.strategies, mode);
-    setPendingImport(null);
-    const label = mode === 'replace' ? 'Replaced library with' : 'Merged';
-    showFeedback(true, `${label} ${written} ${written === 1 ? 'strategy' : 'strategies'}.`);
+    setImporting(true);
+    try {
+      if (mode === 'replace') {
+        // Wipe DB before pushing the new set
+        await deleteAllStrategiesFromDb();
+      }
+      // Fan-out push — all strategies to DB in parallel
+      const pushed = await pushManyStrategiesToDb(pendingImport.strategies);
+      // Update localStorage to match
+      const written = importStrategies(pendingImport.strategies, mode);
+      setPendingImport(null);
+      const label = mode === 'replace' ? 'Replaced library with' : 'Merged';
+      const warn  = pushed < written ? ` (${written - pushed} failed to sync to DB)` : '';
+      showFeedback(true, `${label} ${written} ${written === 1 ? 'strategy' : 'strategies'}.${warn}`);
+    } catch (err) {
+      showFeedback(false, `Import failed: ${err instanceof Error ? err.message : 'DB error'}`);
+    } finally {
+      setImporting(false);
+    }
   }
 
   function toggleGroup(symbol: string) {
@@ -686,6 +692,9 @@ export function StrategyList() {
     const s = createDefaultStrategy();
     upsertStrategy(s);
     setActiveStrategy(s.id);
+    pushStrategyToDb(s).catch((err) =>
+      console.warn('[strategy-list:new] DB push failed:', err),
+    );
   }
 
   function handleNewTemplate() {
@@ -693,22 +702,28 @@ export function StrategyList() {
     upsertStrategy(t);
     setActiveStrategy(t.id);
     setTemplatesCollapsed(false);
+    pushStrategyToDb(t).catch((err) =>
+      console.warn('[strategy-list:new-template] DB push failed:', err),
+    );
   }
 
   function handleToggle(s: Strategy) {
+    // Optimistic — toggle is low-stakes, fire-and-forget DB sync
     toggleStrategyActive(s.id);
     const updated = { ...s, isActive: !(s.isActive ?? false) };
-    fetch('/api/strategies', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(updated),
-    }).catch((err) => console.warn('[strategy-list:toggle] DB sync failed:', err));
+    pushStrategyToDb(updated).catch((err) =>
+      console.warn('[strategy-list:toggle] DB sync failed:', err),
+    );
   }
 
-  function handleDelete(s: Strategy) {
-    deleteStrategy(s.id);
-    fetch(`/api/strategies?id=${s.id}`, { method: 'DELETE' })
-      .catch((err) => console.warn('[strategy-list:delete] DB sync failed:', err));
+  async function handleDelete(s: Strategy) {
+    // DB-first: confirm deletion in DB before removing from local store
+    try {
+      await deleteStrategyFromDb(s.id);
+      deleteStrategy(s.id);
+    } catch (err) {
+      showFeedback(false, `Delete failed: ${err instanceof Error ? err.message : 'DB error'}`);
+    }
   }
 
   return (
@@ -720,15 +735,26 @@ export function StrategyList() {
           Library
         </span>
         <div className="flex items-center gap-0.5">
-          {/* Sync library */}
+          {/* Clear all — DB-first */}
           <button
             type="button"
-            onClick={handleSync}
-            disabled={isSyncing}
-            title="Synchronize library with Database"
-            className="btn-icon-xs text-text-muted hover:text-text-primary transition-colors text-xs disabled:opacity-50"
+            onClick={async () => {
+              if (strategies.length === 0) return;
+              if (!confirm(
+                `Clear all ${strategies.length} strategies and templates?\n\nThis permanently deletes them from the database and local storage, including backtest history. Use ↑ Export first if you want a backup.\n\nThis cannot be undone.`
+              )) return;
+              try {
+                await deleteAllStrategiesFromDb();
+                clearAllStrategies();
+                showFeedback(true, 'Library cleared. Use ↓ to import a backup.');
+              } catch (err) {
+                showFeedback(false, `Clear failed: ${err instanceof Error ? err.message : 'DB error'}`);
+              }
+            }}
+            title="Clear all strategies and templates"
+            className="btn-icon-xs text-text-muted hover:text-red-400 transition-colors text-xs"
           >
-            {isSyncing ? '⌛' : '🔄'}
+            🗑
           </button>
 
           {/* Export all */}
@@ -763,49 +789,57 @@ export function StrategyList() {
       {/* ── Pending import: merge / replace choice ──────────────────────────── */}
       {pendingImport && (
         <div className="px-3 py-2 border-b border-surface-border bg-accent/5 space-y-2">
-          <p className="text-[11px] font-mono text-text-secondary leading-snug">
-            Found <span className="text-accent font-semibold">{pendingImport.count}</span> strategies.
-            How do you want to import?
-          </p>
-          <div className="flex gap-1.5">
-            {/* Merge — safe default */}
-            <button
-              type="button"
-              onClick={() => commitImport('merge')}
-              className="flex-1 py-1 rounded border border-accent/40 bg-accent/10
-                         text-accent text-[11px] font-mono font-semibold
-                         hover:bg-accent/20 transition-colors"
-              title="Add or update by id — existing strategies not in the file are kept"
-            >
-              Merge
-            </button>
-            {/* Replace — destructive */}
-            <button
-              type="button"
-              onClick={() => {
-                if (!confirm(
-                  `Replace ALL ${strategies.length} existing strategies with the ${pendingImport.count} from the file?\n\nThis also clears backtest history. This cannot be undone.`
-                )) return;
-                commitImport('replace');
-              }}
-              className="flex-1 py-1 rounded border border-red-500/40 bg-red-500/10
-                         text-red-400 text-[11px] font-mono font-semibold
-                         hover:bg-red-500/20 transition-colors"
-              title="Wipe library and backtest history, then import"
-            >
-              Replace all
-            </button>
-            <button
-              type="button"
-              onClick={() => setPendingImport(null)}
-              className="px-2 py-1 rounded border border-surface-border
-                         text-text-muted text-[11px] font-mono
-                         hover:text-text-primary transition-colors"
-              title="Cancel import"
-            >
-              ✕
-            </button>
-          </div>
+          {importing ? (
+            <p className="text-[11px] font-mono text-text-muted animate-pulse py-1">
+              Syncing to database…
+            </p>
+          ) : (
+            <>
+              <p className="text-[11px] font-mono text-text-secondary leading-snug">
+                Found <span className="text-accent font-semibold">{pendingImport.count}</span> strategies.
+                How do you want to import?
+              </p>
+              <div className="flex gap-1.5">
+                {/* Merge — safe default */}
+                <button
+                  type="button"
+                  onClick={() => commitImport('merge')}
+                  className="flex-1 py-1 rounded border border-accent/40 bg-accent/10
+                             text-accent text-[11px] font-mono font-semibold
+                             hover:bg-accent/20 transition-colors"
+                  title="Add or update by id — existing strategies not in the file are kept"
+                >
+                  Merge
+                </button>
+                {/* Replace — destructive */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!confirm(
+                      `Replace ALL ${strategies.length} existing strategies with the ${pendingImport.count} from the file?\n\nThis deletes everything from the database and local storage, including backtest history. This cannot be undone.`
+                    )) return;
+                    commitImport('replace');
+                  }}
+                  className="flex-1 py-1 rounded border border-red-500/40 bg-red-500/10
+                             text-red-400 text-[11px] font-mono font-semibold
+                             hover:bg-red-500/20 transition-colors"
+                  title="Wipe DB and local library, then import"
+                >
+                  Replace all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingImport(null)}
+                  className="px-2 py-1 rounded border border-surface-border
+                             text-text-muted text-[11px] font-mono
+                             hover:text-text-primary transition-colors"
+                  title="Cancel import"
+                >
+                  ✕
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -838,7 +872,14 @@ export function StrategyList() {
         <div className="flex items-center gap-0.5">
           <button
             type="button"
-            onClick={() => { loadStarterTemplates(); setTemplatesCollapsed(false); }}
+            onClick={() => {
+              const stamped = loadStarterTemplates();
+              setTemplatesCollapsed(false);
+              // Push to DB so they survive a refresh (fire-and-forget)
+              pushManyStrategiesToDb(stamped).catch((err) =>
+                console.warn('[strategy-list:load-starters] DB push failed:', err),
+              );
+            }}
             className="btn-icon-xs text-text-muted hover:text-violet-400 transition-colors"
             title="Load starter templates"
           >
@@ -1017,15 +1058,12 @@ export function StrategyList() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      const updated = list.map((s) => ({ ...s, isActive: !anyActive }));
+                      const nextActive = !anyActive;
+                      const updated = list.map((s) => ({ ...s, isActive: nextActive }));
                       setGroupActive(symbol);
-                      // DB sync for each strategy
-                      updated.forEach((s) =>
-                        fetch('/api/strategies', {
-                          method:  'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body:    JSON.stringify(s),
-                        }).catch((err) => console.warn('[strategy-list:group-toggle] DB sync failed:', err)),
+                      // Optimistic — fire-and-forget DB sync for each strategy
+                      pushManyStrategiesToDb(updated).catch((err) =>
+                        console.warn('[strategy-list:group-toggle] DB sync failed:', err),
                       );
                     }}
                     title={anyActive ? 'Turn off all in group' : 'Turn on all in group'}
@@ -1060,8 +1098,11 @@ export function StrategyList() {
                     allSymbols={allSymbols}
                     count={list.length}
                     onClone={(target) => {
-                      copyGroupToSymbol(symbol, target);
+                      const copies = copyGroupToSymbol(symbol, target);
                       setStrategiesCollapsed(false);
+                      if (copies.length > 0) pushManyStrategiesToDb(copies).catch((err) =>
+                        console.warn('[strategy-list:copy-group] DB push failed:', err),
+                      );
                     }}
                     onClose={() => setClonePopoverSymbol(null)}
                   />
@@ -1076,10 +1117,25 @@ export function StrategyList() {
                     allStrategies={strategies}
                     onSelect={() => setActiveStrategy(s.id)}
                     onToggle={() => handleToggle(s)}
-                    onDuplicate={() => duplicateStrategy(s.id)}
+                    onDuplicate={() => {
+                      const copy = duplicateStrategy(s.id);
+                      if (copy) pushStrategyToDb(copy).catch((err) =>
+                        console.warn('[strategy-list:duplicate] DB push failed:', err),
+                      );
+                    }}
                     onDelete={() => handleDelete(s)}
-                    onCloneToSymbol={(target) => cloneStrategyToSymbol(s.id, target)}
-                    onMerge={(sourceIds) => mergeStrategy(sourceIds, s.id)}
+                    onCloneToSymbol={(target) => {
+                      const clone = cloneStrategyToSymbol(s.id, target);
+                      if (clone) pushStrategyToDb(clone).catch((err) =>
+                        console.warn('[strategy-list:clone-to-symbol] DB push failed:', err),
+                      );
+                    }}
+                    onMerge={(sourceIds) => {
+                      const merged = mergeStrategy(sourceIds, s.id);
+                      if (merged) pushStrategyToDb(merged).catch((err) =>
+                        console.warn('[strategy-list:merge] DB push failed:', err),
+                      );
+                    }}
                   />
                 ))}
               </div>

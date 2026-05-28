@@ -16,13 +16,15 @@
 
 import { useState, useEffect } from 'react';
 import { useStrategyStore, selectActiveStrategy, createDefaultStrategy } from '@/store/strategy';
+import { fetchStrategiesFromDb, pushStrategyToDb } from '@/lib/strategy/api';
 import { StrategyList }     from './StrategyList';
 import { StrategyForm }     from './StrategyForm';
 import { BacktestPanel }    from './BacktestPanel';
 import { SignalHistory }    from './SignalHistory';
+import { VersionHistory }   from './VersionHistory';
 import { PortfolioOverview } from './PortfolioOverview';
 
-type RightTab   = 'signals' | 'backtest';
+type RightTab   = 'signals' | 'backtest' | 'history';
 type TopTab     = 'strategies' | 'portfolio';
 
 export function StrategyBuilder() {
@@ -32,10 +34,26 @@ export function StrategyBuilder() {
   const clearBacktestHistory = useStrategyStore((s) => s.clearBacktestHistory);
   const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
+  const setStrategies        = useStrategyStore((s) => s.setStrategies);
 
   const [topTab,        setTopTab]        = useState<TopTab>('strategies');
   const [activeTab,     setActiveTab]     = useState<RightTab>('signals');
   const [rightVisible,  setRightVisible]  = useState(true);
+  const [dbOffline,     setDbOffline]     = useState(false);
+
+  // ── Hydrate from DB on mount (DB is source of truth) ─────────────────────
+  useEffect(() => {
+    fetchStrategiesFromDb().then((remote) => {
+      if (remote === null) {
+        // DB unreachable — keep localStorage cache, show banner
+        setDbOffline(true);
+        return;
+      }
+      setDbOffline(false);
+      setStrategies(remote);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ']' toggles the right rail
   useEffect(() => {
@@ -59,10 +77,37 @@ export function StrategyBuilder() {
     const s = createDefaultStrategy();
     upsertStrategy(s);
     setActiveStrategy(s.id);
+    // New blank strategy — push to DB so it survives a refresh
+    pushStrategyToDb(s).catch((err) =>
+      console.warn('[StrategyBuilder] DB push for new strategy failed:', err),
+    );
   }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+
+      {/* ── Offline banner — shown when DB is unreachable on mount ──── */}
+      {dbOffline && (
+        <div className="flex-shrink-0 flex items-center gap-2 px-4 py-1.5
+                        bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs">
+          <span>⚠</span>
+          <span>
+            DB unreachable — showing cached data. Changes will not persist until the
+            database is back online.
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              fetchStrategiesFromDb().then((remote) => {
+                if (remote) { setStrategies(remote); setDbOffline(false); }
+              })
+            }
+            className="ml-auto underline hover:no-underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* ── Top-level tab bar: Strategies | Portfolio ───────────────── */}
       <div className="flex-shrink-0 flex border-b border-surface-border bg-surface">
@@ -128,6 +173,11 @@ export function StrategyBuilder() {
                   onClick={() => setActiveTab('backtest')}
                   highlight={history.length > 0 || isBacktesting}
                 />
+                <TabButton
+                  label="History"
+                  active={activeTab === 'history'}
+                  onClick={() => setActiveTab('history')}
+                />
               </div>
 
               {/* Tab content */}
@@ -161,6 +211,10 @@ export function StrategyBuilder() {
                       )
                     )}
                   </>
+                )}
+
+                {activeTab === 'history' && (
+                  <VersionHistory strategy={activeStrategy} />
                 )}
               </div>
             </aside>

@@ -14,7 +14,7 @@ import { INDICATORS }    from '@/lib/indicators';
 import type { IndicatorSeries, IndicatorPoint, IndicatorMarker } from '@/lib/indicators';
 import { useLiveStrategies } from '@/hooks/useLiveStrategy';
 import { computeSignalCandles } from '@/lib/strategy/signals';
-import { strategyRating }      from '@/lib/strategy/rating';
+import { strategyScoreRange }  from '@/lib/strategy/rating';
 import { PriceChart, type PriceChartHandle } from './PriceChart';
 import { SubChart,   type SubChartHandle   } from './SubChart';
 import { CandleTimer, CandleTimerInline }       from './CandleTimer';
@@ -991,8 +991,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             const allConditions    = strategy.entryConditions.flatMap((g) => g.conditions);
             const totalConditions  = allConditions.length;
             const activeConditions = allConditions.filter((c) => c.enabled !== false).length;
-            const rating           = strategyRating(strategy.entryConditions);
-            const stars            = '⭐'.repeat(rating);
+            const scoreRange       = strategyScoreRange(strategy.entryConditions);
+            const stars            = scoreRange.min === scoreRange.max
+              ? '⭐'.repeat(scoreRange.min)
+              : `${'⭐'.repeat(scoreRange.min)}–${'⭐'.repeat(scoreRange.max)}`;
             const opSym: Record<string, string> = {
               gt: '>', lt: '<', gte: '≥', lte: '≤',
               crosses_above: '↑ crosses above', crosses_below: '↓ crosses below',

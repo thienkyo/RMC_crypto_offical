@@ -85,33 +85,36 @@ interface StrategyState {
    * If `active` is undefined, it flips: if ANY are on → turn all off; if all off → turn all on.
    */
   setGroupActive: (symbol: string, active?: boolean) => void;
-  /** Clone a strategy with a new id and " (copy)" suffix. */
-  duplicateStrategy: (id: string) => void;
+  /** Clone a strategy with a new id and " (copy)" suffix. Returns the copy. */
+  duplicateStrategy: (id: string) => Strategy | undefined;
   /**
    * Clone every strategy belonging to `fromSymbol` to `targetSymbol`.
    * All conditions, risk params, and action are copied verbatim.
    * Each copy gets a new id, starts inactive, and is named identically
    * (the symbol change is visible from the group it lands in).
-   * Returns the number of strategies cloned.
+   * Returns the cloned strategies (empty array if nothing was cloned).
    */
-  copyGroupToSymbol: (fromSymbol: string, targetSymbol: string) => number;
+  copyGroupToSymbol: (fromSymbol: string, targetSymbol: string) => Strategy[];
   /**
    * Clone a single strategy to a different symbol.
    * Copies all conditions, risk params, and action verbatim; assigns a new id,
    * sets the symbol to targetSymbol, and starts inactive.
+   * Returns the cloned strategy, or undefined if the source wasn't found.
    */
-  cloneStrategyToSymbol: (id: string, targetSymbol: string) => void;
+  cloneStrategyToSymbol: (id: string, targetSymbol: string) => Strategy | undefined;
   /**
    * Clone a template into a regular working strategy.
    * Sets isTemplate to false, prefixes name with "Copy of ", assigns a new id.
+   * Returns the cloned strategy, or undefined if the template wasn't found.
    */
-  cloneFromTemplate: (templateId: string) => void;
+  cloneFromTemplate: (templateId: string) => Strategy | undefined;
   /**
    * Upsert the STARTER_TEMPLATES into the store (by id).
    * Existing templates with the same id are replaced so this is idempotent.
    * Regular strategies and custom templates are unaffected.
+   * Returns the stamped templates that were written.
    */
-  loadStarterTemplates: () => void;
+  loadStarterTemplates: () => Strategy[];
   /**
    * Merge one or more single-group source strategies into a destination strategy.
    *
@@ -126,8 +129,9 @@ interface StrategyState {
    * Source strategies are unchanged (non-destructive).
    * Destination version is bumped and updatedAt is refreshed.
    * The destination becomes the active strategy after the merge.
+   * Returns the updated destination strategy, or undefined if dest wasn't found.
    */
-  mergeStrategy: (sourceIds: string[], destId: string) => void;
+  mergeStrategy: (sourceIds: string[], destId: string) => Strategy | undefined;
   /**
    * Import an array of strategies.
    *
@@ -138,6 +142,8 @@ interface StrategyState {
    * Returns the number of strategies actually written.
    */
   importStrategies: (incoming: Strategy[], mode?: 'merge' | 'replace') => number;
+  /** Wipe the entire library — all strategies, templates, and backtest history. */
+  clearAllStrategies: () => void;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -216,12 +222,13 @@ export const useStrategyStore = create<StrategyState>()(
           };
         }),
 
-      duplicateStrategy: (id) =>
+      duplicateStrategy: (id) => {
+        let result: Strategy | undefined;
         set((s) => {
           const original = s.strategies.find((x) => x.id === id);
           if (!original) return {};
           const now = Date.now();
-          const copy: typeof original = {
+          const copy: Strategy = {
             ...original,
             id:        `strategy_${now}`,
             name:      `${original.name} (copy)`,
@@ -230,21 +237,24 @@ export const useStrategyStore = create<StrategyState>()(
             updatedAt: now,
             isActive:  false, // copies start inactive — don't accidentally double-monitor
           };
+          result = copy;
           return {
             strategies:       [...s.strategies, copy],
             activeStrategyId: copy.id,
           };
-        }),
+        });
+        return result;
+      },
 
       copyGroupToSymbol: (fromSymbol, targetSymbol) => {
         const sym = targetSymbol.toUpperCase().trim();
-        let cloned = 0;
+        let clones: Strategy[] = [];
         set((s) => {
           const sources = s.strategies.filter(
             (x) => !x.isTemplate && x.symbol === fromSymbol,
           );
           if (!sym || sym === fromSymbol || sources.length === 0) return {};
-          const copies = sources.map((original) => ({
+          const copies: Strategy[] = sources.map((original) => ({
             ...original,
             id:        `strategy_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             symbol:    sym,
@@ -253,21 +263,22 @@ export const useStrategyStore = create<StrategyState>()(
             updatedAt: Date.now(),
             isActive:  false,
           }));
-          cloned = copies.length;
+          clones = copies;
           // Select the first copy so the user lands somewhere useful
           return {
             strategies:       [...s.strategies, ...copies],
             activeStrategyId: copies[0]?.id ?? s.activeStrategyId,
           };
         });
-        return cloned;
+        return clones;
       },
 
-      loadStarterTemplates: () =>
+      loadStarterTemplates: () => {
+        let stamped: Strategy[] = [];
         set((s) => {
           const now = Date.now();
           // Stamp createdAt/updatedAt on first load (they're 0 in the constant).
-          const stamped = STARTER_TEMPLATES.map((t) => ({
+          stamped = STARTER_TEMPLATES.map((t) => ({
             ...t,
             createdAt: t.createdAt === 0 ? now : t.createdAt,
             updatedAt: now,
@@ -280,16 +291,19 @@ export const useStrategyStore = create<StrategyState>()(
               ...stamped,
             ],
           };
-        }),
+        });
+        return stamped;
+      },
 
-      cloneStrategyToSymbol: (id, targetSymbol) =>
+      cloneStrategyToSymbol: (id, targetSymbol) => {
+        let result: Strategy | undefined;
         set((s) => {
           const original = s.strategies.find((x) => x.id === id);
           if (!original) return {};
           const sym = targetSymbol.toUpperCase().trim();
           if (!sym || sym === original.symbol) return {};
           const now = Date.now();
-          const copy: typeof original = {
+          const copy: Strategy = {
             ...original,
             id:        `strategy_${now}_${Math.random().toString(36).slice(2, 6)}`,
             symbol:    sym,
@@ -298,18 +312,22 @@ export const useStrategyStore = create<StrategyState>()(
             updatedAt: now,
             isActive:  false,
           };
+          result = copy;
           return {
             strategies:       [...s.strategies, copy],
             activeStrategyId: copy.id,
           };
-        }),
+        });
+        return result;
+      },
 
-      cloneFromTemplate: (templateId) =>
+      cloneFromTemplate: (templateId) => {
+        let result: Strategy | undefined;
         set((s) => {
           const template = s.strategies.find((x) => x.id === templateId && x.isTemplate);
           if (!template) return {};
           const now = Date.now();
-          const clone: typeof template = {
+          const clone: Strategy = {
             ...template,
             id:         `strategy_${now}`,
             name:       `Copy of ${template.name}`,
@@ -319,13 +337,17 @@ export const useStrategyStore = create<StrategyState>()(
             isActive:   false,
             isTemplate: false, // becomes a regular working strategy
           };
+          result = clone;
           return {
             strategies:       [...s.strategies, clone],
             activeStrategyId: clone.id,
           };
-        }),
+        });
+        return result;
+      },
 
-      mergeStrategy: (sourceIds, destId) =>
+      mergeStrategy: (sourceIds, destId) => {
+        let result: Strategy | undefined;
         set((s) => {
           const dest = s.strategies.find((x) => x.id === destId);
           if (!dest) return {};
@@ -352,21 +374,24 @@ export const useStrategyStore = create<StrategyState>()(
           if (newGroups.length === 0) return {};
 
           const now = Date.now();
+          const updated: Strategy = {
+            ...dest,
+            entryConditions: [...dest.entryConditions, ...newGroups],
+            version:         dest.version + 1,
+            updatedAt:       now,
+          };
+          result = updated;
           return {
-            strategies: s.strategies.map((x) =>
-              x.id === destId
-                ? {
-                    ...x,
-                    entryConditions: [...x.entryConditions, ...newGroups],
-                    version:         x.version + 1,
-                    updatedAt:       now,
-                  }
-                : x,
-            ),
+            strategies: s.strategies.map((x) => x.id === destId ? updated : x),
             // Jump to the destination so the user sees the result immediately
             activeStrategyId: destId,
           };
-        }),
+        });
+        return result;
+      },
+
+      clearAllStrategies: () =>
+        set({ strategies: [], activeStrategyId: null, backtestResult: null, backtestHistory: {} }),
 
       importStrategies: (incoming, mode = 'merge') => {
         let written = 0;

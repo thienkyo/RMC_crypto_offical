@@ -15,6 +15,7 @@ import { useState } from 'react';
 import { ConditionGroupEditor } from './ConditionGroupEditor';
 import { ActionEditor }         from './ActionEditor';
 import { useStrategyStore }     from '@/store/strategy';
+import { pushStrategyToDb }     from '@/lib/strategy/api';
 import { useBacktest }          from '@/hooks/useBacktest';
 import { TIMEFRAMES }           from '@/types/market';
 import type {
@@ -41,6 +42,7 @@ interface Props {
 export function StrategyForm({ strategy: initial }: Props) {
   const [draft, setDraft]     = useState<Strategy>(initial);
   const [error, setError]     = useState<string | null>(null);
+  const [saving, setSaving]   = useState(false);
 
   const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
   const duplicateStrategy    = useStrategyStore((s) => s.duplicateStrategy);
@@ -79,24 +81,23 @@ export function StrategyForm({ strategy: initial }: Props) {
     setDraft((d) => ({ ...d, action, risk }));
   }
 
-  /** Persist to Zustand + fire-and-forget DB sync for cron access. */
-  function syncToDb(saved: typeof draft) {
-    fetch('/api/strategies', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(saved),
-    }).catch((err) => console.warn('[StrategyForm] DB sync failed:', err));
-  }
-
-  function handleSave() {
+  /** DB-first save: push to DB, then update the local store on success. */
+  async function handleSave() {
     if (!draft.name.trim()) {
       setError('Strategy name is required.');
       return;
     }
     setError(null);
+    setSaving(true);
     const saved = { ...draft, version: draft.version + 1 };
-    upsertStrategy(saved);
-    syncToDb(saved);
+    try {
+      await pushStrategyToDb(saved);
+      upsertStrategy(saved);
+    } catch (err) {
+      setError(`Save failed: ${err instanceof Error ? err.message : 'DB unreachable'}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleBacktest() {
@@ -105,11 +106,19 @@ export function StrategyForm({ strategy: initial }: Props) {
       return;
     }
     setError(null);
-    // Save first so results are associated with the current state
+    setSaving(true);
+    // DB-first save so results are associated with the persisted state
     const saved = { ...draft, version: draft.version + 1 };
-    upsertStrategy(saved);
-    setDraft(saved);
-    syncToDb(saved);
+    try {
+      await pushStrategyToDb(saved);
+      upsertStrategy(saved);
+      setDraft(saved);
+    } catch (err) {
+      setError(`Save failed: ${err instanceof Error ? err.message : 'DB unreachable'}`);
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
 
     try {
       await runBacktestForStrategy(saved);
@@ -363,16 +372,22 @@ export function StrategyForm({ strategy: initial }: Props) {
           <button
             type="button"
             onClick={handleSave}
-            className="btn-sm btn-secondary"
+            disabled={saving}
+            className="btn-sm btn-secondary disabled:opacity-60"
           >
-            Save (v{draft.version + 1})
+            {saving ? 'Saving…' : `Save (v${draft.version + 1})`}
           </button>
 
           {draft.isTemplate ? (
             <>
               <button
                 type="button"
-                onClick={() => duplicateStrategy(draft.id)}
+                onClick={() => {
+                  const copy = duplicateStrategy(draft.id);
+                  if (copy) pushStrategyToDb(copy).catch((err) =>
+                    console.warn('[StrategyForm] duplicate DB push failed:', err),
+                  );
+                }}
                 className="btn-sm btn-secondary"
                 title="Duplicate as another template"
               >
@@ -380,7 +395,12 @@ export function StrategyForm({ strategy: initial }: Props) {
               </button>
               <button
                 type="button"
-                onClick={() => cloneFromTemplate(draft.id)}
+                onClick={() => {
+                  const clone = cloneFromTemplate(draft.id);
+                  if (clone) pushStrategyToDb(clone).catch((err) =>
+                    console.warn('[StrategyForm] clone DB push failed:', err),
+                  );
+                }}
                 className="btn-sm btn-primary"
                 title="Clone as a working strategy"
               >

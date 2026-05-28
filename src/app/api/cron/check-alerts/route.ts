@@ -129,6 +129,8 @@ async function runCheckAlerts(): Promise<Response> {
       candleTime:          evalResult.candleTime,
       telegramDelivered:   telegramResult.ok,
       conditionsSnapshot:  evalResult.conditionGroups,
+      rating:              evalResult.rating,
+      entryPriceLimit:     evalResult.entryPriceLimit,
     }).catch((err) => console.error('[cron:check-alerts] logStrategySignal failed:', err));
 
     strategyDebug.push({

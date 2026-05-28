@@ -273,6 +273,10 @@ ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS conditions_snapshot JSONB;
 ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS actual_entry_price  NUMERIC(20,8);
 ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS actual_exit_price   NUMERIC(20,8);
 
+-- ALTER for new rating + limit-entry columns (idempotent):
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS rating             SMALLINT;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS entry_price_limit  NUMERIC(20,8);
+
 -- Dedup key for cross-machine import: one signal per strategy per candle bar.
 -- The cron already enforces this via last_notified_trade_time; this constraint
 -- makes ON CONFLICT DO NOTHING reliable during import.

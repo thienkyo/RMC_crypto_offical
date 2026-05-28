@@ -181,115 +181,153 @@ export interface ConditionGroupDisplay {
   conditionOperator: 'and' | 'or';
   /** Optional human label for the group. */
   label?:            string;
-  /** Structured conditions with pass/fail state and live value. */
-  conditions:        Array<{ label: string; passed: boolean; value?: number }>;
+  /** Structured conditions with pass/fail state, live value, and check metadata. */
+  conditions: Array<{
+    label:         string;
+    passed:        boolean;
+    value?:        number;
+    checkCandles?: number;
+    checkMode?:    'confirmation' | 'lookback';
+  }>;
 }
 
 /**
- * Strategy signal message.
+ * Strategy signal message — new format with icons, entry price, and
+ * only the fired groups shown (highest-scoring first).
  *
- * 📈 Strategy Signal — "RSI + EMA Pullback"
- * RSI oversold + EMA crossover — high confidence  ← longName (optional)
- * Rating:      ⭐⭐⭐
- * Symbol:      BTCUSDT  |  4h
- * Signal:      🟢 LONG ENTRY
- * Price:       $62,840
- * SL:          $61,200  (-2.6%)
- * TP:          $65,400  (+4.1%)
- * Candle:      2026-05-08 21:00 (UTC+7)
+ * 📈 Strategy Signal — "L_BTC"
+ * 🏅 Rating:    ⭐⭐⭐⭐
+ * 🪙 Symbol:    BTCUSDT  |  4h
+ * 📡 Signal:    🟢 LONG ENTRY
+ * 💵 Price:     $74,449
+ * 🎯 Entry:     $72,216
+ * 🛡 SL:        $70,050  (-3.0%)
+ * 🏆 TP:        $75,827  (+5.0%)
+ * 🕯 Candle:    2026-05-28 07:00 (UTC+7)
  *
- * Conditions:
- *   ✅ RSI(14) < 35
- *   AND ✅ MACD(12,26,9) < 0
- * ── OR ──
- *   ✅ Three Crows > 0
- * ── AND filter ──
- *   ✅ ADX(14) > 25
- *   OR ✅ BB%B(20,2) > 1.0
+ *   [BBRSI] ⭐⭐
+ * ✅     RSI(14) < 40  →  30.22
+ * ✅ AND BBPCT(14,2) < 0.09  →  -0.0022  c2
  */
 export function formatStrategySignalMessage(opts: {
-  strategyName:    string;
-  /** Verbose name displayed in the Telegram message; falls back to strategyName. */
-  longName?:       string;
-  /** 1–7 star rating (computed from total entry condition count). */
-  rating:          number;
-  symbol:          string;
-  timeframe:       string;
-  direction:       'long' | 'short';
-  entryPrice:      number;
-  stopLossPct:     number;    // 0 = disabled
-  takeProfitPct:   number;    // 0 = disabled
-  /** Structured condition groups — carries AND/OR operator info. */
-  conditionGroups: ConditionGroupDisplay[];
-  timestamp:       number;    // Unix ms of the entry candle
+  strategyName:     string;
+  longName?:        string;
+  /** Per-signal score from signalScore() — 1–7 stars. */
+  rating:           number;
+  symbol:           string;
+  timeframe:        string;
+  direction:        'long' | 'short';
+  entryPrice:       number;
+  /** Limit-order price = entryPrice × 0.97. Omit to hide the Entry line. */
+  entryPriceLimit?: number;
+  stopLossPct:      number;
+  takeProfitPct:    number;
+  conditionGroups:  ConditionGroupDisplay[];
+  timestamp:        number;
 }): string {
   const {
-    strategyName, longName, rating, symbol, timeframe, direction,
-    entryPrice, stopLossPct, takeProfitPct, conditionGroups, timestamp,
+    strategyName, rating, symbol, timeframe, direction,
+    entryPrice, entryPriceLimit, stopLossPct, takeProfitPct,
+    conditionGroups, timestamp,
   } = opts;
 
-  const W = 13; // label column width ("Take profit:" = 12 + 1 space)
+  const W        = 9;  // label field width after icon (icon = 1 emoji + 1 space)
+  const isLong   = direction === 'long';
+  const stars    = '⭐'.repeat(Math.min(7, Math.max(1, rating)));
+  const anchor   = entryPriceLimit ?? entryPrice;
+  const slPrice  = stopLossPct   > 0 ? anchor * (isLong ? 1 - stopLossPct   / 100 : 1 + stopLossPct   / 100) : null;
+  const tpPrice  = takeProfitPct > 0 ? anchor * (isLong ? 1 + takeProfitPct / 100 : 1 - takeProfitPct / 100) : null;
 
-  const isLong     = direction === 'long';
-  const signalIcon = isLong ? '🟢' : '🔴';
-  const signalText = isLong ? 'LONG ENTRY' : 'SHORT ENTRY';
+  // ── Header ─────────────────────────────────────────────────────────────────
+  const lines: string[] = [
+    `📈 Strategy Signal — "${strategyName}"`,
+    `🏅 ${lbl('Rating:', W)}${stars}`,
+    `🪙 ${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,
+    `📡 ${lbl('Signal:', W)}${isLong ? '🟢' : '🔴'} ${isLong ? 'LONG ENTRY' : 'SHORT ENTRY'}`,
+    `💵 ${lbl('Price:', W)}${fmtPrice(entryPrice)}`,
+  ];
 
-  const slPrice = stopLossPct   > 0 ? entryPrice * (isLong ? 1 - stopLossPct / 100   : 1 + stopLossPct / 100)   : null;
-  const tpPrice = takeProfitPct > 0 ? entryPrice * (isLong ? 1 + takeProfitPct / 100 : 1 - takeProfitPct / 100) : null;
-
-  const stars = '⭐'.repeat(Math.min(7, Math.max(1, rating)));
-
-  const lines: string[] = [`📈 Strategy Signal — "${strategyName}"`];
-
-  lines.push(
-    `${lbl('Rating:', W)}${stars}`,
-    `${lbl('Symbol:', W)}${symbol}  |  ${timeframe}`,
-    `${lbl('Signal:', W)}${signalIcon} ${signalText}`,
-    `${lbl('Price:', W)}${fmtPrice(entryPrice)}`,
-  );
-
+  if (entryPriceLimit != null) {
+    lines.push(`🎯 ${lbl('Entry:', W)}${fmtPrice(entryPriceLimit)}`);
+  }
   if (slPrice !== null) {
-    lines.push(`${lbl('SL:', W)}${fmtPrice(slPrice)}  (${isLong ? '-' : '+'}${stopLossPct.toFixed(1)}%)`);
+    lines.push(`🛡 ${lbl('SL:', W)}${fmtPrice(slPrice)}  (${isLong ? '-' : '+'}${stopLossPct.toFixed(1)}%)`);
   }
   if (tpPrice !== null) {
-    lines.push(`${lbl('TP:', W)}${fmtPrice(tpPrice)}  (${isLong ? '+' : '-'}${takeProfitPct.toFixed(1)}%)`);
+    lines.push(`🏆 ${lbl('TP:', W)}${fmtPrice(tpPrice)}  (${isLong ? '+' : '-'}${takeProfitPct.toFixed(1)}%)`);
+  }
+  lines.push(`🕯 ${lbl('Candle:', W)}${fmtLocal(timestamp)}`);
+
+  // ── Condition groups ───────────────────────────────────────────────────────
+  const orGroups  = conditionGroups.filter((g, i) => i === 0 || g.groupOperator === 'or');
+  const andGroups = conditionGroups.filter((g, i) => i  > 0 && g.groupOperator === 'and');
+
+  // Only fired OR groups (at least one condition passed)
+  const firedOr = orGroups.filter((g) => g.conditions.some((c) => c.passed));
+
+  function orScore(g: ConditionGroupDisplay): number {
+    return g.conditions.filter((c) => c.passed).reduce((s, c) =>
+      s + 1 + Math.max(0, (c.checkCandles ?? 1) - 1) * 0.5, 0);
   }
 
-  lines.push(`${lbl('Candle:', W)}${fmtLocal(timestamp)}`);
+  // Sort highest score first
+  const sortedOr = [...firedOr].sort((a, b) => orScore(b) - orScore(a));
 
-  // ── Conditions block ───────────────────────────────────────────────────────
-  const nonEmptyGroups = conditionGroups.filter((g) => g.conditions.length > 0);
-  if (nonEmptyGroups.length > 0) {
+  if (sortedOr.length > 0 || andGroups.length > 0) {
     lines.push('');
-    lines.push('Conditions:');
 
-    for (let gi = 0; gi < nonEmptyGroups.length; gi++) {
-      const group   = nonEmptyGroups[gi]!;
-      const condOp  = group.conditionOperator.toUpperCase();
+    for (let gi = 0; gi < sortedOr.length; gi++) {
+      const g          = sortedOr[gi]!;
+      const condOp     = g.conditionOperator.toUpperCase();
+      const groupStars = '⭐'.repeat(Math.min(7, Math.max(1, Math.round(orScore(g)))));
 
-      // Inter-group separator (not before the first group)
-      if (gi > 0) {
-        const sep = group.groupOperator === 'and' ? '── AND filter ──' : '── OR ──';
-        lines.push(sep);
+      if (gi > 0) lines.push('── also fired ──');
+
+      // Group label + per-group stars (only when there's a label or multiple groups)
+      const hasLabel = !!g.label?.trim();
+      if (hasLabel || sortedOr.length > 1) {
+        const labelStr = hasLabel ? `[${g.label!.trim()}]` : '';
+        lines.push(`  ${labelStr} ${groupStars}`.trimEnd());
       }
 
-      // Optional group label
-      if (group.label?.trim()) {
-        lines.push(`  [${group.label.trim()}]`);
+      // Only passed conditions; tick at line start
+      let firstPassed = true;
+      for (const cond of g.conditions) {
+        if (!cond.passed) continue;
+        const valSuffix   = cond.value !== undefined ? `  →  ${fmtValue(cond.value)}` : '';
+        const checkSuffix = fmtCheckSuffix(cond.checkMode, cond.checkCandles);
+        const opPrefix    = firstPassed ? '✅    ' : `✅ ${condOp} `;
+        lines.push(`${opPrefix}${cond.label}${valSuffix}${checkSuffix}`);
+        firstPassed = false;
       }
+    }
 
-      // Conditions with intra-group operator between them
-      for (let ci = 0; ci < group.conditions.length; ci++) {
-        const cond = group.conditions[ci]!;
-        const icon = cond.passed ? '✅' : '⚪';
-        const valSuffix = cond.value !== undefined ? `  →  ${fmtValue(cond.value)}` : '';
-        const prefix = ci === 0 ? `  ${icon}` : `  ${condOp} ${icon}`;
-        lines.push(`${prefix} ${cond.label}${valSuffix}`);
+    for (const g of andGroups) {
+      lines.push('── AND filter ──');
+      if (g.label?.trim()) lines.push(`  [${g.label.trim()}]`);
+      const condOp    = g.conditionOperator.toUpperCase();
+      let firstPassed = true;
+      for (const cond of g.conditions) {
+        const valSuffix   = cond.value !== undefined ? `  →  ${fmtValue(cond.value)}` : '';
+        const checkSuffix = fmtCheckSuffix(cond.checkMode, cond.checkCandles);
+        const opPrefix    = firstPassed ? '✅    ' : `✅ ${condOp} `;
+        lines.push(`${opPrefix}${cond.label}${valSuffix}${checkSuffix}`);
+        firstPassed = false;
       }
     }
   }
 
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
+}
+
+/** Suffix like "  c2" or "  l3" — omitted when candles <= 1 (default). */
+function fmtCheckSuffix(
+  mode:    'confirmation' | 'lookback' | undefined,
+  candles: number | undefined,
+): string {
+  const n = candles ?? 1;
+  if (n <= 1) return '';
+  return `  ${(mode ?? 'confirmation') === 'lookback' ? 'l' : 'c'}${n}`;
 }
 
 

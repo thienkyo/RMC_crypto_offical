@@ -27,8 +27,8 @@ import { buildIndicatorCache,
          conditionCacheKey,
          evaluateConditionChecked,
          evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
-import { formatStrategySignalMessage,
-         strategyRating }              from '@/lib/alerts/telegram';
+import { formatStrategySignalMessage }  from '@/lib/alerts/telegram';
+import { signalScore }                 from '@/lib/strategy/rating';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
 import type { Strategy, StrategyCondition } from '@/types/strategy';
 import type { Candle, Timeframe }      from '@/types/market';
@@ -37,7 +37,7 @@ import type { ConditionSnapshotGroup } from '@/lib/db/signals';
 const CANDLE_WINDOW = 1_000;
 
 export type StrategyNotifyResult =
-  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; debug?: StrategyNotifyDebug }
+  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; debug?: StrategyNotifyDebug }
   | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error'; debug?: StrategyNotifyDebug };
 
 /** Debug context surfaced in the cron Manual response. */
@@ -134,8 +134,9 @@ export async function evaluateStrategySignal(
     return { fired: false, strategy, reason: 'dedup_blocked', debug: fullDebug };
   }
 
-  // ── 7. Build message ───────────────────────────────────────────────────────
-  // Map to structured display format for Telegram
+  // ── 7. Build condition snapshot ────────────────────────────────────────────
+  // Include checkCandles + checkMode in the snapshot so signalScore() can
+  // compute the confirmation bonus from stored data in future reads.
   const conditionGroups = strategy.entryConditions
     .filter((g) => g.conditions.some((c) => c.enabled !== false))
     .map((g) => ({
@@ -145,32 +146,51 @@ export async function evaluateStrategySignal(
       conditions:        g.conditions
         .filter((c) => c.enabled !== false)
         .map((c) => {
-          const key = conditionCacheKey(c);
+          const key     = conditionCacheKey(c);
           const timeMap = cache.get(key);
-          const value = timeMap?.get(lastClosed.openTime);
+          const value   = timeMap?.get(lastClosed.openTime);
           return {
-            label:  conditionLabel(c),
-            passed: conditionPassesCheck(c, closed, cache),
+            label:        conditionLabel(c),
+            passed:       conditionPassesCheck(c, closed, cache),
             value,
+            checkCandles: c.checkCandles ?? 1,
+            checkMode:    c.checkMode    ?? 'confirmation',
           };
         }),
     }));
 
+  // ── 8. Compute per-signal rating + limit entry price ──────────────────────
+  const rating          = signalScore(conditionGroups);
+  const entryPriceLimit = parseFloat((lastClosed.close * 0.97).toFixed(8));
+  const direction       = strategy.action.type === 'enter_long' ? 'long' : 'short';
+
+  // ── 9. Build Telegram message ──────────────────────────────────────────────
   const message = formatStrategySignalMessage({
-    strategyName:  strategy.name,
-    longName:      strategy.longName,
-    rating:        strategyRating(strategy.entryConditions),
-    symbol:        strategy.symbol,
-    timeframe:     strategy.timeframe,
-    direction:     strategy.action.type === 'enter_long' ? 'long' : 'short',
-    entryPrice:    lastClosed.close,
-    stopLossPct:   strategy.risk.stopLossPct,
-    takeProfitPct: strategy.risk.takeProfitPct,
+    strategyName:    strategy.name,
+    longName:        strategy.longName,
+    rating,
+    symbol:          strategy.symbol,
+    timeframe:       strategy.timeframe,
+    direction,
+    entryPrice:      lastClosed.close,
+    entryPriceLimit,
+    stopLossPct:     strategy.risk.stopLossPct,
+    takeProfitPct:   strategy.risk.takeProfitPct,
     conditionGroups,
-    timestamp:     lastClosed.closeTime + 1,
+    timestamp:       lastClosed.closeTime + 1,
   });
 
-  return { fired: true, strategy, message, entryPrice: lastClosed.close, candleTime: lastClosed.openTime, conditionGroups, debug: fullDebug };
+  return {
+    fired: true,
+    strategy,
+    message,
+    entryPrice: lastClosed.close,
+    entryPriceLimit,
+    rating,
+    candleTime: lastClosed.openTime,
+    conditionGroups,
+    debug: fullDebug,
+  };
 }
 
 // ─── Per-condition check ──────────────────────────────────────────────────────

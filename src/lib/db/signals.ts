@@ -26,6 +26,10 @@ export interface LogSignalInput {
   telegramDelivered:   boolean;
   /** Frozen snapshot of conditions + their indicator values at fire time. */
   conditionsSnapshot?: ConditionSnapshotGroup[];
+  /** Dynamic 1–7 star rating computed from conditions that actually fired. */
+  rating?:             number;
+  /** Limit-order entry price = signalPrice × 0.97 */
+  entryPriceLimit?:    number;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,8 +44,8 @@ export async function logStrategySignal(input: LogSignalInput): Promise<number> 
     `INSERT INTO strategy_signals
        (strategy_id, strategy_name, symbol, timeframe, direction,
         entry_price, stop_loss_pct, take_profit_pct, candle_time,
-        telegram_delivered, conditions_snapshot)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,to_timestamp($9::bigint / 1000.0),$10,$11)
+        telegram_delivered, conditions_snapshot, rating, entry_price_limit)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,to_timestamp($9::bigint / 1000.0),$10,$11,$12,$13)
      RETURNING id`,
     [
       input.strategyId,
@@ -55,6 +59,8 @@ export async function logStrategySignal(input: LogSignalInput): Promise<number> 
       input.candleTime,
       input.telegramDelivered,
       snapshot,
+      input.rating   ?? null,
+      input.entryPriceLimit ?? null,
     ],
   );
   return rows[0]!.id;
@@ -81,6 +87,8 @@ export async function getAllSignals(): Promise<StrategySignalRow[]> {
     outcome_note:        string | null;
     outcome_at:          Date | null;
     telegram_delivered:  boolean;
+    rating:              number | null;
+    entry_price_limit:   string | null;
   }>(
     `SELECT id, strategy_id, strategy_name, symbol, timeframe, direction,
             entry_price, stop_loss_pct, take_profit_pct,
@@ -88,7 +96,7 @@ export async function getAllSignals(): Promise<StrategySignalRow[]> {
             conditions_snapshot,
             actual_entry_price, actual_exit_price,
             pnl_pct, outcome_note, outcome_at,
-            telegram_delivered
+            telegram_delivered, rating, entry_price_limit
      FROM strategy_signals
      ORDER BY fired_at DESC`,
   );
@@ -112,6 +120,10 @@ export async function getAllSignals(): Promise<StrategySignalRow[]> {
     outcome_note:        r.outcome_note,
     outcome_at:          r.outcome_at ? r.outcome_at.getTime() : null,
     telegram_delivered:  r.telegram_delivered,
+    rating:              r.rating ?? null,
+    entry_price_limit:   r.entry_price_limit !== null && r.entry_price_limit !== undefined
+                           ? parseFloat(r.entry_price_limit as unknown as string)
+                           : null,
   }));
 }
 
@@ -136,6 +148,8 @@ export async function getSignalsForStrategy(strategyId: string): Promise<Strateg
     outcome_note:        string | null;
     outcome_at:          Date | null;
     telegram_delivered:  boolean;
+    rating:              number | null;
+    entry_price_limit:   string | null;
   }>(
     `SELECT id, strategy_id, strategy_name, symbol, timeframe, direction,
             entry_price, stop_loss_pct, take_profit_pct,
@@ -169,6 +183,10 @@ export async function getSignalsForStrategy(strategyId: string): Promise<Strateg
     outcome_note:        r.outcome_note,
     outcome_at:          r.outcome_at ? r.outcome_at.getTime() : null,
     telegram_delivered:  r.telegram_delivered,
+    rating:              r.rating ?? null,
+    entry_price_limit:   r.entry_price_limit !== null && r.entry_price_limit !== undefined
+                           ? parseFloat(r.entry_price_limit as unknown as string)
+                           : null,
   }));
 }
 

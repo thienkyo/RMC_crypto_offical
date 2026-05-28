@@ -1,65 +1,122 @@
 /**
- * Strategy difficulty rating — browser-safe utility.
+ * Strategy rating utilities — browser-safe (no server deps).
  *
- * Kept separate from telegram.ts so it can be imported by client components
- * (ChartLayout) without pulling in the server-only pg / dns dependency chain.
+ * Two functions:
+ *
+ *   signalScore(firedGroups)
+ *     Dynamic per-signal score computed from conditions that actually PASSED.
+ *     Used by: Telegram message (fire-time), SignalHistory row, Portfolio row.
+ *
+ *   strategyScoreRange(entryGroups)
+ *     Structural min/max range from the strategy definition.
+ *     Used by: ChartLayout signal popover (no fire data available).
+ *
+ *   strategyRating(entryGroups)  ← backward-compat shim
+ *     Returns the midpoint of strategyScoreRange. Still used by telegram.ts
+ *     re-export and any code not yet migrated.
  */
 
-import type { ConditionGroup } from '@/types/strategy';
+import type { ConditionGroup }         from '@/types/strategy';
+import type { ConditionSnapshotGroup }  from '@/lib/strategy/signalMetrics';
+
+// ─── Fire-time score ──────────────────────────────────────────────────────────
 
 /**
- * Compute a 1–7 star difficulty rating from a strategy's entry condition groups.
+ * Extended snapshot item that may carry checkCandles (added in the new schema).
+ * Old snapshots lack it — accessing returns undefined, which safely defaults to 1.
+ */
+interface SnapshotItemWithCheck {
+  passed:        boolean;
+  checkCandles?: number;
+}
+
+/**
+ * Compute a 1–7 star rating from the snapshot groups recorded when a signal fired.
+ * Only conditions that PASSED contribute to the score.
  *
- * Accounts for group structure — more OR groups = more alternative entry paths =
- * easier to fire = fewer stars. Formula:
- *
- *   AND groups   → +1 flat each (required filters; OR-logic inside means only
- *                  1 condition must fire, so counting all conditions overstates
- *                  their contribution)
- *
- *   OR groups    → avg(conditions per OR group) — how hard each path is on average,
- *                  not the inflated total sum
- *
- *   OR penalty   → −0.5 per extra OR group beyond the first (each extra path
- *                  reduces selectivity)
- *
- *   Confirmation → +0.5 per extra confirmation candle across all active conditions
+ * Algorithm:
+ *   OR groups  → score each by passed-condition count + confirmation bonus;
+ *                take the MAX (highest-scoring group wins)
+ *   AND groups → sum passed conditions across all (always additive — they always fire)
+ *   Bonus      → +0.5 per extra checkCandle on each passed condition
  *
  * Result clamped to [1, 7].
  */
-export function strategyRating(entryGroups: ConditionGroup[]): number {
-  // Work only with groups that have at least one active condition
-  const active = entryGroups.filter((g) =>
+export function signalScore(firedGroups: ConditionSnapshotGroup[]): number {
+  const orGroups  = firedGroups.filter((g, i) => i === 0 || g.groupOperator === 'or');
+  const andGroups = firedGroups.filter((g, i) => i  > 0 && g.groupOperator === 'and');
+
+  function groupScore(g: ConditionSnapshotGroup): number {
+    const passed = g.conditions.filter((c) => c.passed) as SnapshotItemWithCheck[];
+    return passed.reduce((sum, c) => {
+      const extra = Math.max(0, (c.checkCandles ?? 1) - 1);
+      return sum + 1 + extra * 0.5;
+    }, 0);
+  }
+
+  const orScores   = orGroups.map(groupScore);
+  const bestOrScore = orScores.length > 0 ? Math.max(...orScores) : 0;
+  const andScore   = andGroups.reduce((sum, g) => sum + groupScore(g), 0);
+
+  return Math.min(7, Math.max(1, Math.round(bestOrScore + andScore)));
+}
+
+// ─── Structural score range ───────────────────────────────────────────────────
+
+export interface ScoreRange {
+  min: number;
+  max: number;
+}
+
+/**
+ * Compute the structural min/max possible score from a strategy definition
+ * (no fire data — used when only the strategy definition is available).
+ *
+ * min = smallest active OR group's score (easiest firing path)
+ *       + 1 per AND group (OR-within means at minimum 1 condition passes)
+ *
+ * max = largest active OR group's score (hardest path, all conditions pass)
+ *       + full score of each AND group (all conditions pass)
+ *
+ * Result clamped to [1, 7] per bound.
+ */
+export function strategyScoreRange(entryGroups: ConditionGroup[]): ScoreRange {
+  const activeGroups = entryGroups.filter((g) =>
     g.conditions.some((c) => c.enabled !== false),
   );
-  if (active.length === 0) return 1;
+  if (activeGroups.length === 0) return { min: 1, max: 1 };
 
-  // Mirror the evaluator: index 0 is always treated as an OR group
-  const orGroups  = active.filter((g, i) => i === 0 || (g.operator ?? 'or') === 'or');
-  const andGroups = active.filter((g, i) => i  >  0 &&  g.operator          === 'and');
+  const orGroups  = activeGroups.filter((g, i) => i === 0 || (g.operator ?? 'or') === 'or');
+  const andGroups = activeGroups.filter((g, i) => i  > 0 &&  g.operator          === 'and');
 
-  // AND groups: flat +1 each (required filter, but OR-logic inside = just need 1 cond)
-  const andScore = andGroups.length;
+  function condScore(g: ConditionGroup): number {
+    return g.conditions
+      .filter((c) => c.enabled !== false)
+      .reduce((sum, c) => {
+        const extra = Math.max(0, (c.checkCandles ?? 1) - 1);
+        return sum + 1 + extra * 0.5;
+      }, 0);
+  }
 
-  // OR groups: average active-condition count across groups
-  const orCondCounts = orGroups.map(
-    (g) => g.conditions.filter((c) => c.enabled !== false).length,
-  );
-  const avgOrScore = orCondCounts.length > 0
-    ? orCondCounts.reduce((a, b) => a + b, 0) / orCondCounts.length
-    : 0;
+  const orScores = orGroups.map(condScore);
+  const minOr    = orScores.length > 0 ? Math.min(...orScores) : 1;
+  const maxOr    = orScores.length > 0 ? Math.max(...orScores) : 1;
 
-  // Each extra OR group beyond the first opens another entry path → penalty
-  const orPenalty = Math.max(0, orGroups.length - 1) * 0.5;
+  // AND groups: min = 1 per group (only 1 condition needs to pass, OR-within)
+  //             max = full score of all conditions
+  const andMin = andGroups.length;
+  const andMax = andGroups.reduce((sum, g) => sum + condScore(g), 0);
 
-  // Confirmation bonus: +0.5 per extra candle on confirmation-mode conditions
-  const confirmBonus = active
-    .flatMap((g) => g.conditions.filter((c) => c.enabled !== false))
-    .reduce((sum, c) => {
-      if ((c.checkMode ?? 'confirmation') !== 'confirmation') return sum;
-      return sum + Math.max(0, (c.checkCandles ?? 1) - 1) * 0.5;
-    }, 0);
+  return {
+    min: Math.min(7, Math.max(1, Math.round(minOr + andMin))),
+    max: Math.min(7, Math.max(1, Math.round(maxOr + andMax))),
+  };
+}
 
-  const score = andScore + avgOrScore - orPenalty + confirmBonus;
-  return Math.min(7, Math.max(1, Math.round(score)));
+// ─── Backward-compat shim ────────────────────────────────────────────────────
+// telegram.ts re-exports this; keep it so callers don't break during migration.
+
+export function strategyRating(entryGroups: ConditionGroup[]): number {
+  const { min, max } = strategyScoreRange(entryGroups);
+  return Math.round((min + max) / 2);
 }

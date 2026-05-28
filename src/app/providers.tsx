@@ -1,15 +1,16 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useState, useEffect, type ReactNode } from 'react';
-import { useStrategyStore } from '@/store/strategy';
-import { syncStrategies } from '@/lib/strategy/sync';
+import { useState, type ReactNode } from 'react';
 
 /**
  * TanStack Query provider.
  *
  * We create the QueryClient inside the component (not at module level) so each
  * server render gets its own instance — required for Next.js App Router SSR safety.
+ *
+ * Note: startup DB hydration is now handled by StrategyBuilder on mount (DB-first
+ * architecture). The old syncStrategies reconciliation loop is no longer needed.
  */
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -28,14 +29,6 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       }),
   );
-
-  // Perform background synchronization on mount
-  useEffect(() => {
-    const state = useStrategyStore.getState();
-    syncStrategies(state.strategies, state.setStrategies).catch((err) =>
-      console.warn('[sync] Startup background sync failed:', err)
-    );
-  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

@@ -262,8 +262,15 @@ export function formatStrategySignalMessage(opts: {
   const orGroups  = conditionGroups.filter((g, i) => i === 0 || g.groupOperator === 'or');
   const andGroups = conditionGroups.filter((g, i) => i  > 0 && g.groupOperator === 'and');
 
-  // Only fired OR groups (at least one condition passed)
-  const firedOr = orGroups.filter((g) => g.conditions.some((c) => c.passed));
+  // A group is "fired" iff its own AND/OR logic was satisfied. Must match the
+  // canonical evaluator in evaluate.ts — using .some() unconditionally here
+  // would mark any partially-matched AND group as fired, which is misleading.
+  const groupFired = (g: ConditionGroupDisplay): boolean =>
+    g.conditionOperator === 'and'
+      ? g.conditions.every((c) => c.passed)
+      : g.conditions.some((c) => c.passed);
+
+  const firedOr = orGroups.filter(groupFired);
 
   function orScore(g: ConditionGroupDisplay): number {
     return g.conditions.filter((c) => c.passed).reduce((s, c) =>
@@ -303,16 +310,22 @@ export function formatStrategySignalMessage(opts: {
     }
 
     for (const g of andGroups) {
+      if (!groupFired(g)) continue;        // skip filters that didn't actually pass
       lines.push('── AND filter ──');
       if (g.label?.trim()) lines.push(`  [${g.label.trim()}]`);
       const condOp    = g.conditionOperator.toUpperCase();
-      let firstPassed = true;
+      let firstShown  = true;
+      // For 'or' inner-operator only the passing conditions are interesting.
+      // For 'and' inner-operator every condition passed (otherwise the group
+      // wouldn't have fired), so we naturally render all of them.
       for (const cond of g.conditions) {
+        if (g.conditionOperator === 'or' && !cond.passed) continue;
+        const tick        = cond.passed ? '✅' : '❌';
         const valSuffix   = cond.value !== undefined ? `  →  ${fmtValue(cond.value)}` : '';
         const checkSuffix = fmtCheckSuffix(cond.checkMode, cond.checkCandles);
-        const opPrefix    = firstPassed ? '✅    ' : `✅ ${condOp} `;
+        const opPrefix    = firstShown ? `${tick}    ` : `${tick} ${condOp} `;
         lines.push(`${opPrefix}${cond.label}${valSuffix}${checkSuffix}`);
-        firstPassed = false;
+        firstShown = false;
       }
     }
   }

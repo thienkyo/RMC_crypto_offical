@@ -6,7 +6,8 @@
  * Paper trading only — this never triggers a real order.
  */
 
-import type { StrategyAction, RiskManagement, ActionType } from '@/types/strategy';
+import type { StrategyAction, RiskManagement, ActionType, EntryPriceOffset } from '@/types/strategy';
+import { DEFAULT_ENTRY_OFFSET } from '@/lib/strategy/entryPrice';
 
 interface Props {
   action:   StrategyAction;
@@ -20,11 +21,17 @@ const ACTION_LABELS: Record<ActionType, string> = {
 };
 
 export function ActionEditor({ action, risk, onChange }: Props) {
+  // Resolve the effective offset (absent = default 2%)
+  const offset: EntryPriceOffset = action.entryPriceOffset ?? DEFAULT_ENTRY_OFFSET;
+
   function setAction<K extends keyof StrategyAction>(key: K, value: StrategyAction[K]) {
     onChange({ ...action, [key]: value }, risk);
   }
   function setRisk<K extends keyof RiskManagement>(key: K, value: RiskManagement[K]) {
     onChange(action, { ...risk, [key]: value });
+  }
+  function setOffset(patch: Partial<EntryPriceOffset>) {
+    onChange({ ...action, entryPriceOffset: { ...offset, ...patch } }, risk);
   }
 
   return (
@@ -81,6 +88,49 @@ export function ActionEditor({ action, risk, onChange }: Props) {
               : `tip: set size to ${Math.round(100 / (action.maxPositions ?? 1))}% to stay within 100%`}
           </span>
         </label>
+      </div>
+
+      {/* ── Limit entry offset ────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <label className="field-label">Limit entry</label>
+
+        <select
+          value={offset.mode}
+          onChange={(e) => setOffset({ mode: e.target.value as EntryPriceOffset['mode'] })}
+          className="select-sm"
+        >
+          <option value="pct">%</option>
+          <option value="abs">$</option>
+        </select>
+
+        <label className="flex items-center gap-2 text-sm text-text-muted">
+          <input
+            type="number"
+            min={0}
+            step={offset.mode === 'pct' ? 0.1 : 1}
+            value={offset.value}
+            onChange={(e) => {
+              const v = Math.max(0, parseFloat(e.target.value) || 0);
+              setOffset({ value: v });
+            }}
+            className="input-xs w-20"
+          />
+          <span>
+            {offset.mode === 'pct' ? '% below signal' : 'below signal'}
+            {offset.value === 0 && (
+              <span className="ml-1 text-text-muted/60">(market fill)</span>
+            )}
+          </span>
+        </label>
+
+        {/* Live preview */}
+        {offset.value > 0 && (
+          <span className="text-[10px] font-mono text-text-muted/70">
+            {offset.mode === 'pct'
+              ? `entry ≈ signal × ${((100 - offset.value) / 100).toFixed(4)}`
+              : `entry ≈ signal − ${offset.value}`}
+          </span>
+        )}
       </div>
 
       {/* ── Risk management ────────────────────────────────────────────── */}

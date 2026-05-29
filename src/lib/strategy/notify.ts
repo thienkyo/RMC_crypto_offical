@@ -30,6 +30,7 @@ import { buildIndicatorCache,
 import { formatStrategySignalMessage }  from '@/lib/alerts/telegram';
 import { signalScore }                 from '@/lib/strategy/rating';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
+import { computeEntryPriceLimit }      from '@/lib/strategy/entryPrice';
 import type { Strategy, StrategyCondition } from '@/types/strategy';
 import type { Candle, Timeframe }      from '@/types/market';
 import type { ConditionSnapshotGroup } from '@/lib/db/signals';
@@ -160,9 +161,11 @@ export async function evaluateStrategySignal(
     }));
 
   // ── 8. Compute per-signal rating + limit entry price ──────────────────────
-  const rating          = signalScore(conditionGroups);
-  const entryPriceLimit = parseFloat((lastClosed.close * 0.97).toFixed(8));
-  const direction       = strategy.action.type === 'enter_long' ? 'long' : 'short';
+  const rating     = signalScore(conditionGroups);
+  const direction  = strategy.action.type === 'enter_long' ? 'long' : 'short';
+  const entryPriceLimit = parseFloat(
+    computeEntryPriceLimit(lastClosed.close, strategy.action.entryPriceOffset, direction).toFixed(8),
+  );
 
   // ── 9. Build Telegram message ──────────────────────────────────────────────
   const message = formatStrategySignalMessage({

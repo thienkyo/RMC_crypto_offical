@@ -32,6 +32,7 @@ import type {
 } from '@/types/strategy';
 import { buildIndicatorCache, evaluateConditionGroupsChecked } from './evaluate';
 import { computeMetrics } from './metrics';
+import { computeEntryPriceLimit, isMarketFill } from './entryPrice';
 
 export interface BacktestOptions {
   /** Starting portfolio value in quote currency. Default: 10 000. */
@@ -94,8 +95,24 @@ export function runBacktest(
     entryTime:  number;
   }
 
+  /**
+   * A pending limit order placed when an entry signal fired but the limit has
+   * not yet been touched by a subsequent bar.  NULL = no pending order.
+   *
+   * The limit is cancelled if:
+   *   • The bar's price action fills it  → becomes an open position
+   *   • An exit signal fires             → cancelled (no position opened)
+   * It is never force-filled at end-of-data.
+   */
+  interface PendingLimit {
+    limitPrice: number;
+  }
+
   /** Currently open positions, oldest first. */
-  let openPositions: OpenPos[] = [];
+  let openPositions: OpenPos[]     = [];
+  let pendingLimit:  PendingLimit | null = null;
+
+  const entryOffset = strategy.action.entryPriceOffset;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -203,8 +220,8 @@ export function runBacktest(
     }
 
     // ── Phase 2: Exit signal — close ALL remaining open positions ────────────
-    //   Use openTime: LWC keys every bar by openTime, so exit markers must
-    //   match this candle's openTime to render on the correct bar.
+    //   Also cancels any pending limit order: the exit condition says the
+    //   trade thesis has changed, so we don't want a stale limit filling later.
     if (
       openPositions.length > 0 &&
       evaluateConditionGroupsChecked(strategy.exitConditions, candles, i, cache)
@@ -213,14 +230,51 @@ export function runBacktest(
         closePos(pos, candle.close, candle.openTime, 'signal');
       }
       openPositions = [];
+      pendingLimit  = null;
     }
 
-    // ── Phase 3: Entry signal — open if below the maxPositions cap ───────────
+    // ── Phase 3a: Check if the pending limit order fills on this bar ─────────
+    //   Fill rule (matches exchange limit-order semantics):
+    //     Long:  bar.low  <= limitPrice → fill at min(bar.open, limitPrice)
+    //     Short: bar.high >= limitPrice → fill at max(bar.open, limitPrice)
+    //   If the bar gapped through the limit (open already past it), fill at open
+    //   (better than the limit, so we use the open price).
+    if (pendingLimit !== null && openPositions.length < maxPositions) {
+      const { limitPrice } = pendingLimit;
+      const fills =
+        direction === 'long'
+          ? candle.low  <= limitPrice
+          : candle.high >= limitPrice;
+
+      if (fills) {
+        const fillPrice =
+          direction === 'long'
+            ? Math.min(candle.open, limitPrice)
+            : Math.max(candle.open, limitPrice);
+        openPos(fillPrice, candle.openTime);
+        pendingLimit = null;
+      }
+    }
+
+    // ── Phase 3b: Entry signal ────────────────────────────────────────────────
+    //   Don't stack limit orders: skip if one is already pending.
+    //   Market fill (offset === 0 or absent): fill immediately at bar close.
+    //   Limit fill: store a pending limit; it fills when a subsequent bar
+    //   touches the price (Phase 3a above).
     if (
       openPositions.length < maxPositions &&
+      pendingLimit === null &&
       evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache)
     ) {
-      openPos(candle.close, candle.openTime);
+      if (isMarketFill(entryOffset)) {
+        // Market fill — same behaviour as before this feature was added
+        openPos(candle.close, candle.openTime);
+      } else {
+        // Place a limit order; it fills when a future bar's range touches limitPrice
+        pendingLimit = {
+          limitPrice: computeEntryPriceLimit(candle.close, entryOffset, direction),
+        };
+      }
     }
   }
 

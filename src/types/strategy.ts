@@ -91,6 +91,26 @@ export interface ConditionGroup {
 
 export type ActionType = 'enter_long' | 'enter_short';
 
+/**
+ * Configures how far below (long) or above (short) the signal price to place
+ * the limit entry order.
+ *
+ * mode 'pct' — offset as percentage of signal price:
+ *   long  → entry = signal × (100 − value) / 100
+ *   short → entry = signal × (100 + value) / 100
+ *
+ * mode 'abs' — offset as absolute quote-currency amount:
+ *   long  → entry = signal − value
+ *   short → entry = signal + value
+ *
+ * value === 0 disables the limit (market fill at signal close).
+ */
+export interface EntryPriceOffset {
+  mode:  'pct' | 'abs';
+  /** Percentage (e.g. 2 → 2%) or absolute amount. Must be >= 0. */
+  value: number;
+}
+
 export interface StrategyAction {
   type: ActionType;
   /** Percentage of portfolio capital to allocate per position (1–100). */
@@ -102,6 +122,12 @@ export interface StrategyAction {
    * Tip: set positionSizePct = 100 / maxPositions to stay fully invested.
    */
   maxPositions: number;
+  /**
+   * Limit entry offset below (long) or above (short) the signal price.
+   * Absent or value === 0 → market fill at signal bar close.
+   * Default when absent: { mode: 'pct', value: 2 }.
+   */
+  entryPriceOffset?: EntryPriceOffset;
 }
 
 export interface RiskManagement {

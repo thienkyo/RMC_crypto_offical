@@ -97,7 +97,7 @@ const trendReversalLong: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 3, takeProfitPct: 6 },
 };
 
@@ -161,7 +161,7 @@ const goldenTrioLong: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 
@@ -214,7 +214,7 @@ const adxTrendLong: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2, takeProfitPct: 4 },
 };
 
@@ -289,7 +289,7 @@ const volatilitySqueezeL: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 
@@ -353,7 +353,7 @@ const trendSniperL: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 3, takeProfitPct: 7 },
 };
 
@@ -429,7 +429,7 @@ const meanReversionL: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 3, takeProfitPct: 8 },
 };
 
@@ -493,7 +493,7 @@ const trendReversal: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 3, takeProfitPct: 6 },
 };
 
@@ -553,7 +553,7 @@ const goldenTrio: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 
@@ -603,7 +603,7 @@ const adxTrend: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2, takeProfitPct: 4 },
 };
 
@@ -676,7 +676,7 @@ const volatilitySqueezeS: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 
@@ -739,7 +739,7 @@ const trendSniperS: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 3, takeProfitPct: 7 },
 };
 
@@ -813,7 +813,7 @@ const meanReversionS: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 3, takeProfitPct: 8 },
 };
 
@@ -884,7 +884,7 @@ const macdCrossTrendLong: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 
@@ -945,7 +945,7 @@ const macdCrossTrendShort: Strategy = {
     },
   ],
   exitConditions: [],
-  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1 },
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 2 } },
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 

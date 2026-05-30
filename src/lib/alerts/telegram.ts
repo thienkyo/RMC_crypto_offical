@@ -90,18 +90,6 @@ export async function sendTelegramAlert(
     channelLabel = 'signal';
   }
 
-  // Defensive dedup. parseChatIds already dedupes, but this catches any future
-  // callsite that builds chatIds another way. Telegram has no idempotency key
-  // so duplicate chat IDs = literal duplicate messages in the chat.
-  const beforeDedup = chatIds.length;
-  chatIds = Array.from(new Set(chatIds));
-  if (chatIds.length < beforeDedup) {
-    console.warn(
-      `[telegram] Dropped ${beforeDedup - chatIds.length} duplicate chat ID(s) ` +
-      `from "${targetName}" — check your Settings page for repeated IDs.`,
-    );
-  }
-
   if (chatIds.length === 0) {
     const msg = `No ${channelLabel} chat IDs configured — add them on the Settings page`;
     console.warn(`[telegram] ${msg} (target: "${targetName}")`);

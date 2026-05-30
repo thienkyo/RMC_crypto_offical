@@ -130,6 +130,7 @@ function ParamEditor({ indicatorId, params }: ParamEditorProps) {
 export function IndicatorSelector() {
   const [open, setOpen]           = useState(false);
   const [configOpen, setConfigOpen] = useState<string | null>(null);
+  const [filter, setFilter]       = useState('');
   const ref                       = useRef<HTMLDivElement>(null);
   const activeIndicators          = useChartStore((s) => s.activeIndicators);
   const addIndicator              = useChartStore((s) => s.addIndicator);
@@ -150,12 +151,14 @@ export function IndicatorSelector() {
 
   const activeIds = new Set(activeIndicators.map((i) => i.id));
   const visibleCount = activeIndicators.filter((i) => i.visible).length;
+  const q = filter.trim().toLowerCase();
+  const matchesFilter = (name: string) => !q || name.toLowerCase().includes(q);
 
   return (
     <div ref={ref} className="relative">
       {/* Trigger button */}
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { setOpen((v) => !v); setFilter(''); }}
         className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-2
                    text-text-secondary hover:text-text-primary text-[11px] font-mono
                    border border-surface-border transition-colors"
@@ -170,16 +173,34 @@ export function IndicatorSelector() {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-56 bg-surface-2 border
-                        border-surface-border rounded-lg shadow-xl z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1 w-64 bg-surface-2 border
+                        border-surface-border rounded-lg shadow-xl z-50 overflow-hidden
+                        max-h-[70vh] flex flex-col">
+
+          {/* ── Filter input ─────────────────────────────────────────────── */}
+          <div className="px-2 py-2 border-b border-surface-border flex-shrink-0">
+            <input
+              autoFocus
+              type="text"
+              placeholder="Filter indicators…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="w-full bg-surface-3 border border-surface-border rounded px-2 py-1
+                         text-[11px] font-mono text-text-primary placeholder:text-text-muted/50
+                         focus:outline-none focus:border-accent"
+            />
+          </div>
+
+          {/* ── Scrollable list ───────────────────────────────────────────── */}
+          <div className="overflow-y-auto flex-1">
 
           {/* ── Active indicators (with config) ─────────────────────────── */}
-          {activeIndicators.length > 0 && (
+          {activeIndicators.filter((ai) => matchesFilter(INDICATORS[ai.id]?.name ?? ai.id)).length > 0 && (
             <>
               <div className="px-3 py-1.5 text-[10px] text-text-muted uppercase tracking-wider">
                 Active
               </div>
-              {activeIndicators.map((ai) => {
+              {activeIndicators.filter((ai) => matchesFilter(INDICATORS[ai.id]?.name ?? ai.id)).map((ai) => {
                 const indicator = INDICATORS[ai.id];
                 if (!indicator) return null;
                 const isConfigOpen = configOpen === ai.id;
@@ -275,7 +296,7 @@ export function IndicatorSelector() {
             Add
           </div>
           {Object.values(INDICATORS)
-            .filter((ind) => !activeIds.has(ind.id))
+            .filter((ind) => !activeIds.has(ind.id) && matchesFilter(ind.name))
             .map((indicator) => (
               <div
                 key={indicator.id}
@@ -311,6 +332,8 @@ export function IndicatorSelector() {
               All indicators active
             </div>
           )}
+
+          </div>{/* end scrollable list */}
         </div>
       )}
     </div>

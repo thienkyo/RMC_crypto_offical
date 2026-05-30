@@ -217,6 +217,79 @@ export function subscribeTicker(
   return () => { intentionallyClosed = true; ws?.close(); };
 }
 
+// ─── aggTrades WebSocket ──────────────────────────────────────────────────────
+
+export interface AggTrade {
+  tradeId:    number;
+  price:      number;
+  quantity:   number;   // base asset quantity
+  quoteQty:   number;   // price × quantity (quote asset, same units as volume)
+  time:       number;   // unix ms
+  isBuyerMaker: boolean; // true = seller initiated (sell-side), false = buyer initiated (buy-side)
+}
+
+interface BinanceAggTradeMsg {
+  e: 'aggTrade';
+  E: number;   // event time
+  s: string;   // symbol
+  a: number;   // aggregate trade ID
+  p: string;   // price
+  q: string;   // quantity
+  f: number;   // first trade ID
+  l: number;   // last trade ID
+  T: number;   // trade time
+  m: boolean;  // is buyer maker
+  M: boolean;  // ignore
+}
+
+/**
+ * Subscribe to real-time aggregated trade stream for a symbol.
+ *
+ * Each message represents one or more trades that were filled at the same price
+ * in the same direction at the same time (Binance aggregates them server-side).
+ *
+ * Returns an unsubscribe function — call it to cleanly close the WebSocket.
+ *
+ * IMPORTANT: This subscription is additive to the existing kline subscription.
+ * Both run concurrently; the delta accumulator in deltaAccumulator.ts consumes
+ * the aggTrade events and writes them into per-candle buy/sell volume buckets.
+ */
+export function subscribeAggTrades(
+  symbol:   string,
+  onTrade:  (trade: AggTrade) => void,
+  onError?: () => void,
+): () => void {
+  const stream = `${symbol.toLowerCase()}@aggTrade`;
+  let ws: WebSocket | null = null;
+  let intentionallyClosed  = false;
+
+  function connect() {
+    ws = new WebSocket(`${WS_BASE}/${stream}`);
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data as string) as BinanceAggTradeMsg;
+      const price   = parseFloat(msg.p);
+      const qty     = parseFloat(msg.q);
+      onTrade({
+        tradeId:      msg.a,
+        price,
+        quantity:     qty,
+        quoteQty:     price * qty,
+        time:         msg.T,
+        isBuyerMaker: msg.m,
+      });
+    };
+
+    ws.onerror = () => onError?.();
+    ws.onclose = () => {
+      if (!intentionallyClosed) setTimeout(connect, 2_000);
+    };
+  }
+
+  connect();
+  return () => { intentionallyClosed = true; ws?.close(); };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {

@@ -152,20 +152,26 @@ export function ChartLegend({ candles, crosshairTime, allSeries, activeIndicator
               const val = seriesValues.get(s.id)!;
 
               let formatted: string;
-              if (s.panel === 'overlay') {
-                // Price-scale series (EMA, BB bands) — same decimal format as price
+              if (s.formatValue) {
+                // Indicator-supplied custom formatter (e.g. K/M for CVD, Active/— for binary).
+                formatted = s.formatValue(val);
+              } else if (s.panel === 'overlay') {
+                // Price-scale series (EMA, BB bands) — same decimal format as price.
                 formatted = fmtPrice(val);
               } else if (s.seriesType === 'histogram') {
                 formatted = (val >= 0 ? '+' : '') + val.toFixed(4);
               } else if (s.id === 'bbpct') {
-                // %B oscillator — show 4 decimals so 1.0000 / 0.0000 extremes are clear
+                // %B oscillator — show 4 decimals so 1.0000 / 0.0000 extremes are clear.
                 formatted = val.toFixed(4);
               } else {
                 formatted = val.toFixed(2);
               }
 
+              // Dim inactive binary signals ("—") so active ones stand out.
+              const isDash = formatted === '—';
+
               return (
-                <span key={s.id} className="flex items-center gap-x-1">
+                <span key={s.id} className={`flex items-center gap-x-1 ${isDash ? 'opacity-35' : ''}`}>
                   {i > 0 && <span className="text-text-secondary opacity-40">·</span>}
                   <span style={{ color: s.color }}>{s.name}</span>
                   <span className="text-text-secondary">{formatted}</span>

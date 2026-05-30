@@ -36,6 +36,19 @@ export interface ActiveIndicator {
   visible: boolean;
 }
 
+export interface VolumeProfileConfig {
+  /** Show the VP histogram on the right side of the price chart. */
+  enabled:      boolean;
+  /** Draw VAH / POC / VAL horizontal lines across the price chart. */
+  showLines:    boolean;
+  /** Number of lookback bars for the rolling profile. */
+  lookback:     number;
+  /** Number of price bins. */
+  bins:         number;
+  /** Percentage of volume that defines the Value Area. */
+  valueAreaPct: number;
+}
+
 interface ChartState {
   // ── Selection ──────────────────────────────────────────────────────────────
   symbol:    string;
@@ -58,6 +71,9 @@ interface ChartState {
   subPaneHeights: Record<string, number>;
   /** Marker / signal overlay visibility preferences. */
   markerSettings: MarkerSettings;
+
+  // ── Volume Profile ────────────────────────────────────────────────────────
+  vpConfig: VolumeProfileConfig;
 
   // ── Actions ───────────────────────────────────────────────────────────────
   setSymbol:    (symbol: string) => void;
@@ -83,6 +99,8 @@ interface ChartState {
   setSubPaneHeight: (id: string, height: number) => void;
   /** Merge a partial update into markerSettings. */
   setMarkerSettings: (patch: { visibility?: Partial<MarkerVisibility>; showLabels?: boolean; stripVisible?: boolean }) => void;
+  /** Merge a partial update into vpConfig. */
+  setVpConfig: (patch: Partial<VolumeProfileConfig>) => void;
 }
 
 /** Default indicator set shown on first load. */
@@ -110,6 +128,13 @@ export const useChartStore = create<ChartState>()(
       barSpacing:     8,   // LWC default is ~6; 8 is slightly wider and feels better
       subPaneHeights: {},  // empty = fall back to SUB_HEIGHT_DEFAULT in ChartLayout
       markerSettings: DEFAULT_MARKER_SETTINGS,
+      vpConfig: {
+        enabled:      false,
+        showLines:    true,
+        lookback:     200,
+        bins:         50,
+        valueAreaPct: 70,
+      },
 
       // ── Actions ─────────────────────────────────────────────────────────────
 
@@ -190,6 +215,9 @@ export const useChartStore = create<ChartState>()(
               : s.markerSettings.visibility,
           },
         })),
+
+      setVpConfig: (patch) =>
+        set((s) => ({ vpConfig: { ...s.vpConfig, ...patch } })),
     }),
     {
       name: 'rmc-chart',
@@ -202,6 +230,7 @@ export const useChartStore = create<ChartState>()(
         barSpacing:       s.barSpacing,
         subPaneHeights:   s.subPaneHeights,
         markerSettings:   s.markerSettings,
+        vpConfig:         s.vpConfig,
       }),
     },
   ),

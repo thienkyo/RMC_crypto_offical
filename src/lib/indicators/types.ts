@@ -34,6 +34,27 @@ export interface IndicatorSeries {
   seriesType: 'line' | 'histogram';
   /** Optional markers rendered on top of this series (e.g. crossover dots). */
   markers?: IndicatorMarker[];
+  /**
+   * Optional custom value formatter for legend display.
+   * If omitted, the generic formatter is used (toFixed(2) or K/M abbreviation).
+   * Use this for binary (0/1) signals, percentage values, or any series where
+   * the default number format is misleading.
+   */
+  formatValue?: (val: number) => string;
+  /**
+   * Optional price scale ID.  Series with the same ID share one axis; different
+   * IDs get independent axes in the same pane.  Useful when a sub-panel mixes
+   * series of incompatible magnitude (e.g. a CVD line in the billions alongside
+   * a binary 0/1 divergence histogram).
+   * Defaults to 'right' (LWC default) when omitted.
+   */
+  priceScaleId?: string;
+  /**
+   * When true, the Y-axis labels use LWC's built-in volume formatting
+   * (K / M / B abbreviation) instead of raw numbers.
+   * Set this on any series whose values are volume-scaled (e.g. CVD).
+   */
+  volumeAxis?: boolean;
 }
 
 /** Everything an indicator returns — one or more series. */

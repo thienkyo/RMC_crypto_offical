@@ -949,26 +949,322 @@ const macdCrossTrendShort: Strategy = {
   risk:   { stopLossPct: 2.5, takeProfitPct: 5 },
 };
 
+// ─── L8: VP Value Area Low Bounce — LONG ──────────────────────────────────────
+//
+// Mean-reversion long: price has pulled back INTO the Value Area Low (dist ≥ −0.5%)
+// and is close to it (dist ≤ 0.5%), meaning we're trading near the VAL.
+// POC is above the current price (dist_from_poc_pct > 0) — upside target.
+// ADX confirms no strong downtrend (< 35) so we're in a ranging / rotational market.
+
+const vpValBounceLong: Strategy = {
+  ...BASE,
+  id:          'starter_vp_val_bounce_long',
+  name:        'VP VAL Bounce',
+  longName:    '📈 LONG — Price near Value Area Low + POC above + Rotational market',
+  description:
+    'Volume Profile mean-reversion long: price has dropped to the Value Area Low, ' +
+    'where prior session volume concentrations create a natural support floor.\n\n' +
+    '• VP Dist from VAL ≥ −0.5%: price is at or just below the VAL (entered the zone).\n' +
+    '• VP Dist from VAL ≤ 0.5%: price is not too far above the VAL yet.\n' +
+    '• VP Dist from POC > 0: POC is above current price — mean-reversion upside intact.\n' +
+    '• ADX(14) < 35: market is not in a strong directional trend — rotation context.\n\n' +
+    'Target: reversion toward POC. Limit entry 0.5% below signal (tighten into the zone). ' +
+    'Reduce lookback to 50–100 bars for intraday sessions; 200 is good for daily ranges.',
+  symbol:    'BTCUSDT',
+  timeframe: '1h',
+  entryConditions: [
+    {
+      id:    'starter_vpvbl_group_1',
+      label: 'VAL Support Zone',
+      conditions: [
+        {
+          id:           'starter_vpvbl_cond_val_low',
+          indicatorId:  'volume_profile',
+          params:       { lookback: 200, bins: 50, valueAreaPct: 70 },
+          seriesIndex:  5,   // dist_from_val_pct: negative = below VAL
+          operator:     'gte',
+          value:        -0.5,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_vpvbl_cond_val_high',
+          indicatorId:  'volume_profile',
+          params:       { lookback: 200, bins: 50, valueAreaPct: 70 },
+          seriesIndex:  5,   // dist_from_val_pct: close to VAL but not too far above
+          operator:     'lte',
+          value:        0.5,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_vpvbl_cond_poc_above',
+          indicatorId:  'volume_profile',
+          params:       { lookback: 200, bins: 50, valueAreaPct: 70 },
+          seriesIndex:  4,   // dist_from_poc_pct > 0 means POC above price
+          operator:     'gt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_vpvbl_cond_adx',
+          indicatorId:  'adx',
+          params:       { period: 14 },
+          seriesIndex:  0,
+          operator:     'lt',
+          value:        35,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 0.5 } },
+  risk:   { stopLossPct: 1.5, takeProfitPct: 2.5 },
+};
+
+// ─── S8: VP Value Area High Rotation — SHORT ───────────────────────────────────
+//
+// Mean-reversion short: mirror of the VAL bounce. Price has pushed to the Value
+// Area High (dist ≤ 0.5%) where supply concentrations cap the move.
+// POC is below (dist_from_poc_pct < 0) — downside reversion target.
+
+const vpVahRotationShort: Strategy = {
+  ...BASE,
+  id:          'starter_vp_vah_rotation_short',
+  name:        'VP VAH Rotation',
+  longName:    '📉 SHORT — Price near Value Area High + POC below + Rotational market',
+  description:
+    'Volume Profile mean-reversion short: price has rallied to the Value Area High, ' +
+    'where prior session volume concentrations create a natural resistance ceiling.\n\n' +
+    '• VP Dist from VAH ≤ 0.5%: price is at or just above the VAH (entered the zone).\n' +
+    '• VP Dist from VAH ≥ −0.5%: price is not too far below the VAH yet.\n' +
+    '• VP Dist from POC < 0: POC is below current price — mean-reversion downside intact.\n' +
+    '• ADX(14) < 35: rotational / ranging market context.\n\n' +
+    'Target: reversion toward POC. Limit entry 0.5% above signal. ' +
+    'Mirror of the LONG "VP VAL Bounce" template.',
+  symbol:    'BTCUSDT',
+  timeframe: '1h',
+  entryConditions: [
+    {
+      id:    'starter_vpvrs_group_1',
+      label: 'VAH Resistance Zone',
+      conditions: [
+        {
+          id:           'starter_vpvrs_cond_vah_high',
+          indicatorId:  'volume_profile',
+          params:       { lookback: 200, bins: 50, valueAreaPct: 70 },
+          seriesIndex:  3,   // dist_from_vah_pct: positive = above VAH, close to it
+          operator:     'lte',
+          value:        0.5,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_vpvrs_cond_vah_low',
+          indicatorId:  'volume_profile',
+          params:       { lookback: 200, bins: 50, valueAreaPct: 70 },
+          seriesIndex:  3,   // dist_from_vah_pct: not too far below VAH
+          operator:     'gte',
+          value:        -0.5,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_vpvrs_cond_poc_below',
+          indicatorId:  'volume_profile',
+          params:       { lookback: 200, bins: 50, valueAreaPct: 70 },
+          seriesIndex:  4,   // dist_from_poc_pct < 0 means POC below price
+          operator:     'lt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_vpvrs_cond_adx',
+          indicatorId:  'adx',
+          params:       { period: 14 },
+          seriesIndex:  0,
+          operator:     'lt',
+          value:        35,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 0.5 } },
+  risk:   { stopLossPct: 1.5, takeProfitPct: 2.5 },
+};
+
+// ─── L9: ICT Silver Bullet — LONG ─────────────────────────────────────────────
+//
+// ICT "Silver Bullet" concept: a bullish liquidity sweep (stop hunt below a
+// swing low) followed by a bullish Fair Value Gap on a lower timeframe creates
+// a high-probability long entry.  We model this on a single timeframe by
+// requiring BOTH conditions within a 3-bar lookback window.
+//
+// Logic:
+//  • Bullish Liquidity Sweep fires within the last 3 bars: price swept below a
+//    20-bar swing low and closed back above it — sell-side liquidity taken.
+//  • Bullish FVG fires within the last 3 bars: a 3-candle demand imbalance is
+//    present — price should retrace into the gap before continuing up.
+//  • EMA Dev(50) > 0: close is above the 50-period EMA — short-term uptrend
+//    context for the reversal.
+//
+// Entry: limit order 1% below signal close (wait for FVG fill).
+// Recommended: apply on 15m–1h charts for the original "Silver Bullet" windows
+// (02:00–04:00, 10:00–11:00, 14:00–16:00 NY time).
+
+const ictSilverBulletLong: Strategy = {
+  ...BASE,
+  id:          'starter_ict_silver_bullet_long',
+  name:        'ICT Silver Bullet',
+  longName:    '📈 LONG — Bullish Liquidity Sweep + Bullish FVG + Above 50 EMA',
+  description:
+    'ICT Silver Bullet long setup: institutional stop hunt below swing lows followed ' +
+    'by a Fair Value Gap (demand imbalance). Enter as price retraces into the gap.\n\n' +
+    '• Bullish Liquidity Sweep (lookback 3): a prior swing low (20-bar) was swept ' +
+    'and price closed back above it — sell-side stops collected, smart money long.\n' +
+    '• Bullish FVG (lookback 3): three-candle demand gap present — entry target zone.\n' +
+    '• EMA Dev(50) > 0: short-term trend bias is up.\n\n' +
+    'Limit entry 1% below signal (targets the FVG zone fill). ' +
+    'Best on 15m–1h; pair with time-of-day awareness for true Silver Bullet windows.',
+  symbol:    'BTCUSDT',
+  timeframe: '1h',
+  entryConditions: [
+    {
+      id:    'starter_isbl_group_1',
+      label: 'Liquidity Sweep + FVG Demand',
+      conditions: [
+        {
+          id:           'starter_isbl_cond_sweep',
+          indicatorId:  'bullish_liquidity_sweep',
+          params:       { lookback: 20, minWickPct: 0.05 },
+          seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
+          checkMode:    'lookback',
+          checkCandles: 3,
+        },
+        {
+          id:           'starter_isbl_cond_fvg',
+          indicatorId:  'bullish_fvg',
+          params:       { minGapPct: 0.1 },
+          seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
+          checkMode:    'lookback',
+          checkCandles: 3,
+        },
+        {
+          id:           'starter_isbl_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 50 },
+          seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 1 } },
+  risk:   { stopLossPct: 1.5, takeProfitPct: 3 },
+};
+
+// ─── S8: ICT Silver Bullet — SHORT ────────────────────────────────────────────
+//
+// Mirror of the long: bearish sweep of highs + bearish FVG + below 50 EMA.
+
+const ictSilverBulletShort: Strategy = {
+  ...BASE,
+  id:          'starter_ict_silver_bullet_short',
+  name:        'ICT Silver Bullet',
+  longName:    '📉 SHORT — Bearish Liquidity Sweep + Bearish FVG + Below 50 EMA',
+  description:
+    'ICT Silver Bullet short setup: institutional stop hunt above swing highs followed ' +
+    'by a Fair Value Gap (supply imbalance). Enter as price retraces into the gap.\n\n' +
+    '• Bearish Liquidity Sweep (lookback 3): a prior swing high (20-bar) was swept ' +
+    'and price closed back below it — buy-side stops collected, smart money short.\n' +
+    '• Bearish FVG (lookback 3): three-candle supply gap present — entry target zone.\n' +
+    '• EMA Dev(50) < 0: short-term trend bias is down.\n\n' +
+    'Limit entry 1% above signal (targets the FVG zone fill). ' +
+    'Mirror of the LONG "ICT Silver Bullet" template.',
+  symbol:    'BTCUSDT',
+  timeframe: '1h',
+  entryConditions: [
+    {
+      id:    'starter_isbs_group_1',
+      label: 'Liquidity Sweep + FVG Supply',
+      conditions: [
+        {
+          id:           'starter_isbs_cond_sweep',
+          indicatorId:  'bearish_liquidity_sweep',
+          params:       { lookback: 20, minWickPct: 0.05 },
+          seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
+          checkMode:    'lookback',
+          checkCandles: 3,
+        },
+        {
+          id:           'starter_isbs_cond_fvg',
+          indicatorId:  'bearish_fvg',
+          params:       { minGapPct: 0.1 },
+          seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
+          checkMode:    'lookback',
+          checkCandles: 3,
+        },
+        {
+          id:           'starter_isbs_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 50 },
+          seriesIndex:  0,
+          operator:     'lt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 1 } },
+  risk:   { stopLossPct: 1.5, takeProfitPct: 3 },
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Exported list — LONG first, then SHORT ─────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const STARTER_TEMPLATES: Strategy[] = [
   // ── LONG ────────────────────────────────────────────────────────────────────
-  trendReversalLong,    // L1 — Three White Soldiers + RSI oversold + MACD bullish cross + above 200 EMA
-  goldenTrioLong,       // L2 — BB %B below lower band + MACD bullish + RSI oversold
-  adxTrendLong,         // L3 — ADX strong trend + StochRSI oversold dip
-  volatilitySqueezeL,   // L4 — BB squeeze + RSI crosses above 50 + volume spike
-  trendSniperL,         // L5 — ADX + MACD hist bullish + Bullish Engulfing
-  meanReversionL,       // L6 — Stochastic oversold + Hammer + EMA Dev < -5%
-  macdCrossTrendLong,   // L7 — MACD bullish cross below 0 + close above 200 EMA
+  trendReversalLong,      // L1 — Three White Soldiers + RSI oversold + MACD bullish cross + above 200 EMA
+  goldenTrioLong,         // L2 — BB %B below lower band + MACD bullish + RSI oversold
+  adxTrendLong,           // L3 — ADX strong trend + StochRSI oversold dip
+  volatilitySqueezeL,     // L4 — BB squeeze + RSI crosses above 50 + volume spike
+  trendSniperL,           // L5 — ADX + MACD hist bullish + Bullish Engulfing
+  meanReversionL,         // L6 — Stochastic oversold + Hammer + EMA Dev < -5%
+  macdCrossTrendLong,     // L7 — MACD bullish cross below 0 + close above 200 EMA
+  ictSilverBulletLong,    // L8 — Bullish Liquidity Sweep + Bullish FVG + above 50 EMA
+  vpValBounceLong,        // L9 — VP VAL support bounce + POC above + rotational
 
   // ── SHORT ───────────────────────────────────────────────────────────────────
-  trendReversal,        // S1 — Three Crows + RSI overbought + MACD bearish cross + below 200 EMA
-  goldenTrio,           // S2 — BB %B above upper band + MACD bearish + RSI overbought
-  adxTrend,             // S3 — ADX strong trend + StochRSI overbought rip
-  volatilitySqueezeS,   // S4 — BB squeeze + RSI crosses below 50 + volume spike
-  trendSniperS,         // S5 — ADX + MACD hist bearish + Bearish Engulfing
-  meanReversionS,       // S6 — Stochastic overbought + Shooting Star + EMA Dev > +5%
-  macdCrossTrendShort,  // S7 — MACD bearish cross above 0 + close below 200 EMA
+  trendReversal,          // S1 — Three Crows + RSI overbought + MACD bearish cross + below 200 EMA
+  goldenTrio,             // S2 — BB %B above upper band + MACD bearish + RSI overbought
+  adxTrend,               // S3 — ADX strong trend + StochRSI overbought rip
+  volatilitySqueezeS,     // S4 — BB squeeze + RSI crosses below 50 + volume spike
+  trendSniperS,           // S5 — ADX + MACD hist bearish + Bearish Engulfing
+  meanReversionS,         // S6 — Stochastic overbought + Shooting Star + EMA Dev > +5%
+  macdCrossTrendShort,    // S7 — MACD bearish cross above 0 + close below 200 EMA
+  ictSilverBulletShort,   // S8 — Bearish Liquidity Sweep + Bearish FVG + below 50 EMA
+  vpVahRotationShort,     // S9 — VP VAH resistance rotation + POC below + rotational
 ];

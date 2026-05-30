@@ -19,7 +19,10 @@ export { stochrsi }     from './stochrsi';
 export { stochastic }   from './stochastic';
 export { volume_ratio } from './volume_ratio';
 export { ema_dev }      from './ema_dev';
-export { time_of_day }  from './time_of_day';
+export { time_of_day }    from './time_of_day';
+export { volume_profile } from './volume_profile';
+export { cvd }              from './cvd';
+export { cvd_divergence }   from './cvd_divergence';
 
 // Patterns
 export {
@@ -38,6 +41,12 @@ export {
   bearishEngulfing,
   hammer,
   shootingStar,
+  bullishFVG,
+  bearishFVG,
+  bullishLiquiditySweep,
+  bearishLiquiditySweep,
+  bullishAbsorption,
+  bearishAbsorption,
 } from '../patterns';
 
 export type {
@@ -79,7 +88,16 @@ import {
   bearishEngulfing,
   hammer,
   shootingStar,
+  bullishFVG,
+  bearishFVG,
+  bullishLiquiditySweep,
+  bearishLiquiditySweep,
+  bullishAbsorption,
+  bearishAbsorption,
 } from '../patterns';
+import { volume_profile } from './volume_profile';
+import { cvd }            from './cvd';
+import { cvd_divergence } from './cvd_divergence';
 
 // The registry stores all indicators under their widened default param type.
 // Callers pass Record<string,number> params (from the store) which satisfies
@@ -113,6 +131,15 @@ export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
   [threeWhiteSoldiers.id]:   threeWhiteSoldiers,
   [bullishEngulfing.id]:     bullishEngulfing,
   [bearishEngulfing.id]:     bearishEngulfing,
-  [hammer.id]:               hammer,
-  [shootingStar.id]:         shootingStar,
+  [hammer.id]:                  hammer,
+  [shootingStar.id]:            shootingStar,
+  [bullishFVG.id]:              bullishFVG,
+  [bearishFVG.id]:              bearishFVG,
+  [bullishLiquiditySweep.id]:   bullishLiquiditySweep,
+  [bearishLiquiditySweep.id]:   bearishLiquiditySweep,
+  [volume_profile.id]:          volume_profile,
+  [cvd.id]:                     cvd,
+  [bullishAbsorption.id]:       bullishAbsorption,
+  [bearishAbsorption.id]:       bearishAbsorption,
+  [cvd_divergence.id]:          cvd_divergence,
 };

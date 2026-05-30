@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS candles (
   close       NUMERIC     NOT NULL,
   -- Quote-asset volume (e.g. USDT amount traded, more useful than base volume)
   volume      NUMERIC     NOT NULL,
+  -- Buy / sell split — populated by aggTrades accumulator (Phase B).
+  -- NULL until the accumulator has run; callers should fall back to deltaApprox.
+  buy_volume  NUMERIC,
+  sell_volume NUMERIC,
   close_time  TIMESTAMPTZ NOT NULL,
 
   PRIMARY KEY (symbol, timeframe, open_time)
@@ -41,6 +45,19 @@ SELECT create_hypertable(
   chunk_time_interval => INTERVAL '7 days',
   if_not_exists       => TRUE
 );
+
+-- Idempotent column additions for existing databases (Phase B — aggTrades).
+-- ALTER TABLE IF NOT EXISTS is not standard; use DO block for safety.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'candles' AND column_name = 'buy_volume'
+  ) THEN
+    ALTER TABLE candles ADD COLUMN buy_volume  NUMERIC;
+    ALTER TABLE candles ADD COLUMN sell_volume NUMERIC;
+  END IF;
+END $$;
 
 -- Fast lookups: symbol + timeframe + time range (most common query pattern)
 CREATE INDEX IF NOT EXISTS candles_sym_tf_time

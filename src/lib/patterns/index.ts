@@ -10,3 +10,6 @@ export { breakawayBullish }                           from './breakawayBullish';
 export { bullishDojiStar }                            from './bullishDojiStar';
 export { bullishEngulfing, bearishEngulfing }         from './engulfing';
 export { hammer, shootingStar }                       from './hammerShootingStar';
+export { bullishFVG, bearishFVG }                         from './fairValueGap';
+export { bullishLiquiditySweep, bearishLiquiditySweep }   from './liquiditySweep';
+export { bullishAbsorption, bearishAbsorption }           from './absorption';

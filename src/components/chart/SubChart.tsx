@@ -335,6 +335,8 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
               color:            s.color,
               priceLineVisible: false,
               lastValueVisible: false,
+              priceScaleId:     s.priceScaleId,
+              priceFormat:      s.volumeAxis ? { type: 'volume' } : undefined,
             });
             hist.setData(histData);
             hist.setMarkers(toSeriesMarkers(s.markers));
@@ -366,6 +368,7 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
               title:            s.name,
               priceLineVisible: false,
               lastValueVisible: false,
+              priceScaleId:     s.priceScaleId,
             });
             line.setData(lineData);
             line.setMarkers(toSeriesMarkers(s.markers));
@@ -407,15 +410,20 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
             const val = displayValues[s.id];
             if (val === undefined) return null;
 
-            // Format: histogram (MACD hist) gets a sign prefix; lines get plain decimals
-            const formatted = s.seriesType === 'histogram'
-              ? (val >= 0 ? '+' : '') + val.toFixed(4)
-              : val.toFixed(2);
+            // Use the series' own formatter if provided; otherwise fall back to generic.
+            const formatted = s.formatValue
+              ? s.formatValue(val)
+              : s.seriesType === 'histogram'
+                ? (val >= 0 ? '+' : '') + val.toFixed(4)
+                : val.toFixed(2);
+
+            // For binary signals showing "—" (inactive), dim the label.
+            const isDash = formatted === '—';
 
             return (
               <span
                 key={s.id}
-                className="text-[10px] font-mono"
+                className={`text-[10px] font-mono ${isDash ? 'opacity-35' : ''}`}
                 style={{ color: s.color }}
               >
                 {s.name}&nbsp;{formatted}

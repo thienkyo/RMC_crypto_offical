@@ -17,6 +17,7 @@ import { computeSignalCandles } from '@/lib/strategy/signals';
 import { strategyScoreRange }  from '@/lib/strategy/rating';
 import { PriceChart, type PriceChartHandle } from './PriceChart';
 import { SubChart,   type SubChartHandle   } from './SubChart';
+import { VPConfigCard }                      from './VPConfigCard';
 import { CandleTimer, CandleTimerInline }       from './CandleTimer';
 import { ChartLegend }                       from './ChartLegend';
 import { TimeframeSelector } from '../ui/TimeframeSelector';
@@ -114,6 +115,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const setBarSpacing      = useChartStore((s) => s.setBarSpacing);
   const setSubPaneHeight   = useChartStore((s) => s.setSubPaneHeight);
   const setMarkerSettings  = useChartStore((s) => s.setMarkerSettings);
+  const vpConfig           = useChartStore((s) => s.vpConfig);
+  const setVpConfig        = useChartStore((s) => s.setVpConfig);
   const { isLoading, error } = useCandles();
   const toggleStrategyActive = useStrategyStore((s) => s.toggleStrategyActive);
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
@@ -476,6 +479,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // ── Marker visibility controls — init from persisted store ──────────────
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
   const markerMenuRef = useRef<HTMLDivElement>(null);
+
+  // ── Volume Profile config card ───────────────────────────────────────────
+  const [vpCardOpen, setVpCardOpen] = useState(false);
+  const vpCardRef   = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -950,6 +957,41 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             )}
           </div>
 
+          {/* VP button + config card */}
+          <div ref={vpCardRef} className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                if (!vpConfig.enabled) {
+                  setVpConfig({ enabled: true });
+                  setVpCardOpen(true);
+                } else {
+                  setVpCardOpen((v) => !v);
+                }
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setVpConfig({ enabled: false });
+                setVpCardOpen(false);
+              }}
+              className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
+                          ${vpConfig.enabled
+                            ? 'border-amber-500/50 text-amber-400 bg-amber-500/10 hover:bg-amber-500/15'
+                            : 'border-surface-border text-text-muted hover:text-text-primary hover:border-accent/30'}`}
+              title={vpConfig.enabled ? 'Volume Profile on — click for settings, right-click to disable' : 'Enable Volume Profile'}
+            >
+              VP {vpConfig.enabled ? '▾' : '▸'}
+            </button>
+
+            {vpCardOpen && vpConfig.enabled && (
+              <VPConfigCard
+                config={vpConfig}
+                onChange={setVpConfig}
+                onClose={() => setVpCardOpen(false)}
+              />
+            )}
+          </div>
+
           <IndicatorSelector />
           <TimeframeSelector />
           {/* Scroll back to the most recent candle — all panes together */}
@@ -1220,6 +1262,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             ].sort((a, b) => (a.time as number) - (b.time as number))}
             savedBarSpacing={savedBarSpacing}
             onBarSpacingChange={setBarSpacing}
+            vpConfig={vpConfig}
           />
 
           {/* Candle countdown — positioned on the price axis just below the live price label */}

@@ -20,6 +20,8 @@ import {
 import { format } from 'date-fns';
 import type { Candle } from '@/types/market';
 import type { IndicatorSeries } from '@/lib/indicators';
+import type { VolumeProfileConfig } from '@/store/chart';
+import { VolumeProfileRenderer } from './VolumeProfileRenderer';
 
 export interface PriceChartHandle {
   getChart:    () => IChartApi | null;
@@ -59,6 +61,8 @@ interface Props {
   savedBarSpacing?: number;
   /** Called (debounced) when the user scrolls or zooms, so the new spacing can be persisted. */
   onBarSpacingChange?: (barSpacing: number) => void;
+  /** When provided and enabled = true, draws the rolling Volume Profile histogram. */
+  vpConfig?: VolumeProfileConfig;
 }
 
 /** Binary search for a candle at an exact unix-second timestamp. */
@@ -80,11 +84,12 @@ const toSec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 const INITIAL_BARS = 100;
 
 export const PriceChart = forwardRef<PriceChartHandle, Props>(
-  function PriceChart({ candles, overlays, contextKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange }, ref) {
+  function PriceChart({ candles, overlays, contextKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange, vpConfig }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
     const overlayRefs  = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
+    const vpRendererRef = useRef<VolumeProfileRenderer | null>(null);
 
     const loadedKeyRef    = useRef<string | null>(null);
     // Track how many candles we last called setData with so we can skip
@@ -373,6 +378,31 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         // Series may be mid-reset during symbol/TF switch — safe to ignore
       }
     }, [markers]);
+
+    // ── Volume Profile primitive ───────────────────────────────────────────
+    // Attach/detach the renderer when vpConfig.enabled changes.
+    // Update candle data whenever candles or config params change.
+    useEffect(() => {
+      const series = candleRef.current;
+      if (!series) return;
+
+      if (!vpConfig?.enabled) {
+        // Remove existing renderer
+        if (vpRendererRef.current) {
+          try { series.detachPrimitive(vpRendererRef.current); } catch { /* ignore */ }
+          vpRendererRef.current = null;
+        }
+        return;
+      }
+
+      if (!vpRendererRef.current) {
+        vpRendererRef.current = new VolumeProfileRenderer(vpConfig);
+        series.attachPrimitive(vpRendererRef.current);
+      } else {
+        vpRendererRef.current.setConfig(vpConfig);
+      }
+      vpRendererRef.current.setCandles(candles);
+    }, [vpConfig, candles]);
 
     return (
       <div

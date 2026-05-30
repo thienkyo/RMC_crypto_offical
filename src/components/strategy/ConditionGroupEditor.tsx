@@ -12,6 +12,7 @@
  *   Independently overridable via the toggle in the header.
  */
 
+import { useState } from 'react';
 import { ConditionRow } from './ConditionRow';
 import type { ConditionGroup, StrategyCondition } from '@/types/strategy';
 import { INDICATORS } from '@/lib/indicators';
@@ -53,6 +54,7 @@ export function ConditionGroupEditor({
   onRemoveGroup,
   isMultiTf = false,
 }: Props) {
+  const [collapsed, setCollapsed] = useState(groupIndex > 0);
   const groupOp  = group.operator ?? 'or';
   const condOp   = resolveCondOp(group);
   const isOrGroup = groupOp === 'or';
@@ -135,11 +137,17 @@ export function ConditionGroupEditor({
             value={group.label}
             onChange={(e) => onChange({ ...group, label: e.target.value })}
             placeholder={`Group ${groupIndex + 1}`}
-            className="input-xs w-32 text-text-muted min-w-0"
+            className="input-xs w-48 text-text-muted min-w-0"
           />
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Condition count badge — visible when collapsed */}
+          {collapsed && (
+            <span className="text-[10px] font-mono text-text-muted">
+              {group.conditions.filter(c => c.enabled !== false).length} condition{group.conditions.filter(c => c.enabled !== false).length !== 1 ? 's' : ''}
+            </span>
+          )}
           {totalGroups > 1 && (
             <button
               type="button"
@@ -150,46 +158,56 @@ export function ConditionGroupEditor({
               Remove
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? 'Expand group' : 'Collapse group'}
+            className="text-[11px] text-text-muted hover:text-text-primary transition-colors px-1"
+          >
+            {collapsed ? '▶' : '▼'}
+          </button>
         </div>
       </div>
 
-      {/* ── Conditions ──────────────────────────────────────────────── */}
-      {group.conditions.length === 0 && (
-        <p className="text-xs text-text-muted italic pl-1">No conditions — add one below.</p>
-      )}
-
-      {group.conditions.map((condition, i) => (
-        <div key={condition.id}>
-          {/* Operator separator between conditions */}
-          {i > 0 && (
-            <div className="flex items-center gap-1 py-0.5 pl-1">
-              <span className={`text-[10px] font-mono font-semibold px-1.5 py-px rounded ${
-                condition.enabled === false
-                  ? 'text-text-muted opacity-30'
-                  : condOp === 'and'
-                    ? 'text-blue-400 bg-blue-500/10'
-                    : 'text-violet-400 bg-violet-500/10'
-              }`}>
-                {condOp.toUpperCase()}
-              </span>
-            </div>
+      {/* ── Conditions (hidden when collapsed) ──────────────────────── */}
+      {!collapsed && (
+        <>
+          {group.conditions.length === 0 && (
+            <p className="text-xs text-text-muted italic pl-1">No conditions — add one below.</p>
           )}
-          <ConditionRow
-            condition={condition}
-            onChange={(updated) => updateCondition(i, updated)}
-            onRemove={() => removeCondition(i)}
-          />
-        </div>
-      ))}
 
-      {/* ── Add condition ───────────────────────────────────────────── */}
-      <button
-        type="button"
-        onClick={addCondition}
-        className="btn-xs mt-1"
-      >
-        + Add condition
-      </button>
+          {group.conditions.map((condition, i) => (
+            <div key={condition.id}>
+              {i > 0 && (
+                <div className="flex items-center gap-1 py-0.5 pl-1">
+                  <span className={`text-[10px] font-mono font-semibold px-1.5 py-px rounded ${
+                    condition.enabled === false
+                      ? 'text-text-muted opacity-30'
+                      : condOp === 'and'
+                        ? 'text-blue-400 bg-blue-500/10'
+                        : 'text-violet-400 bg-violet-500/10'
+                  }`}>
+                    {condOp.toUpperCase()}
+                  </span>
+                </div>
+              )}
+              <ConditionRow
+                condition={condition}
+                onChange={(updated) => updateCondition(i, updated)}
+                onRemove={() => removeCondition(i)}
+              />
+            </div>
+          ))}
+
+          <button
+            type="button"
+            onClick={addCondition}
+            className="btn-xs mt-1"
+          >
+            + Add condition
+          </button>
+        </>
+      )}
     </div>
   );
 }

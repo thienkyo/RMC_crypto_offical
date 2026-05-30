@@ -27,12 +27,22 @@ const OPERATOR_LABELS: Record<ConditionOperator, string> = {
 };
 
 const SERIES_LABELS: Record<string, string[]> = {
-  ema:         ['EMA Line'],
-  sma:         ['SMA Line'],
-  rsi:         ['RSI', 'EMA of RSI'],
-  macd:        ['MACD Line', 'Signal', 'Histogram', 'Strategy Signal'],
-  bollinger:   ['Middle Band', 'Upper Band', 'Lower Band'],
-  time_of_day: ['In window'],
+  ema:            ['EMA Line'],
+  sma:            ['SMA Line'],
+  rsi:            ['RSI', 'EMA of RSI'],
+  macd:           ['MACD Line', 'Signal', 'Histogram', 'Strategy Signal'],
+  bollinger:      ['Middle Band', 'Upper Band', 'Lower Band'],
+  bbpct:          ['BB %B'],
+  bb_width:       ['BB Width'],
+  adx:            ['ADX', '+DI', '−DI'],
+  stochrsi:       ['StochRSI %K', 'StochRSI %D'],
+  stochastic:     ['%K', '%D'],
+  volume_ratio:   ['Volume Ratio'],
+  ema_dev:        ['EMA Deviation %'],
+  time_of_day:    ['In window'],
+  volume_profile: ['VAH', 'POC', 'VAL', 'Dist from VAH %', 'Dist from POC %', 'Dist from VAL %'],
+  cvd:            ['CVD', 'CVD EMA', 'CVD Delta'],
+  cvd_divergence: ['Bullish Divergence', 'Bearish Divergence', 'CVD Line'],
 };
 
 // ── Enable / disable toggle ───────────────────────────────────────────────────

@@ -20,14 +20,24 @@ const TELEGRAM_API = 'https://api.telegram.org';
 
 /**
  * Parse a stored chat-ID string (one per line, or comma-separated) into an
- * array of trimmed, non-empty strings ready to pass to the Telegram API.
+ * array of trimmed, non-empty, DEDUPED strings ready to pass to the Telegram API.
+ *
+ * Dedup matters: if the user accidentally lists the same chat ID twice in the
+ * Settings page (easy to do via copy-paste), every notification would be sent
+ * twice to that chat. Preserves first-seen order so the routing log stays
+ * deterministic.
  */
 export function parseChatIds(raw: string | null | undefined): string[] {
   if (!raw) return [];
-  return raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[\n,]+/)) {
+    const id = part.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 /**

@@ -73,13 +73,14 @@ export const volume_profile: Indicator = {
       const c = candles[i]!;
 
       if (i < 1) {
-        // Not enough data — emit NaN-equivalent zeros
-        vahData.push ({ time: c.openTime, value: 0 });
-        pocData.push ({ time: c.openTime, value: 0 });
-        valData.push ({ time: c.openTime, value: 0 });
-        dvahData.push({ time: c.openTime, value: 0 });
-        dpocData.push({ time: c.openTime, value: 0 });
-        dvalData.push({ time: c.openTime, value: 0 });
+        // Not enough data — emit NaN so LWC excludes these points from autoScale.
+        // Emitting 0 would force the price scale to include 0, collapsing the chart.
+        vahData.push ({ time: c.openTime, value: NaN });
+        pocData.push ({ time: c.openTime, value: NaN });
+        valData.push ({ time: c.openTime, value: NaN });
+        dvahData.push({ time: c.openTime, value: NaN });
+        dpocData.push({ time: c.openTime, value: NaN });
+        dvalData.push({ time: c.openTime, value: NaN });
         continue;
       }
 
@@ -95,13 +96,12 @@ export const volume_profile: Indicator = {
       }
 
       if (rangeHigh <= rangeLow) {
-        // Degenerate (flat) — emit zeros
-        vahData.push ({ time: c.openTime, value: 0 });
-        pocData.push ({ time: c.openTime, value: 0 });
-        valData.push ({ time: c.openTime, value: 0 });
-        dvahData.push({ time: c.openTime, value: 0 });
-        dpocData.push({ time: c.openTime, value: 0 });
-        dvalData.push({ time: c.openTime, value: 0 });
+        vahData.push ({ time: c.openTime, value: NaN });
+        pocData.push ({ time: c.openTime, value: NaN });
+        valData.push ({ time: c.openTime, value: NaN });
+        dvahData.push({ time: c.openTime, value: NaN });
+        dpocData.push({ time: c.openTime, value: NaN });
+        dvalData.push({ time: c.openTime, value: NaN });
         continue;
       }
 

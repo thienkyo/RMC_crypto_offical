@@ -237,9 +237,10 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         if (barSpacingTimerRef.current) clearTimeout(barSpacingTimerRef.current);
         ro.disconnect();
         chart.remove();
-        chartRef.current    = null;
-        candleRef.current   = null;
-        loadedKeyRef.current = null;
+        chartRef.current      = null;
+        candleRef.current     = null;
+        vpRendererRef.current = null;   // stale primitive — re-attached on next mount
+        loadedKeyRef.current  = null;
         overlayRefs.current.clear();
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -307,7 +308,11 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       loadedLengthRef.current = candles.length;
 
       if (isNewContext || !savedRange) {
+        // Force the price scale to recalculate for the new symbol's price range.
+        // chart.priceScale() alone doesn't re-trigger if autoScale was already true;
+        // calling it on the series' own priceScale() forces LWC to rescale immediately.
         chart?.priceScale('right').applyOptions({ autoScale: true });
+        candleRef.current?.priceScale().applyOptions({ autoScale: true });
         if (savedBarSpacing) {
           // Restore the user's preferred candle width and scroll to the latest bar.
           // applyOptions({ barSpacing }) keeps the rightmost bar pinned, so we

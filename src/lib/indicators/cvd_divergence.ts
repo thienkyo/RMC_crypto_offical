@@ -101,15 +101,12 @@ export const cvd_divergence: Indicator = {
 
     const bullishData: { time: number; value: number }[] = [];
     const bearishData: { time: number; value: number }[] = [];
-    const cvdData:     { time: number; value: number }[] = [];
     const bullMarkers: IndicatorMarker[] = [];
     const bearMarkers: IndicatorMarker[] = [];
 
     for (let i = 0; i < candles.length; i++) {
       const c    = candles[i]!;
       const cvdV = smoothedCVD[i]!;
-
-      cvdData.push({ time: c.openTime, value: cvdV });
 
       if (i < lookback) {
         bullishData.push({ time: c.openTime, value: 0 });
@@ -159,18 +156,11 @@ export const cvd_divergence: Indicator = {
       }
     }
 
-    /** Compact K / M formatter for large volume-scaled CVD values. */
-    const fmtCVD = (v: number): string => {
-      const sign = v < 0 ? '−' : '+';
-      const abs  = Math.abs(v);
-      if (abs >= 1_000_000) return sign + (abs / 1_000_000).toFixed(2) + 'M';
-      if (abs >= 1_000)     return sign + (abs / 1_000).toFixed(1)     + 'K';
-      return (v >= 0 ? '+' : '−') + abs.toFixed(0);
-    };
-
     /** Binary 0/1 formatter — shows "Active" or "—" instead of "+0.0000". */
     const fmtBinary = (v: number): string => (v >= 0.5 ? 'Active' : '—');
 
+    // Bull and bear signals share one scale (0/1) — no CVD line here since
+    // the CVD indicator pane already shows it, and mixing scales caused axis conflicts.
     const bullSeries: IndicatorSeries = {
       id:          'cvd_div_bull',
       name:        '▲ Bull Div',
@@ -180,8 +170,6 @@ export const cvd_divergence: Indicator = {
       color:       '#10b981',
       markers:     bullMarkers,
       formatValue: fmtBinary,
-      // Independent scale so 0/1 bars are not dwarfed by the CVD line magnitude.
-      priceScaleId: 'cvd_div_signals',
     };
 
     const bearSeries: IndicatorSeries = {
@@ -193,23 +181,8 @@ export const cvd_divergence: Indicator = {
       color:       '#ef4444',
       markers:     bearMarkers,
       formatValue: fmtBinary,
-      priceScaleId: 'cvd_div_signals',
     };
 
-    const cvdLineSeries: IndicatorSeries = {
-      id:          'cvd_div_cvd_line',
-      name:        `CVD(${smoothing})`,
-      data:        cvdData,
-      panel:       'sub',
-      seriesType:  'line',
-      color:       '#60a5fa',
-      lineWidth:   1,
-      formatValue: fmtCVD,
-      volumeAxis:  true,
-      // Separate right-axis scale — CVD lives in the billions, signals in 0/1.
-      priceScaleId: 'cvd_div_cvd',
-    };
-
-    return [bullSeries, bearSeries, cvdLineSeries];
+    return [bullSeries, bearSeries];
   },
 };

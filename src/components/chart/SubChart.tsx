@@ -369,6 +369,7 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
               priceLineVisible: false,
               lastValueVisible: false,
               priceScaleId:     s.priceScaleId,
+              priceFormat:      s.volumeAxis ? { type: 'volume' } : undefined,
             });
             line.setData(lineData);
             line.setMarkers(toSeriesMarkers(s.markers));
@@ -384,6 +385,10 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
           seriesRefs.current.delete(id);
         }
       }
+
+      // Re-apply autoScale after every data update so the sub-pane fits the
+      // new symbol's value range (e.g. CVD rescales when switching BTC → ETH).
+      chart.priceScale('right').applyOptions({ autoScale: true });
     }, [series]);
 
     return (

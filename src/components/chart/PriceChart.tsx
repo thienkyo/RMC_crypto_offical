@@ -99,6 +99,16 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
     // LWC's timescale from firing subscribeVisibleLogicalRangeChange on every
     // tick, which was the root cause of the React "maximum update depth" loop.
     const loadedLengthRef = useRef<number>(0);
+    // Last candles array reference we rendered from.  Array-identity is the
+    // canonical signal for "this is fresh data" — TanStack Query's
+    // keepPreviousData returns the previous reference unchanged during the
+    // in-flight phase, so when the user switches symbols we receive the new
+    // contextKey while `candles` still points at the old symbol's array.
+    // Without this guard the effect would commit loadedKeyRef against stale
+    // data, and the subsequent render with fresh candles would be mis-treated
+    // as "same context" — preserving the previous price scale and skipping
+    // the autoscale reset.
+    const lastCandlesRef  = useRef<Candle[] | null>(null);
 
     // ── Bar spacing capture (debounced) ────────────────────────────────────
     // Keep a stable ref to onBarSpacingChange so the LWC subscription never
@@ -278,14 +288,21 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
 
       const chart        = chartRef.current;
       const isNewContext = loadedKeyRef.current !== contextKey;
-      const isNewBar     = candles.length !== loadedLengthRef.current;
+      // Array-identity is the truthful signal for "this is new data" — see the
+      // comment on lastCandlesRef. Length alone would falsely report "no new
+      // bar" when two symbols happen to have the same candle count, causing
+      // the chart to silently keep the previous symbol's data on screen.
+      const isNewData    = lastCandlesRef.current !== candles;
 
-      // Skip setData when only the last candle's price changed (same bar tick).
-      // ChartLayout already surgically updates the forming bar via updateCandle().
-      // Calling setData() on every tick would cause LWC to refit its timescale
-      // on every tick, which fires subscribeVisibleLogicalRangeChange and
-      // triggers a setSignalLines → re-render → setData loop.
-      if (!isNewContext && !isNewBar) return;
+      // Nothing to do — same context, same data reference.
+      if (!isNewContext && !isNewData) return;
+
+      // Context changed but the candles array is still the previous symbol's
+      // (TanStack Query's keepPreviousData hasn't been replaced yet). Bail and
+      // wait for the real fetch to land. Committing loadedKeyRef now would
+      // poison the next render: it'd be classified as "same context" and the
+      // autoscale reset below would never run for the new symbol's prices.
+      if (isNewContext && !isNewData) return;
 
       const rawSavedRange = (!isNewContext && chart)
         ? chart.timeScale().getVisibleLogicalRange()
@@ -305,6 +322,7 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         })),
       );
 
+      lastCandlesRef.current  = candles;
       loadedLengthRef.current = candles.length;
 
       if (isNewContext || !savedRange) {

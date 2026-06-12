@@ -29,7 +29,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   const window = (searchParams.get('window') ?? '24h') === '1h' ? 1 : 24;
 
   const [articles, aggregate] = await Promise.all([
-    getArticlesForSymbol(symbol, limit, before, source),
+    getArticlesForSymbol(symbol, limit, before, source, window),
     getAggregateSentiment(symbol, window as 1 | 24),
   ]);
 

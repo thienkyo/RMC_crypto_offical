@@ -22,6 +22,9 @@ export const maxDuration = 45;
 const HIGH_SIGNAL_THRESHOLD = 0.65;
 const GEMINI_MODEL_NAME     = 'gemini-2.0-flash-lite';
 
+// Vercel Cron triggers routes with a GET request; POST kept for manual invocation.
+export const GET = POST;
+
 export async function POST(req: NextRequest): Promise<Response> {
   if (!isCronAuthorized(req)) return cronUnauthorized();
 

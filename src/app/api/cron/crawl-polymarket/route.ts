@@ -11,6 +11,9 @@ import { isCronAuthorized, cronUnauthorized } from '@/lib/crawlers/cron-auth';
 
 export const maxDuration = 20;
 
+// Vercel Cron triggers routes with a GET request; POST kept for manual invocation.
+export const GET = POST;
+
 export async function POST(req: NextRequest): Promise<Response> {
   if (!isCronAuthorized(req)) return cronUnauthorized();
 

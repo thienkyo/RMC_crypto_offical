@@ -12,6 +12,10 @@ import { isCronAuthorized, cronUnauthorized } from '@/lib/crawlers/cron-auth';
 
 export const maxDuration = 30; // seconds — Vercel hobby limit
 
+// Vercel Cron triggers routes with a GET request, so GET is the entry point.
+// POST is kept for manual invocation (curl/dev). Function decls hoist, so this is safe.
+export const GET = POST;
+
 export async function POST(req: NextRequest): Promise<Response> {
   if (!isCronAuthorized(req)) return cronUnauthorized();
 

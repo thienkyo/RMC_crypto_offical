@@ -14,6 +14,7 @@
  */
 
 import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useChartStore } from '@/store/chart';
 import { useNewsFeed } from '@/hooks/useNewsFeed';
 import { SentimentHeatBar } from './SentimentHeatBar';
@@ -27,11 +28,33 @@ const SOURCE_FILTERS = [
   { label: 'X',      value: 'nitter' },
 ] as const;
 
+interface RefreshResult {
+  totalInserted: number;
+  classified:    number;
+}
+
 export function NewsFeed() {
   const symbol = useChartStore((s) => s.symbol);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>(undefined);
 
   const { data, isLoading, error, dataUpdatedAt } = useNewsFeed(symbol, sourceFilter);
+
+  // Manual pipeline trigger. On success we invalidate the news queries so
+  // TanStack Query refetches the feed/digest and the panel repaints with the
+  // newly-crawled, freshly-classified articles.
+  const queryClient = useQueryClient();
+  const refresh = useMutation({
+    mutationFn: async (): Promise<RefreshResult> => {
+      const res = await fetch('/api/news/refresh', { method: 'POST' });
+      if (!res.ok) throw new Error(`Refresh failed (HTTP ${res.status})`);
+      return res.json() as Promise<RefreshResult>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['news-feed'] });
+      queryClient.invalidateQueries({ queryKey: ['news-digest'] });
+      queryClient.invalidateQueries({ queryKey: ['polymarket'] });
+    },
+  });
 
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -45,10 +68,36 @@ export function NewsFeed() {
         <span className="text-[11px] font-mono uppercase tracking-widest text-text-muted">
           News · {symbol}
         </span>
-        {lastUpdated && (
-          <span className="text-[10px] font-mono text-text-muted">{lastUpdated}</span>
-        )}
+        <div className="flex items-center gap-2">
+          {lastUpdated && (
+            <span className="text-[10px] font-mono text-text-muted">{lastUpdated}</span>
+          )}
+          <button
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+            title="Crawl all sources and classify sentiment now"
+            className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors
+              ${refresh.isPending
+                ? 'text-text-muted border-surface-border cursor-wait'
+                : 'text-accent border-accent/30 hover:bg-accent/15'
+              }`}
+          >
+            {refresh.isPending ? 'Refreshing…' : '↻ Refresh'}
+          </button>
+        </div>
       </div>
+
+      {/* Refresh result / error line */}
+      {(refresh.isSuccess || refresh.isError) && (
+        <div
+          className={`px-3 py-1 text-[10px] font-mono border-b border-surface-border flex-shrink-0
+            ${refresh.isError ? 'text-down' : 'text-text-muted'}`}
+        >
+          {refresh.isError
+            ? (refresh.error as Error).message
+            : `+${refresh.data.totalInserted} new · ${refresh.data.classified} classified`}
+        </div>
+      )}
 
       {/* Sentiment heat bar */}
       <div className="flex-shrink-0 border-b border-surface-border">

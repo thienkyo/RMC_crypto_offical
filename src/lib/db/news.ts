@@ -41,10 +41,11 @@ function rowToArticle(row: Record<string, unknown>): NewsArticle {
  * Optionally filter by source and paginate via `before` (ISO timestamp).
  */
 export async function getArticlesForSymbol(
-  symbol:  string,
-  limit:   number = 50,
-  before?: string,
-  source?: string,
+  symbol:       string,
+  limit:        number = 50,
+  before?:      string,
+  source?:      string,
+  windowHours?: number,
 ): Promise<NewsArticle[]> {
   const params: unknown[] = [symbol, limit];
   let whereExtra = '';
@@ -56,6 +57,10 @@ export async function getArticlesForSymbol(
   if (source) {
     params.push(source);
     whereExtra += ` AND source = $${params.length}`;
+  }
+  if (windowHours) {
+    params.push(windowHours);
+    whereExtra += ` AND published_at > NOW() - ($${params.length} || ' hours')::interval`;
   }
 
   const sql = `

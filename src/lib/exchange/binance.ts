@@ -149,7 +149,18 @@ export function subscribeKline(
       // must be dropped to prevent stale-tick errors in the chart.
       if (intentionallyClosed) return;
 
-      const msg = JSON.parse(event.data as string) as BinanceKlineStreamMsg;
+      // Binance occasionally pushes non-kline frames on this socket (e.g. a
+      // {"result":null,"id":N} response, or an error envelope). The static cast
+      // would let TS happily destructure them, but at runtime msg.k is undefined
+      // and accessing k.t throws. Shape-check before touching the payload.
+      let msg: BinanceKlineStreamMsg;
+      try {
+        msg = JSON.parse(event.data as string) as BinanceKlineStreamMsg;
+      } catch {
+        return;
+      }
+      if (!msg || msg.e !== 'kline' || !msg.k) return;
+
       const k = msg.k;
       onCandle(
         {
@@ -201,7 +212,16 @@ export function subscribeTicker(
     ws = new WebSocket(`${WS_BASE}/${stream}`);
 
     ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data as string) as BinanceMiniTickerMsg;
+      let msg: BinanceMiniTickerMsg;
+      try {
+        msg = JSON.parse(event.data as string) as BinanceMiniTickerMsg;
+      } catch {
+        return;
+      }
+      // Skip non-ticker frames (subscription responses, error envelopes, etc.)
+      // that would otherwise produce NaN ticks and corrupt the watchlist UI.
+      if (!msg || msg.e !== '24hrMiniTicker' || typeof msg.c !== 'string') return;
+
       const price     = parseFloat(msg.c);
       const open      = parseFloat(msg.o);
       const changePct = open !== 0 ? ((price - open) / open) * 100 : 0;
@@ -267,7 +287,16 @@ export function subscribeAggTrades(
     ws = new WebSocket(`${WS_BASE}/${stream}`);
 
     ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data as string) as BinanceAggTradeMsg;
+      let msg: BinanceAggTradeMsg;
+      try {
+        msg = JSON.parse(event.data as string) as BinanceAggTradeMsg;
+      } catch {
+        return;
+      }
+      // Skip non-aggTrade frames so the delta accumulator never receives
+      // garbage rows (which would silently zero-out buy/sell volume buckets).
+      if (!msg || msg.e !== 'aggTrade' || typeof msg.p !== 'string') return;
+
       const price   = parseFloat(msg.p);
       const qty     = parseFloat(msg.q);
       onTrade({

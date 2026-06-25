@@ -197,3 +197,4 @@ docker compose up -d   # starts TimescaleDB on localhost:5432
 - "Indicator" = must implement `Indicator<P>` from `src/lib/indicators/types.ts`; register in `index.ts`
 - Prefer 1–2 clarifying questions over guessing when requirements are ambiguous
 - Paper trading only — never build any path toward live execution
+- **Keep `docs/overview.md` current:** after adding or changing a feature (new API route, indicator, page, crawler, DB table, etc.), update the relevant parts of `docs/overview.md` in the same session — status table, feature areas, architecture diagram, DB table list

@@ -28,6 +28,9 @@ function createPool(): Pool {
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 3_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000, // 10 seconds
+    query_timeout: 10_000, // 10 seconds query timeout
     // Required for Neon/Supabase hosted Postgres
     ssl: url.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
   });

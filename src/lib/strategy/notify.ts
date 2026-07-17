@@ -22,7 +22,7 @@
  */
 
 import { db }                         from '@/lib/db/client';
-import { fetchKlines, TF_TO_MS }      from '@/lib/exchange/binance';
+import { fetchLatestCandlesCached }    from '@/lib/db/candles';
 import { buildIndicatorCache,
          conditionCacheKey,
          evaluateConditionChecked,
@@ -53,12 +53,12 @@ export async function evaluateStrategySignal(
   strategy: Strategy,
   lastNotifiedTimeMs: number | null,
 ): Promise<StrategyNotifyResult> {
-  // ── 1. Fetch candles ───────────────────────────────────────────────────────
+  // ── 1. Fetch candles (cached & deduplicated) ──────────────────────────────
   let candles: Candle[];
   try {
-    candles = await fetchLatestCandles(strategy.symbol, strategy.timeframe, CANDLE_WINDOW);
+    candles = await fetchLatestCandlesCached(strategy.symbol, strategy.timeframe, CANDLE_WINDOW);
   } catch (err) {
-    console.error(`[strategy/notify] DB fetch failed for ${strategy.id}:`, err);
+    console.error(`[strategy/notify] Cached fetch failed for ${strategy.id}:`, err);
     return { fired: false, strategy, reason: 'error' };
   }
 
@@ -208,100 +208,6 @@ function conditionPassesCheck(
   return evaluateConditionChecked(condition, closed, closed.length - 1, cache);
 }
 
-// ─── Candle fetching — always fresh tail ─────────────────────────────────────
-
-/**
- * Fetch candles for signal evaluation.
- *
- * Root cause of missed signals: the cron reads the DB directly, but the DB is
- * only updated when /api/candles is requested (i.e. when someone has the chart
- * open). A just-closed candle may sit in Binance for several minutes before it
- * appears in the DB. With the old "stale after 3 periods" guard, the cron could
- * silently evaluate a 1–2 candle-old dataset and miss the new signal.
- *
- * Fix: ALWAYS fetch the last 5 candles from Binance REST (a trivial API call)
- * and merge them into the tail of the DB history. The DB provides the full
- * indicator warm-up window (1 000 bars); Binance provides guaranteed freshness.
- *
- * Merge rule: drop any DB candles whose openTime >= the earliest Binance
- * candle's openTime, then append the Binance batch. This handles both
- * "Binance has a newer candle" and "Binance has corrected the forming bar".
- */
-async function fetchLatestCandles(
-  symbol:    string,
-  timeframe: string,
-  limit:     number,
-): Promise<Candle[]> {
-  // ── 1. DB fetch (history / warm-up window) ───────────────────────────────
-  const { rows } = await db.query<{
-    open_time:  Date;
-    open:       string;
-    high:       string;
-    low:        string;
-    close:      string;
-    volume:     string;
-    close_time: Date;
-  }>(
-    `SELECT open_time, open, high, low, close, volume, close_time
-     FROM candles
-     WHERE symbol = $1 AND timeframe = $2
-     ORDER BY open_time DESC
-     LIMIT $3`,
-    [symbol, timeframe, limit],
-  );
-
-  const dbCandles: Candle[] = rows.reverse().map((r) => ({
-    openTime:  r.open_time.getTime(),
-    open:      parseFloat(r.open),
-    high:      parseFloat(r.high),
-    low:       parseFloat(r.low),
-    close:     parseFloat(r.close),
-    volume:    parseFloat(r.volume),
-    closeTime: r.close_time.getTime(),
-  }));
-
-  // ── 2. Always fetch a fresh tail from Binance ────────────────────────────
-  // Calculate how many candles are missing between the DB tail and now.
-  // This guarantees we bridge the gap if the DB hasn't been updated recently,
-  // preventing corrupted indicator calculations due to missing candles.
-  try {
-    const dbTailTime = dbCandles.length > 0 ? dbCandles[dbCandles.length - 1]!.openTime : 0;
-    const tfMs = TF_TO_MS[timeframe as Timeframe];
-    // We add 5 as a safety buffer
-    const missingCandles = dbTailTime > 0 ? Math.ceil((Date.now() - dbTailTime) / tfMs) + 5 : limit;
-    const fetchLimit = Math.min(limit, Math.max(5, missingCandles));
-
-    const freshTail = await fetchKlines(
-      symbol,
-      timeframe as Timeframe,
-      fetchLimit,
-      undefined,
-      true, // noCache — bypass any in-memory cache
-    );
-
-    if (freshTail.length === 0) return dbCandles;
-
-    // Merge: keep DB history up to (but not including) the first fresh bar,
-    // then append the fresh tail.  This replaces both the forming bar and any
-    // candles that closed since the DB was last updated.
-    const freshStart = freshTail[0]!.openTime;
-    const base = dbCandles.filter((c) => c.openTime < freshStart);
-    const merged = [...base, ...freshTail];
-
-    console.log(
-      `[strategy/notify] ${symbol}/${timeframe}: ` +
-      `DB tail=${new Date(dbCandles[dbCandles.length - 1]?.openTime ?? 0).toISOString()}, ` +
-      `Binance tail=${new Date(freshTail[freshTail.length - 1]!.openTime).toISOString()}, ` +
-      `merged=${merged.length} candles`,
-    );
-
-    return merged;
-  } catch (err) {
-    // Non-fatal — fall back to DB-only data.
-    console.warn(`[strategy/notify] Binance tail fetch failed for ${symbol}/${timeframe}:`, err);
-    return dbCandles;
-  }
-}
 
 /**
  * Atomically stamp the strategy's last_notified_trade_time.

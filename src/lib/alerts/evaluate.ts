@@ -12,12 +12,11 @@
  *   No indicator warmup required; seriesIndex and params are ignored.
  */
 
-import { db } from '@/lib/db/client';
+import { fetchLatestCandlesCached } from '@/lib/db/candles';
 import { buildIndicatorCache, evaluateCondition } from '@/lib/strategy/evaluate';
-import { fetchKlines, TF_TO_MS } from '@/lib/exchange/binance';
 import { formatAlertMessage } from './telegram';
 import type { AlertRule, AlertEvalResult } from '@/types/alert';
-import type { Candle, Timeframe } from '@/types/market';
+import type { Candle } from '@/types/market';
 
 /** Enough candles for EMA(200) warmup plus some buffer. */
 const EVAL_CANDLE_WINDOW = 300;
@@ -34,12 +33,12 @@ export async function evaluateAlertRule(rule: AlertRule): Promise<AlertEvalResul
     }
   }
 
-  // ── 2. Fetch latest closed candles from DB ────────────────────────────────
+  // ── 2. Fetch latest closed candles (cached & deduplicated) ───────────────
   let candles: Candle[];
   try {
-    candles = await fetchLatestCandles(rule.symbol, rule.timeframe, EVAL_CANDLE_WINDOW);
+    candles = await fetchLatestCandlesCached(rule.symbol, rule.timeframe, EVAL_CANDLE_WINDOW);
   } catch (err) {
-    console.error(`[alerts/evaluate] DB fetch failed for ${rule.symbol}/${rule.timeframe}:`, err);
+    console.error(`[alerts/evaluate] Cached fetch failed for ${rule.symbol}/${rule.timeframe}:`, err);
     return { fired: false, rule, reason: 'error' };
   }
 
@@ -100,65 +99,6 @@ export async function evaluateAlertRule(rule: AlertRule): Promise<AlertEvalResul
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-async function fetchLatestCandles(
-  symbol:    string,
-  timeframe: string,
-  limit:     number,
-): Promise<Candle[]> {
-  const { rows } = await db.query<{
-    open_time:  Date;
-    open:       string;
-    high:       string;
-    low:        string;
-    close:      string;
-    volume:     string;
-    close_time: Date;
-  }>(
-    `SELECT open_time, open, high, low, close, volume, close_time
-     FROM candles
-     WHERE symbol = $1 AND timeframe = $2
-     ORDER BY open_time DESC
-     LIMIT $3`,
-    [symbol, timeframe, limit],
-  );
-  const dbCandles = rows.reverse().map((r) => ({
-    openTime:  r.open_time.getTime(),
-    open:      parseFloat(r.open),
-    high:      parseFloat(r.high),
-    low:       parseFloat(r.low),
-    close:     parseFloat(r.close),
-    volume:    parseFloat(r.volume),
-    closeTime: r.close_time.getTime(),
-  }));
-
-  // Fetch a fresh tail from Binance to avoid evaluating stale DB data
-  try {
-    const dbTailTime = dbCandles.length > 0 ? dbCandles[dbCandles.length - 1]!.openTime : 0;
-    const tfMs = TF_TO_MS[timeframe as Timeframe];
-    const missingCandles = dbTailTime > 0 ? Math.ceil((Date.now() - dbTailTime) / tfMs) + 5 : limit;
-    const fetchLimit = Math.min(limit, Math.max(5, missingCandles));
-
-    const freshTail = await fetchKlines(
-      symbol,
-      timeframe as Timeframe,
-      fetchLimit,
-      undefined,
-      true, // noCache
-    );
-
-    if (freshTail.length === 0) return dbCandles;
-
-    const freshStart = freshTail[0]!.openTime;
-    const base = dbCandles.filter((c) => c.openTime < freshStart);
-    const merged = [...base, ...freshTail];
-
-    return merged;
-  } catch (err) {
-    console.warn(`[alerts/evaluate] Binance tail fetch failed for ${symbol}/${timeframe}:`, err);
-    return dbCandles;
-  }
-}
 
 function evaluateSimpleOp(current: number, operator: string, value: number): boolean {
   switch (operator) {

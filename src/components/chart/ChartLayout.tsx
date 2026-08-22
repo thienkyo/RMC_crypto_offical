@@ -600,7 +600,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       }
       return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveStrategies, candles, savedMarkerSettings.showLabels]);
+    }, [liveStrategies, candles.length, savedMarkerSettings.showLabels]);
 
   // ── Pattern markers on price chart ───────────────────────────────────────
   // Extract IndicatorMarker[] from any indicator series that carries them

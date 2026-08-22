@@ -8,7 +8,8 @@
     "start": "next start",
     "migrate": "tsx src/lib/db/migrate.ts",
     "typecheck": "tsc --noEmit",
-    "updateCode": "./updateCode.sh"
+    "updateCode": "./updateCode.sh",
+    "restart": "./updateCode.sh -f"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

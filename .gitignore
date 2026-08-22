@@ -29,5 +29,5 @@ yarn-error.log*
 .vercel
 
 # local logs and pid files
-*.log
+*.log*
 .app.pid

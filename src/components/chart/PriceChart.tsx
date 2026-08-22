@@ -288,11 +288,15 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
 
       const chart        = chartRef.current;
       const isNewContext = loadedKeyRef.current !== contextKey;
-      // Array-identity is the truthful signal for "this is new data" — see the
-      // comment on lastCandlesRef. Length alone would falsely report "no new
-      // bar" when two symbols happen to have the same candle count, causing
-      // the chart to silently keep the previous symbol's data on screen.
-      const isNewData    = lastCandlesRef.current !== candles;
+      // Array-identity is the truthful signal for "this is new data" on context switch.
+      // On same context, we check if length or last candle's openTime changed to skip ticks.
+      const lastCandles  = lastCandlesRef.current;
+      const isNewData    = isNewContext
+        ? lastCandles !== candles
+        : (!lastCandles ||
+           lastCandles.length !== candles.length ||
+           (candles.length > 0 && lastCandles.length > 0 &&
+            candles[candles.length - 1]!.openTime !== lastCandles[lastCandles.length - 1]!.openTime));
 
       // Nothing to do — same context, same data reference.
       if (!isNewContext && !isNewData) return;

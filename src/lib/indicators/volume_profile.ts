@@ -138,16 +138,27 @@ export const volume_profile: Indicator = {
       let   vaLow     = pocBin;
       let   vaHigh    = pocBin;
 
-      while (vaVol < vaTarget && (vaLow > 0 || vaHigh < bins - 1)) {
-        const addAbove = vaHigh < bins - 1 ? volBins[vaHigh + 1]! : 0;
-        const addBelow = vaLow  > 0        ? volBins[vaLow  - 1]! : 0;
+      while (vaVol < vaTarget) {
+        const canExpandAbove = vaHigh < bins - 1;
+        const canExpandBelow = vaLow  > 0;
+        // Both edges hit the histogram bounds — the value area already spans
+        // every bin, so vaVol can grow no further. Break to avoid spinning
+        // forever when empty (zero-volume) bins keep vaVol below vaTarget.
+        if (!canExpandAbove && !canExpandBelow) break;
+
+        // A maxed-out side is marked -Infinity so it is never chosen: this is
+        // the fix for the hang. Previously an exhausted upper edge still won the
+        // `addAbove >= addBelow` tie (both 0) and vaHigh was incremented past
+        // bins-1 indefinitely, never making progress. Only an expandable side
+        // can be selected now, so each iteration strictly moves one edge outward
+        // and the loop is bounded by `bins`.
+        const addAbove = canExpandAbove ? volBins[vaHigh + 1]! : -Infinity;
+        const addBelow = canExpandBelow ? volBins[vaLow  - 1]! : -Infinity;
 
         if (addAbove >= addBelow) {
-          vaHigh++;
-          vaVol += addAbove;
+          vaVol += volBins[++vaHigh]!;
         } else {
-          vaLow--;
-          vaVol += addBelow;
+          vaVol += volBins[--vaLow]!;
         }
       }
 

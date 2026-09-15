@@ -1,6 +1,6 @@
 # RMC — Project Overview
 
-> Last updated: 2026-06-12
+> Last updated: 2026-09-15
 
 RMC is a **personal market intelligence dashboard** for crypto (top-20 by volume, fetched dynamically from Binance) and — planned — the Mag7 stocks (AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA). It combines real-time prices, candlestick charts, technical indicators, a strategy builder with backtesting, AI chart analysis, a news/sentiment pipeline, and Telegram alerts in one terminal-style interface.
 
@@ -45,8 +45,8 @@ Stock (Mag7) data integration is scaffolded at the type level (`source: 'equitie
 - Timeframes from `1m` to `1w`; stale-data banner when the feed is down
 
 ### 🧮 Indicators (`src/lib/indicators/`)
-17 indicators implementing a shared `Indicator<P>` interface, so the **same `compute()` function** powers both chart overlays and the backtester:
-ADX, Bollinger Bands (+ width, %B), CVD (+ divergence), EMA (+ deviation), MACD, RSI, SMA, Stochastic, StochRSI, time-of-day, volume profile, volume ratio.
+37 entries in the `INDICATORS` registry, all implementing a shared `Indicator<P>` interface, so the **same `compute()` function** powers both chart overlays and the backtester:
+ADX, Bollinger Bands (+ width, %B), CVD (+ divergence), EMA (+ deviation), MACD, RSI, SMA, Stochastic, StochRSI, time-of-day, volume profile, volume ratio — plus the candlestick / price-action patterns in `src/lib/patterns/` (engulfing, hammer & shooting star, doji stars, abandoned baby, belt hold, breakaway, advance block, three white soldiers, identical three crows, fair value gaps, liquidity sweeps, absorption), which register the same way.
 
 ### 🧪 Strategy Builder & Backtester (`/strategy`, `src/lib/strategy/`)
 - Visual condition-group builder; strategies stored with **full version history** (`strategies` + `strategy_versions`)
@@ -134,4 +134,4 @@ pnpm dev               # dev server on http://localhost:7070  (note: port 7070, 
 pnpm typecheck         # the only automated check (no eslint yet)
 ```
 
-See [SETUP.md](../SETUP.md) for full environment setup and [CLAUDE.md](../CLAUDE.md) for code style, conventions, and gotchas. Phase 4 design notes live in [PHASE4_PLAN.md](../PHASE4_PLAN.md).
+See [README.md](../README.md) for the full quick start, environment variables, and gotchas; [SETUP.md](../SETUP.md) for the original Phase 1 walkthrough and [CLAUDE.md](../CLAUDE.md) for code style, conventions, and gotchas. Phase 4 design notes live in [PHASE4_PLAN.md](../PHASE4_PLAN.md).

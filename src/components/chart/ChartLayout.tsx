@@ -103,6 +103,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // and forces a re-render.  Per-field selectors only re-render when that specific
   // field changes.
   const candles            = useChartStore((s) => s.candles);
+  const candlesKey         = useChartStore((s) => s.candlesKey);
   const activeIndicators   = useChartStore((s) => s.activeIndicators);
   const isStale            = useChartStore((s) => s.isStale);
   const setStale           = useChartStore((s) => s.setStale);
@@ -234,36 +235,47 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       symbol,
       timeframe,
       (candle: Candle) => {
+        const state = useChartStore.getState();
+        // Previous subscription can still fire between setSymbol and this
+        // effect's cleanup. Drop those ticks so they cannot merge into the
+        // new context (or mutate the old series via updateCandle).
+        if (state.symbol !== symbol || state.timeframe !== timeframe) return;
+
         lastTickRef.current = Date.now();
         setStale(false);
 
+        // Header can show the new ticker immediately; the candlestick series
+        // must wait until history for this symbol+TF is in the store.
+        if (state.candles.length === 0 || state.candlesKey !== `${symbol}-${timeframe}`) {
+          setLivePrice(candle.close);
+          return;
+        }
+
         // 1. Surgical indicator updates (Sub-charts FIRST to prevent TimeScale clamping)
-        const currentCandles = candlesRef.current;
-        if (currentCandles.length > 0) {
-          const last = currentCandles[currentCandles.length - 1]!;
-          const merged = (candle.openTime === last.openTime)
-            ? [...currentCandles.slice(0, -1), candle]
-            : [...currentCandles, candle];
+        const currentCandles = state.candles;
+        const last = currentCandles[currentCandles.length - 1]!;
+        const merged = (candle.openTime === last.openTime)
+          ? [...currentCandles.slice(0, -1), candle]
+          : [...currentCandles, candle];
 
-          for (const ai of activeIndicators) {
-            if (!ai.visible) continue;
-            const indicator = INDICATORS[ai.id];
-            if (!indicator) continue;
+        for (const ai of activeIndicators) {
+          if (!ai.visible) continue;
+          const indicator = INDICATORS[ai.id];
+          if (!indicator) continue;
 
-            const subChart = subRefs.current.get(ai.id);
-            if (!subChart) continue;
+          const subChart = subRefs.current.get(ai.id);
+          if (!subChart) continue;
 
-            try {
-              const latestResults = indicator.compute(merged, ai.params);
-              for (const res of latestResults) {
-                const lastPoint = res.data[res.data.length - 1];
-                if (lastPoint) {
-                  subChart.updateSeriesPoint(res.id, lastPoint);
-                }
+          try {
+            const latestResults = indicator.compute(merged, ai.params);
+            for (const res of latestResults) {
+              const lastPoint = res.data[res.data.length - 1];
+              if (lastPoint) {
+                subChart.updateSeriesPoint(res.id, lastPoint);
               }
-            } catch (err) {
-              console.error(`[surgical-indicator:${ai.id}] failed:`, err);
             }
+          } catch (err) {
+            console.error(`[surgical-indicator:${ai.id}] failed:`, err);
           }
         }
 
@@ -1251,6 +1263,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             candles={candles}
             overlays={overlaySeries}
             contextKey={`${symbol}-${timeframe}`}
+            dataKey={candlesKey}
             onCrosshair={handleCrosshair}
             crosshairTime={crosshairTime}
             showTimeAxis={subPaneGroups.size === 0}

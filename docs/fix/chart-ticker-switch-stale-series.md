@@ -1,9 +1,9 @@
 # Chart ticker switch — stale series / wrong scale
 
-> Status: plan locked 2026-09-17 (Kyo / Vader)
+> Status: implemented 2026-09-17 (awaiting Kyo review)
 > Repo: thienkyo/RMC_crypto_offical
 > Owners: Remy (PO) → Steve (impl) → Rosa (QA) → Vader
-> Scope: bugfix plan only — no implementation in this PR
+> Scope: bugfix — implementation matches the locked plan below
 
 ## Symptom
 
@@ -45,6 +45,16 @@ Key files:
 ## Test notes
 
 BTC↔PAXG, BTC↔ETH, rapid clicks, TF change, slow/offline `/api/candles`. Watch live tick jank / existing LWC sync guards.
+
+## Implementation (2026-09-17)
+
+1. `setSymbol` / `setTimeframe` clear `candles` + `candlesKey` (no-op if unchanged).
+2. ChartLayout kline handler drops ticks whose store symbol/TF don't match, and skips surgical `updateCandle` / `updateLastCandle` until `candlesKey` matches. `subscribeKline` also drops `k.s` / `k.i` mismatches.
+3. PriceChart nulls `loadedKeyRef` on `contextKey` change (render phase), `setData([])` until `dataKey === contextKey`, commits the key only after `setData` of that history; `updateCandle` no-ops until committed.
+4. Same-context dirty check uses first-bar OHLC + last `openTime` (not length/last openTime alone).
+5. `keepPreviousData` removed. `setCandles(data, contextKey)` ignores in-flight writes for a previous ticker; cache hits sync into the store only when the current key is empty.
+
+Acceptance still needs a BTC↔PAXG / BTC↔ETH / rapid-click / TF-change pass on the running dashboard.
 
 ## Out of scope
 

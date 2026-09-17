@@ -48,6 +48,12 @@ interface Props {
   overlays:     IndicatorSeries[];
   /** Combined symbol+timeframe key — any change triggers an 80-candle zoom reset. */
   contextKey:   string;
+  /**
+   * Store's `${symbol}-${timeframe}` stamp for `candles`, or null while the
+   * series is cleared. Must equal `contextKey` before we setData / commit the
+   * loaded key — otherwise a WS-mutated previous array is treated as fresh.
+   */
+  dataKey:      string | null;
   /** Called on every crosshair move. x is pixels from left edge of the chart canvas. */
   onCrosshair?: (time: UTCTimestamp | null, x: number | null) => void;
   crosshairTime?: UTCTimestamp | null;
@@ -80,11 +86,36 @@ function candleAtTime(candles: Candle[], timeSec: number): Candle | undefined {
 
 const toSec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 
+/**
+ * Same-context dirty check. Length + last openTime alone is not enough:
+ * BTC and PAXG 1h series often share bar count and aligned last openTime, so
+ * a poisoned loadedKey would skip setData for the new symbol. First-bar OHLC
+ * changes on a real history swap but stays put on a same-bar live tick.
+ */
+function isSameRenderedSeries(prev: Candle[] | null, next: Candle[]): boolean {
+  if (!prev) return false;
+  if (prev === next) return true;
+  if (prev.length !== next.length) return false;
+  if (next.length === 0) return true;
+  const prevFirst = prev[0]!;
+  const nextFirst = next[0]!;
+  const prevLast  = prev[prev.length - 1]!;
+  const nextLast  = next[next.length - 1]!;
+  return (
+    prevFirst.openTime === nextFirst.openTime &&
+    prevFirst.open     === nextFirst.open &&
+    prevFirst.high     === nextFirst.high &&
+    prevFirst.low      === nextFirst.low &&
+    prevFirst.close    === nextFirst.close &&
+    prevLast.openTime  === nextLast.openTime
+  );
+}
+
 /** How many bars to show when switching symbol or timeframe. */
 const INITIAL_BARS = 100;
 
 export const PriceChart = forwardRef<PriceChartHandle, Props>(
-  function PriceChart({ candles, overlays, contextKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange, vpConfig }, ref) {
+  function PriceChart({ candles, overlays, contextKey, dataKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange, vpConfig }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -92,23 +123,15 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
     const vpRendererRef = useRef<VolumeProfileRenderer | null>(null);
 
     const loadedKeyRef    = useRef<string | null>(null);
-    // Track how many candles we last called setData with so we can skip
-    // calling it on every live tick (same bar updating).  ChartLayout already
-    // handles the per-tick surgical update via updateCandle(); only calling
-    // setData() when the bar count grows or the context changes prevents
-    // LWC's timescale from firing subscribeVisibleLogicalRangeChange on every
-    // tick, which was the root cause of the React "maximum update depth" loop.
-    const loadedLengthRef = useRef<number>(0);
-    // Last candles array reference we rendered from.  Array-identity is the
-    // canonical signal for "this is fresh data" — TanStack Query's
-    // keepPreviousData returns the previous reference unchanged during the
-    // in-flight phase, so when the user switches symbols we receive the new
-    // contextKey while `candles` still points at the old symbol's array.
-    // Without this guard the effect would commit loadedKeyRef against stale
-    // data, and the subsequent render with fresh candles would be mis-treated
-    // as "same context" — preserving the previous price scale and skipping
-    // the autoscale reset.
     const lastCandlesRef  = useRef<Candle[] | null>(null);
+    // Render-phase copy of contextKey so updateCandle() can refuse ticks for a
+    // previous symbol before the data effect has reset the LWC series.
+    const contextKeyRef   = useRef(contextKey);
+    if (contextKeyRef.current !== contextKey) {
+      loadedKeyRef.current   = null;
+      lastCandlesRef.current = null;
+      contextKeyRef.current  = contextKey;
+    }
 
     // ── Bar spacing capture (debounced) ────────────────────────────────────
     // Keep a stable ref to onBarSpacingChange so the LWC subscription never
@@ -134,6 +157,9 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       priceToCoordinate: (price) => candleRef.current?.priceToCoordinate(price) ?? null,
       updateCandle: (candle) => {
         if (!candleRef.current) return;
+        // History for this context hasn't been setData'd yet — a live tick
+        // would land on the previous symbol's series / an empty series.
+        if (loadedKeyRef.current !== contextKeyRef.current) return;
         try {
           candleRef.current.update({
             time:  toSec(candle.openTime),
@@ -284,29 +310,32 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
 
     // ── Update candle data ──────────────────────────────────────────────────
     useEffect(() => {
-      if (!candleRef.current || candles.length === 0) return;
+      if (!candleRef.current) return;
 
-      const chart        = chartRef.current;
+      const chart = chartRef.current;
       const isNewContext = loadedKeyRef.current !== contextKey;
-      // Array-identity is the truthful signal for "this is new data" on context switch.
-      // On same context, we check if length or last candle's openTime changed to skip ticks.
-      const lastCandles  = lastCandlesRef.current;
-      const isNewData    = isNewContext
-        ? lastCandles !== candles
-        : (!lastCandles ||
-           lastCandles.length !== candles.length ||
-           (candles.length > 0 && lastCandles.length > 0 &&
-            candles[candles.length - 1]!.openTime !== lastCandles[lastCandles.length - 1]!.openTime));
+      const dataMatchesContext = dataKey === contextKey && candles.length > 0;
 
-      // Nothing to do — same context, same data reference.
-      if (!isNewContext && !isNewData) return;
+      if (isNewContext && !dataMatchesContext) {
+        // Context switched and history for the new key is not in the store yet.
+        // Clear the series now so a WS tick / leftover OHLC cannot keep the
+        // previous symbol's scale. loadedKeyRef was already nulled in render.
+        try {
+          candleRef.current.setData([]);
+        } catch {
+          // Series may be mid-teardown during unmount.
+        }
+        for (const lineSeries of overlayRefs.current.values()) {
+          try { lineSeries.setData([]); } catch { /* ignore */ }
+        }
+        chart?.priceScale('right').applyOptions({ autoScale: true });
+        candleRef.current.priceScale().applyOptions({ autoScale: true });
+        return;
+      }
 
-      // Context changed but the candles array is still the previous symbol's
-      // (TanStack Query's keepPreviousData hasn't been replaced yet). Bail and
-      // wait for the real fetch to land. Committing loadedKeyRef now would
-      // poison the next render: it'd be classified as "same context" and the
-      // autoscale reset below would never run for the new symbol's prices.
-      if (isNewContext && !isNewData) return;
+      if (!dataMatchesContext) return;
+
+      if (!isNewContext && isSameRenderedSeries(lastCandlesRef.current, candles)) return;
 
       const rawSavedRange = (!isNewContext && chart)
         ? chart.timeScale().getVisibleLogicalRange()
@@ -326,15 +355,14 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         })),
       );
 
-      lastCandlesRef.current  = candles;
-      loadedLengthRef.current = candles.length;
+      lastCandlesRef.current = candles;
 
       if (isNewContext || !savedRange) {
         // Force the price scale to recalculate for the new symbol's price range.
         // chart.priceScale() alone doesn't re-trigger if autoScale was already true;
         // calling it on the series' own priceScale() forces LWC to rescale immediately.
         chart?.priceScale('right').applyOptions({ autoScale: true });
-        candleRef.current?.priceScale().applyOptions({ autoScale: true });
+        candleRef.current.priceScale().applyOptions({ autoScale: true });
         if (savedBarSpacing) {
           // Restore the user's preferred candle width and scroll to the latest bar.
           // applyOptions({ barSpacing }) keeps the rightmost bar pinned, so we
@@ -352,7 +380,7 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       } else {
         chart?.timeScale().setVisibleLogicalRange(savedRange);
       }
-    }, [candles, contextKey, savedBarSpacing]);
+    }, [candles, contextKey, dataKey, savedBarSpacing]);
 
     // ── Render/update overlay indicators ───────────────────────────────────
     useEffect(() => {

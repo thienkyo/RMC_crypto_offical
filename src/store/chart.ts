@@ -56,6 +56,12 @@ interface ChartState {
 
   // ── Candle data ────────────────────────────────────────────────────────────
   candles:    Candle[];
+  /**
+   * `${symbol}-${timeframe}` of the currently loaded `candles` array, or null
+   * while the series is cleared between symbol/TF switches. PriceChart uses
+   * this so a WS-mutated previous array cannot be committed as new-context data.
+   */
+  candlesKey: string | null;
   isLoading:  boolean;
   /** True when the live feed has gone silent for too long. */
   isStale:    boolean;
@@ -79,7 +85,12 @@ interface ChartState {
   setSymbol:    (symbol: string) => void;
   setTimeframe: (tf: Timeframe) => void;
 
-  setCandles:       (candles: Candle[]) => void;
+  /**
+   * Replace the candle series. When `contextKey` is provided it must match the
+   * store's current `${symbol}-${timeframe}` — in-flight fetches for a previous
+   * ticker are dropped so they cannot poison the chart after a switch.
+   */
+  setCandles:       (candles: Candle[], contextKey?: string) => void;
   setLoading:       (loading: boolean)  => void;
   setStale:         (stale: boolean)    => void;
 
@@ -119,6 +130,7 @@ export const useChartStore = create<ChartState>()(
       timeframe: '1h',
 
       candles:    [],
+      candlesKey: null,
       isLoading:  false,
       isStale:    false,
       lastTickAt: null,
@@ -138,15 +150,26 @@ export const useChartStore = create<ChartState>()(
 
       // ── Actions ─────────────────────────────────────────────────────────────
 
-      setSymbol: (symbol) =>
-        // Don't clear candles — keep previous chart visible while new data loads.
-        // TanStack Query's keepPreviousData + setCandles() on queryFn success handles the swap.
-        set({ symbol, isStale: false, lastTickAt: null }),
+      setSymbol: (symbol) => {
+        if (get().symbol === symbol) return;
+        // Clear the series immediately so a live tick cannot merge into the
+        // previous symbol's OHLC while the new history is in flight.
+        set({ symbol, candles: [], candlesKey: null, isStale: false, lastTickAt: null });
+      },
 
-      setTimeframe: (timeframe) =>
-        set({ timeframe, isStale: false, lastTickAt: null }),
+      setTimeframe: (timeframe) => {
+        if (get().timeframe === timeframe) return;
+        set({ timeframe, candles: [], candlesKey: null, isStale: false, lastTickAt: null });
+      },
 
-      setCandles:  (candles)   => set({ candles }),
+      setCandles: (candles, contextKey) => {
+        const expected = `${get().symbol}-${get().timeframe}`;
+        if (contextKey !== undefined && contextKey !== expected) return;
+        set({
+          candles,
+          candlesKey: candles.length === 0 ? null : expected,
+        });
+      },
       setLoading:  (isLoading) => set({ isLoading }),
       setStale:    (isStale)   => set({ isStale }),
 

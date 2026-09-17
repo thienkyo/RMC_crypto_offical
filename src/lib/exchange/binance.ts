@@ -162,6 +162,10 @@ export function subscribeKline(
       if (!msg || msg.e !== 'kline' || !msg.k) return;
 
       const k = msg.k;
+      // Drop frames that don't belong to this subscription (buffered close
+      // race, or a multiplexed/misrouted tick). Prevents a BTC kline from
+      // being applied after the chart has already switched to PAXG.
+      if (k.s !== symbol || k.i !== TF_TO_BINANCE[tf]) return;
       onCandle(
         {
           openTime:  k.t,

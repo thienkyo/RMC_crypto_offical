@@ -1,6 +1,6 @@
 # RMC — Project Overview
 
-> Last updated: 2026-09-15
+> Last updated: 2026-09-17
 
 RMC is a **personal market intelligence dashboard** for crypto (top-20 by volume, fetched dynamically from Binance) and — planned — the Mag7 stocks (AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA). It combines real-time prices, candlestick charts, technical indicators, a strategy builder with backtesting, AI chart analysis, a news/sentiment pipeline, and Telegram alerts in one terminal-style interface.
 
@@ -18,7 +18,7 @@ RMC is a **personal market intelligence dashboard** for crypto (top-20 by volume
 | 4     | News/social ingestion + sentiment                  | ✅ Built      |
 | 5     | Alerts (Telegram), polish, mobile view             | 🔄 In progress (Telegram alerts working) |
 
-Stock (Mag7) data integration is scaffolded at the type level (`source: 'equities'`) but no provider (Yahoo/Polygon) is wired in yet — crypto via Binance is the live data source today.
+Stock (Mag7) data integration is scaffolded at the type level (`source: 'equities'`) but no provider is wired in yet — crypto via Binance is the live data source today. Locked product plan: [docs/equities-plan.md](equities-plan.md).
 
 ---
 

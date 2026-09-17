@@ -1278,7 +1278,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             vpConfig={vpConfig}
           />
 
-          {/* Candle countdown — positioned on the price axis just below the live price label */}
+          {/* Candle countdown — pinned to the last-price row, on the chart side of the
+              price axis (left of the tick labels) so it never covers unrelated ticks */}
           {timerY !== null && (() => {
             const closeMs = liveCandle?.closeTime ?? candles[candles.length - 1]?.closeTime;
             return closeMs

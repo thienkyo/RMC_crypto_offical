@@ -158,7 +158,7 @@ else
     CHANGED_FILES=$(git diff --name-only HEAD "$UPSTREAM")
     
     # Run the pull
-    git pull
+    git pull --ff-only || git pull --rebase
     log_success "Successfully pulled latest code."
     
     NEED_RESTART=true

@@ -280,15 +280,37 @@ if [ "$NEED_RESTART" = true ] || [ "$FORCE" = true ]; then
     
     # Get the PID of the background job just started
     NEW_PID=$!
+    disown "$NEW_PID" 2>/dev/null || true
     echo "$NEW_PID" > "$PID_FILE"
     
-    # Verify if process is running
-    sleep 2
-    if kill -0 "$NEW_PID" 2>/dev/null; then
-        log_success "Project started successfully! (PID: $NEW_PID)"
+    # Verify if process is running and verify HTTP live status
+    log_info "Verifying service is live on http://localhost:$PORT/..."
+    MAX_ATTEMPTS=15
+    ATTEMPT=1
+    IS_LIVE=false
+
+    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+        sleep 1
+        # Check if process is still alive
+        if ! kill -0 "$NEW_PID" 2>/dev/null; then
+            log_error "Project process $NEW_PID died prematurely. Check ${MODE}.log for errors."
+        fi
+
+        # Check HTTP status
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORT/" 2>/dev/null || true)
+        if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then
+            IS_LIVE=true
+            break
+        fi
+        ATTEMPT=$((ATTEMPT + 1))
+    done
+
+    if [ "$IS_LIVE" = true ]; then
+        log_success "Project started successfully and is LIVE at http://localhost:$PORT/ (HTTP $HTTP_CODE, PID: $NEW_PID)!"
         log_info "Logs are being written to ${MODE}.log"
     else
-        log_error "Project failed to start. Check ${MODE}.log for errors."
+        log_warn "Process $NEW_PID is alive, but http://localhost:$PORT/ did not respond within ${MAX_ATTEMPTS}s."
+        log_info "Check ${MODE}.log for startup status."
     fi
 fi
 

@@ -37,8 +37,21 @@ When triggered, follow these steps:
 
 3. **Verify Execution**:
    - Check the stdout and exit code. An exit code of `0` indicates success.
-   - If the script outputs `Project started successfully!`, extract the new PID from `.app.pid` or read it from stdout.
+   - `updateCode.sh` performs an automated HTTP health check polling `http://localhost:<port>/` for up to 15 seconds.
+   - If the script outputs `Project started successfully and is LIVE!`, extract the new PID from `.app.pid` or read it from stdout.
    - If starting failed, review the respective log file (`dev.log` for development mode, `prod.log` for production mode) to analyze error logs (like port conflict `EADDRINUSE` or runtime/compilation errors).
+
+4. **Verify Service is Live (HTTP Health Check)**:
+   - Always verify the service is actively serving traffic:
+     ```bash
+     curl -I http://localhost:<port>/
+     ```
+     (Default port: `7070` for dev, `3000` for prod).
+   - Confirm it returns `HTTP/1.1 200 OK` (or valid HTTP header).
+   - **Crucial Agent Rule**: If curl returns `Connection refused` (error 7) because the agent task runner cleaned up the subshell process group upon script termination:
+     - Start the dev server directly using `run_command` with `IsDaemon: true` (e.g. `npm run dev`).
+     - Record the new PID to `.app.pid`: `lsof -t -i :<port> > .app.pid`.
+     - Verify with `curl -I http://localhost:<port>/` again.
 
 ## Troubleshooting & Common Mistakes
 
@@ -51,3 +64,8 @@ If the server fails to restart due to `EADDRINUSE` on port 7070, it is because N
 If migrations fail, check if the Docker database container is running.
 - Run `docker ps` to verify that `rmc_db` is running.
 - If it is not running, run `docker-compose up -d` before retrying.
+
+### 3. Server Not Live After Subshell Exits (Agent Environment)
+When executed via agent subshells, background jobs spawned with `&` may get killed when the task finishes if not disowned or daemonized.
+- Always run `curl -I http://localhost:<port>/` after the script finishes.
+- If the endpoint is not responding, launch the server using `IsDaemon: true` and verify HTTP 200 status.

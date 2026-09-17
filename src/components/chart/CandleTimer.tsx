@@ -3,8 +3,11 @@
 /**
  * CandleTimer — countdown to the current candle's close.
  *
- * Rendered as an absolute overlay on the price pane, positioned directly below
- * the live price label on the right price axis — mirroring TradingView's timer.
+ * Rendered as an absolute overlay on the price pane, pinned to the SAME row as
+ * the live price label but on the chart side of the right price axis (i.e. just
+ * left of the axis tick labels), so it never drops onto — and obscures —
+ * unrelated mid-scale price ticks when the last price sits near the top/bottom
+ * of the visible scale.
  *
  * ChartLayout is responsible for computing `yPx` via
  * priceRef.current.priceToCoordinate(currentPrice) and passing it here.
@@ -13,8 +16,11 @@
  * Props:
  *   closeTimeMs — Unix ms of the current forming candle's close time.
  *   yPx         — Y pixel from the top of the price pane for the current price.
- *                 The timer is rendered just below this point (price label height ≈ 22px).
- *   priceAxisWidth — width of the right price axis in px (default 80).
+ *                 The timer is vertically centered on this point, matching the
+ *                 last-price label's row.
+ *   priceAxisWidth — width of the right price axis in px (default 80); the timer
+ *                    is offset left by this amount so it sits beside the axis,
+ *                    not on top of it.
  */
 
 import { useEffect, useState } from 'react';
@@ -51,20 +57,22 @@ export function CandleTimer({ closeTimeMs, yPx, priceAxisWidth = 80 }: Props) {
 
   if (remaining < 0 || remaining > 7 * 24 * 3_600_000) return null;
 
-  // Price label height on LWC's price axis is ~22px — place timer just below it.
+  // Price label row height on LWC's price axis is ~22px; the chip itself is
+  // narrower than the full axis width since it floats beside the axis, not on it.
   const LABEL_H = 22;
+  const CHIP_W  = 52;
 
   return (
     <div
       className="absolute pointer-events-none z-20 flex items-center justify-center"
       style={{
-        top:    yPx + LABEL_H,
-        right:  0,
-        width:  priceAxisWidth,
+        top:    yPx - LABEL_H / 2,
+        right:  priceAxisWidth,
+        width:  CHIP_W,
         height: LABEL_H,
       }}
     >
-      {/* Pill styled to match the price axis label look */}
+      {/* Pill styled to match the price axis label look, pinned to the last-price row */}
       <div className="flex items-center justify-center w-full h-full
                       bg-[#1e2a3d] border border-[#2a3a55] rounded-sm">
         <span className="font-mono text-[11px] text-[#93c5fd] tabular-nums tracking-wide">

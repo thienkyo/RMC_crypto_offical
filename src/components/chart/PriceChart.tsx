@@ -290,24 +290,6 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       });
     }, [showTimeAxis]);
 
-    // ── Mirror crosshair from other panes ──────────────────────────────────
-    useEffect(() => {
-      const chart = chartRef.current;
-      if (!chart || !candleRef.current) return;
-
-      if (!crosshairTime) {
-        chart.clearCrosshairPosition();
-        return;
-      }
-
-      const candle = candleAtTime(candles, crosshairTime);
-      if (candle) {
-        chart.setCrosshairPosition(candle.close, crosshairTime, candleRef.current);
-      }
-    }, [crosshairTime, candles]);
-
-
-
     // ── Update candle data ──────────────────────────────────────────────────
     useEffect(() => {
       if (!candleRef.current) return;
@@ -330,6 +312,14 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         }
         chart?.priceScale('right').applyOptions({ autoScale: true });
         candleRef.current.priceScale().applyOptions({ autoScale: true });
+        // ChartLayout keeps the last hover time after the cursor leaves (and
+        // after a ticker switch). Drop the painted crosshair so the mirror
+        // effect below cannot call setCrosshairPosition on an empty series.
+        try {
+          chart?.clearCrosshairPosition();
+        } catch {
+          // Chart may be mid-teardown during unmount.
+        }
         return;
       }
 
@@ -381,6 +371,40 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         chart?.timeScale().setVisibleLogicalRange(savedRange);
       }
     }, [candles, contextKey, dataKey, savedBarSpacing]);
+
+    // ── Mirror crosshair from other panes ──────────────────────────────────
+    // Runs after the data effect so setData([]) / setData(history) has already
+    // landed. ChartLayout keeps the last hover timestamp across ticker switches
+    // (and aligned 1h bars can still match via candleAtTime), so we must not
+    // call setCrosshairPosition while the series is empty or uncommitted.
+    useEffect(() => {
+      const chart = chartRef.current;
+      if (!chart || !candleRef.current) return;
+
+      const seriesReady =
+        candles.length > 0 &&
+        dataKey === contextKey &&
+        loadedKeyRef.current === contextKey;
+
+      if (!crosshairTime || !seriesReady) {
+        try {
+          chart.clearCrosshairPosition();
+        } catch {
+          // Chart may be mid-teardown during unmount.
+        }
+        return;
+      }
+
+      const candle = candleAtTime(candles, crosshairTime);
+      if (!candle) return;
+
+      try {
+        chart.setCrosshairPosition(candle.close, crosshairTime, candleRef.current);
+      } catch {
+        // Lightweight Charts throws "Value is null" if the series was emptied
+        // or removed between the guard and this call (mid-teardown).
+      }
+    }, [crosshairTime, candles, dataKey, contextKey]);
 
     // ── Render/update overlay indicators ───────────────────────────────────
     useEffect(() => {

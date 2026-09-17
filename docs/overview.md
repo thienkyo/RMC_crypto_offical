@@ -43,7 +43,7 @@ Stock (Mag7) data integration is scaffolded at the type level (`source: 'equitie
 - Main dashboard at `/` — multi-pane chart layout: candlestick main chart plus indicator subcharts (RSI, MACD, …)
 - Live watchlist driven by the Binance miniTicker WebSocket
 - Timeframes from `1m` to `1w`; stale-data banner when the feed is down
-- Switching watchlist ticker or timeframe **clears** the candle series and ignores live kline ticks until history for the new symbol+TF has loaded — so the Y-axis cannot stick to the previous ticker (e.g. BTC scale on PAXG)
+- Switching watchlist ticker or timeframe **clears** the candle series and ignores live kline ticks until history for the new symbol+TF has loaded — so the Y-axis cannot stick to the previous ticker (e.g. BTC scale on PAXG). Shared crosshair is cleared while that series is empty so Lightweight Charts does not throw `Value is null` from `setCrosshairPosition`.
 
 ### 🧮 Indicators (`src/lib/indicators/`)
 37 entries in the `INDICATORS` registry, all implementing a shared `Indicator<P>` interface, so the **same `compute()` function** powers both chart overlays and the backtester:

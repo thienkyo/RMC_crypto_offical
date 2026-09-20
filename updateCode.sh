@@ -130,16 +130,21 @@ if ! git rev-parse --verify "$UPSTREAM" >/dev/null 2>&1; then
     log_info "Defaulting comparison to '$UPSTREAM'"
 fi
 
-LOCAL_HASH=$(git rev-parse HEAD)
-REMOTE_HASH=$(git rev-parse "$UPSTREAM")
+BEHIND_COUNT=$(git rev-list --count HEAD.."$UPSTREAM")
+AHEAD_COUNT=$(git rev-list --count "$UPSTREAM"..HEAD)
 
 NEED_INSTALL=false
 NEED_MIGRATE=false
 NEED_BUILD=false
 NEED_RESTART=false
 
-if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
-    log_success "Local branch is up-to-date with remote ($UPSTREAM)."
+if [ "$BEHIND_COUNT" -eq 0 ]; then
+    if [ "$AHEAD_COUNT" -gt 0 ]; then
+        log_info "Local branch is ahead of remote ($UPSTREAM) by $AHEAD_COUNT commit(s). Nothing to pull."
+    else
+        log_success "Local branch is up-to-date with remote ($UPSTREAM)."
+    fi
+
     if [ "$FORCE" = true ]; then
         log_warn "Force flag set. Running full checks and restart anyway..."
         NEED_INSTALL=true
@@ -147,12 +152,12 @@ if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
         NEED_BUILD=true
         NEED_RESTART=true
     else
-        log_info "No changes detected. Nothing to do."
+        log_info "No remote changes detected. Nothing to do."
         exit 0
     fi
 else
     # We are behind remote, need to pull
-    log_info "Local branch is behind remote. Pulling changes..."
+    log_info "Local branch is behind remote ($UPSTREAM) by $BEHIND_COUNT commit(s). Pulling changes..."
     
     # Store list of files that will change
     CHANGED_FILES=$(git diff --name-only HEAD "$UPSTREAM")

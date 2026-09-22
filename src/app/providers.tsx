@@ -3,8 +3,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 
+import { CommandPalette } from '@/components/ui/CommandPalette';
+
 /**
- * TanStack Query provider.
+ * TanStack Query provider and global UI portals.
  *
  * We create the QueryClient inside the component (not at module level) so each
  * server render gets its own instance — required for Next.js App Router SSR safety.
@@ -31,6 +33,9 @@ export function Providers({ children }: { children: ReactNode }) {
   );
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      {children}
+      <CommandPalette />
+    </QueryClientProvider>
   );
 }

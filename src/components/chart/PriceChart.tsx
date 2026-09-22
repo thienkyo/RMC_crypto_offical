@@ -114,6 +114,39 @@ function isSameRenderedSeries(prev: Candle[] | null, next: Candle[]): boolean {
 /** How many bars to show when switching symbol or timeframe. */
 const INITIAL_BARS = 100;
 
+/**
+ * Fraction of the price pane left empty to the right of the newest candle on
+ * load / reload / context switch, so the live bar never sits flush against the
+ * price axis — and the volume profile histogram has clear space to draw into.
+ * Only applied when we reset the view; a range the user scrolled to is restored
+ * untouched.
+ */
+const RIGHT_GAP_RATIO = 0.2;
+
+/**
+ * Gap in bars that leaves RIGHT_GAP_RATIO of a `windowBars`-wide view empty.
+ * Exported so the "Now" button in ChartLayout lands on the same gap a reload does.
+ */
+export function gapBarsFor(windowBars: number): number {
+  return Math.round(windowBars * RIGHT_GAP_RATIO / (1 - RIGHT_GAP_RATIO));
+}
+
+const INITIAL_GAP_BARS = gapBarsFor(INITIAL_BARS);
+
+/**
+ * Bars of right-hand offset that come out to RIGHT_GAP_RATIO of the plot area
+ * at the chart's current bar spacing.  LWC only expresses rightOffset in bars,
+ * so a fixed count would swing from a sliver to half the pane as the user
+ * zooms; deriving it from the pixel width keeps the gap visually constant.
+ */
+function rightOffsetBars(chart: IChartApi): number {
+  const spacing = (chart.timeScale().options() as { barSpacing?: number }).barSpacing;
+  if (!spacing || spacing <= 0) return INITIAL_GAP_BARS;
+  const plotWidth = chart.options().width - chart.priceScale('right').width();
+  if (plotWidth <= 0) return INITIAL_GAP_BARS;
+  return Math.round((plotWidth * RIGHT_GAP_RATIO) / spacing);
+}
+
 export const PriceChart = forwardRef<PriceChartHandle, Props>(
   function PriceChart({ candles, overlays, contextKey, dataKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange, vpConfig }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -219,6 +252,9 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
           timeVisible:    true,
           secondsVisible: false,
           visible:        showTimeAxis,
+          // Seed the right-hand gap so scrollToRealTime() and the auto-shift on
+          // each new bar both keep the newest candle off the price axis.
+          rightOffset:    INITIAL_GAP_BARS,
           tickMarkFormatter: (time: number, tickMarkType: TickMarkType) => {
             const date = new Date(time * 1000);
             switch (tickMarkType) {
@@ -353,17 +389,20 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         // calling it on the series' own priceScale() forces LWC to rescale immediately.
         chart?.priceScale('right').applyOptions({ autoScale: true });
         candleRef.current.priceScale().applyOptions({ autoScale: true });
-        if (savedBarSpacing) {
+        if (savedBarSpacing && chart) {
           // Restore the user's preferred candle width and scroll to the latest bar.
           // applyOptions({ barSpacing }) keeps the rightmost bar pinned, so we
           // explicitly scroll to real time afterwards to always land on the latest candle.
-          chart?.timeScale().applyOptions({ barSpacing: savedBarSpacing });
-          chart?.timeScale().scrollToRealTime();
+          chart.timeScale().applyOptions({ barSpacing: savedBarSpacing });
+          // rightOffset has to be recomputed against the restored spacing —
+          // the seeded INITIAL_GAP_BARS only matches the default zoom level.
+          chart.timeScale().applyOptions({ rightOffset: rightOffsetBars(chart) });
+          chart.timeScale().scrollToRealTime();
         } else {
           const total = candles.length;
           chart?.timeScale().setVisibleLogicalRange({
             from: total - INITIAL_BARS - 1,
-            to:   total + 3,
+            to:   total + INITIAL_GAP_BARS,
           });
         }
         loadedKeyRef.current = contextKey;
@@ -371,6 +410,29 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         chart?.timeScale().setVisibleLogicalRange(savedRange);
       }
     }, [candles, contextKey, dataKey, savedBarSpacing]);
+
+    // ── Externally-changed bar spacing (restoring a saved layout) ──────────
+    // The data effect only reaches its barSpacing branch on a context switch or
+    // a fresh setData, so a layout applied while the same symbol+timeframe is
+    // already loaded would never change the zoom it advertises.
+    //
+    // The user's own zooming round-trips back here through the debounced
+    // captureBarSpacing → store → savedBarSpacing path, arriving equal to what
+    // the chart already has, so the equality guard makes that a no-op and this
+    // never fights a drag in progress.
+    useEffect(() => {
+      const chart = chartRef.current;
+      if (!chart || !savedBarSpacing) return;
+      // Not our data yet — the data effect will apply the spacing as it commits.
+      if (loadedKeyRef.current !== contextKey) return;
+
+      const current = (chart.timeScale().options() as { barSpacing?: number }).barSpacing;
+      if (current !== undefined && Math.abs(current - savedBarSpacing) < 0.01) return;
+
+      chart.timeScale().applyOptions({ barSpacing: savedBarSpacing });
+      chart.timeScale().applyOptions({ rightOffset: rightOffsetBars(chart) });
+      chart.timeScale().scrollToRealTime();
+    }, [savedBarSpacing, contextKey]);
 
     // ── Mirror crosshair from other panes ──────────────────────────────────
     // Runs after the data effect so setData([]) / setData(history) has already

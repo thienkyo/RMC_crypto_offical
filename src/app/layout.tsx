@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 import './globals.css';
 import { Providers } from './providers';
+import { CommandPaletteTrigger } from '@/components/ui/CommandPalette';
 
 export const metadata: Metadata = {
   title: 'RMC Crypto',
@@ -35,6 +36,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/"         className="nav-link">Chart</Link>
             <Link href="/strategy" className="nav-link">Strategy</Link>
             <Link href="/settings" className="nav-link">Settings</Link>
+
+            <CommandPaletteTrigger />
 
             {/* Right spacer + paper-trade badge */}
             <span className="ml-auto text-xs font-mono text-amber-400/70">

@@ -102,16 +102,29 @@ interface ChartState {
   updateLastCandle: (candle: Candle) => boolean;
 
   addIndicator:          (indicator: ActiveIndicator) => void;
+  setActiveIndicators:   (indicators: ActiveIndicator[]) => void;
   removeIndicator:       (id: string) => void;
   toggleIndicator:       (id: string) => void;
   updateIndicatorParams: (id: string, params: Record<string, number>) => void;
 
-  setBarSpacing:    (barSpacing: number) => void;
-  setSubPaneHeight: (id: string, height: number) => void;
+  setBarSpacing:     (barSpacing: number) => void;
+  setSubPaneHeight:  (id: string, height: number) => void;
+  setSubPaneHeights: (heights: Record<string, number>) => void;
   /** Merge a partial update into markerSettings. */
   setMarkerSettings: (patch: { visibility?: Partial<MarkerVisibility>; showLabels?: boolean; stripVisible?: boolean }) => void;
   /** Merge a partial update into vpConfig. */
   setVpConfig: (patch: Partial<VolumeProfileConfig>) => void;
+
+  /** Atomically apply an entire layout preset snapshot */
+  applyLayoutSnapshot: (snapshot: {
+    timeframe?: Timeframe;
+    activeIndicators?: ActiveIndicator[];
+    vpConfig?: VolumeProfileConfig;
+    markerSettings?: MarkerSettings;
+    subPaneHeights?: Record<string, number>;
+    barSpacing?: number;
+    symbol?: string | null;
+  }) => void;
 }
 
 /** Default indicator set shown on first load. */
@@ -204,6 +217,9 @@ export const useChartStore = create<ChartState>()(
           ],
         })),
 
+      setActiveIndicators: (indicators) =>
+        set({ activeIndicators: indicators }),
+
       removeIndicator: (id) =>
         set((s) => ({ activeIndicators: s.activeIndicators.filter((i) => i.id !== id) })),
 
@@ -226,6 +242,9 @@ export const useChartStore = create<ChartState>()(
       setSubPaneHeight: (id, height) =>
         set((s) => ({ subPaneHeights: { ...s.subPaneHeights, [id]: height } })),
 
+      setSubPaneHeights: (heights) =>
+        set({ subPaneHeights: heights }),
+
       setMarkerSettings: (patch) =>
         set((s) => ({
           markerSettings: {
@@ -241,6 +260,30 @@ export const useChartStore = create<ChartState>()(
 
       setVpConfig: (patch) =>
         set((s) => ({ vpConfig: { ...s.vpConfig, ...patch } })),
+
+      applyLayoutSnapshot: (snapshot) =>
+        set((s) => {
+          const symbol    = snapshot.symbol    || s.symbol;
+          const timeframe = snapshot.timeframe || s.timeframe;
+          // Changing either invalidates the loaded series, so we must clear it
+          // exactly the way setSymbol/setTimeframe do — otherwise a live tick
+          // merges into the previous context's OHLC and the chart renders the
+          // old ticker's candles (and indicator values) under the new label.
+          const contextChanged = symbol !== s.symbol || timeframe !== s.timeframe;
+
+          return {
+            symbol,
+            timeframe,
+            ...(snapshot.activeIndicators !== undefined ? { activeIndicators: snapshot.activeIndicators } : {}),
+            ...(snapshot.vpConfig ? { vpConfig: snapshot.vpConfig } : {}),
+            ...(snapshot.markerSettings ? { markerSettings: snapshot.markerSettings } : {}),
+            ...(snapshot.subPaneHeights !== undefined ? { subPaneHeights: snapshot.subPaneHeights } : {}),
+            ...(snapshot.barSpacing !== undefined ? { barSpacing: snapshot.barSpacing } : {}),
+            ...(contextChanged
+              ? { candles: [], candlesKey: null, isStale: false, lastTickAt: null }
+              : {}),
+          };
+        }),
     }),
     {
       name: 'rmc-chart',

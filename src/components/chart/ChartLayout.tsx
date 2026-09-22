@@ -15,13 +15,14 @@ import type { IndicatorSeries, IndicatorPoint, IndicatorMarker } from '@/lib/ind
 import { useLiveStrategies } from '@/hooks/useLiveStrategy';
 import { computeSignalCandles } from '@/lib/strategy/signals';
 import { strategyScoreRange }  from '@/lib/strategy/rating';
-import { PriceChart, type PriceChartHandle } from './PriceChart';
+import { PriceChart, gapBarsFor, type PriceChartHandle } from './PriceChart';
 import { SubChart,   type SubChartHandle   } from './SubChart';
 import { VPConfigCard }                      from './VPConfigCard';
 import { CandleTimer, CandleTimerInline }       from './CandleTimer';
 import { ChartLegend }                       from './ChartLegend';
 import { TimeframeSelector } from '../ui/TimeframeSelector';
 import { IndicatorSelector } from '../ui/IndicatorSelector';
+import { ChartLayoutSelector } from './ChartLayoutSelector';
 import { StaleDataBanner }   from '../ui/StaleDataBanner';
 import type { Candle } from '@/types/market';
 
@@ -34,6 +35,57 @@ const SUB_HEIGHT_DEFAULT: Record<string, number> = {
   // all others fall through to 120
 };
 const SUB_HEIGHT_FALLBACK = 120;
+
+/** Shared price formatting for the header readout and the range extreme markers. */
+function fmtPrice(v: number): string {
+  return v.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: v < 1 ? 6 : 2,
+  });
+}
+
+/** One visible-range extreme, already resolved to pane pixel coordinates. */
+interface ExtremePoint {
+  x:     number;
+  y:     number;
+  price: number;
+  /** Chip sits above the bar (caret points down) rather than below it. */
+  above: boolean;
+}
+
+function samePoint(a: ExtremePoint | null, b: ExtremePoint | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.x === b.x && a.y === b.y && a.price === b.price && a.above === b.above;
+}
+
+/**
+ * Price chip + caret marking one extreme of the visible range, pinned to the
+ * bar that printed it.  `above` is decided by the caller (which knows the pane
+ * height): the high chip normally sits above its bar and the low chip below,
+ * but either flips to the other side when the pane edge would clip it.
+ */
+function ExtremeMarker({ point, colorClass }: { point: ExtremePoint; colorClass: string }) {
+  const { x, y, price, above } = point;
+  return (
+    <div
+      className={`absolute z-20 pointer-events-none flex flex-col items-center gap-px
+                  font-mono text-[10px] leading-none whitespace-nowrap ${colorClass}`}
+      style={{
+        left:      x,
+        top:       y + (above ? -6 : 6),
+        transform: `translate(-50%, ${above ? '-100%' : '0%'})`,
+      }}
+    >
+      {!above && <span className="text-[8px] opacity-80">▲</span>}
+      <span className="px-1 py-px rounded-sm tabular-nums
+                       bg-surface-2/90 border border-surface-border">
+        {fmtPrice(price)}
+      </span>
+      {above && <span className="text-[8px] opacity-80">▼</span>}
+    </div>
+  );
+}
 
 /**
  * Thin drag strip rendered at the top of each sub-pane.
@@ -183,19 +235,20 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const subRefs  = useRef<Map<string, SubChartHandle>>(new Map());
 
   // ── Sub-pane heights (resizable via drag, persisted to store) ────────────
-  // Initialise from the persisted store values so heights survive a page reload.
-  const [subHeights, setSubHeights] = useState<Record<string, number>>(savedSubHeights);
-
+  // Read straight from the store rather than mirroring it into local state: a
+  // mirror seeded with useState(savedSubHeights) only ever takes its initial
+  // value, so heights restored by applying a saved layout after mount would
+  // never reach the panes. Every drag already writes through setSubPaneHeight,
+  // so there was nothing the local copy held that the store did not.
   const getSubHeight = useCallback((id: string) =>
-    subHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK,
-  [subHeights]);
+    savedSubHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK,
+  [savedSubHeights]);
 
   const handlePaneDelta = useCallback((id: string, delta: number) => {
-    const current = subHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK;
+    const current = savedSubHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK;
     const next = Math.max(SUB_HEIGHT_MIN, Math.min(SUB_HEIGHT_MAX, current + delta));
-    setSubHeights((prev) => ({ ...prev, [id]: next }));
     setSubPaneHeight(id, next);
-  }, [subHeights, setSubPaneHeight]);
+  }, [savedSubHeights, setSubPaneHeight]);
 
   // Last live tick stored here (not in Zustand candles) so the header price
   // updates without triggering a full candles→setData() re-render cycle.
@@ -725,6 +778,91 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles.length]);
 
+  // ── Visible-range extreme markers ─────────────────────────────────────────
+  // Highest high and lowest low among the bars currently on screen, each drawn
+  // as a price chip + caret on the bar that printed it.  Recomputed on
+  // scroll/zoom (range change) and on every live tick, since the forming bar
+  // can set a new extreme either way.
+  const [highMarker, setHighMarker] = useState<ExtremePoint | null>(null);
+  const [lowMarker,  setLowMarker]  = useState<ExtremePoint | null>(null);
+
+  // Ref mirror of liveCandle so recomputeExtremes can stay dependency-free —
+  // same guard as candlesRef above: reading the state directly would recreate
+  // the callback every tick and thrash the LWC subscription.
+  const liveCandleRef = useRef<Candle | null>(null);
+  useEffect(() => { liveCandleRef.current = liveCandle; }, [liveCandle]);
+
+  const recomputeExtremes = useCallback(() => {
+    const chart = priceRef.current?.getChart();
+    const data  = candlesRef.current;
+    if (!chart || data.length === 0) { setHighMarker(null); setLowMarker(null); return; }
+
+    const range = chart.timeScale().getVisibleLogicalRange();
+    if (!range) { setHighMarker(null); setLowMarker(null); return; }
+
+    // PriceChart.updateCandle() appends the forming bar to the LWC series before
+    // it reaches the store, so logical indices can run one bar past `data`.
+    const live      = liveCandleRef.current;
+    const lastTime  = data[data.length - 1]!.openTime;
+    const extraBar  = live && live.openTime > lastTime ? live : null;
+    const lastIndex = data.length - 1 + (extraBar ? 1 : 0);
+
+    // Logical indices are fractional at the pane edges — round inward so we only
+    // scan bars that are actually fully on screen.
+    const from = Math.max(0, Math.ceil(range.from));
+    const to   = Math.min(lastIndex, Math.floor(range.to));
+    if (from > to) { setHighMarker(null); setLowMarker(null); return; }
+
+    let bestHigh = -Infinity, bestHighTime = 0;
+    let bestLow  =  Infinity, bestLowTime  = 0;
+    for (let i = from; i <= to; i++) {
+      const bar    = i < data.length ? data[i]! : extraBar!;
+      // The forming bar's extremes live in liveCandle; the store copy lags a tick.
+      const isLive = !!live && live.openTime === bar.openTime;
+      const high   = isLive ? Math.max(bar.high, live!.high) : bar.high;
+      const low    = isLive ? Math.min(bar.low,  live!.low)  : bar.low;
+      if (high > bestHigh) { bestHigh = high; bestHighTime = bar.openTime; }
+      if (low  < bestLow)  { bestLow  = low;  bestLowTime  = bar.openTime; }
+    }
+
+    // Height of the chip + caret stack, used both to keep it inside the pane
+    // and as the flip threshold.
+    const STACK_H    = 26;
+    const paneHeight = chart.options().height;
+
+    const place = (timeMs: number, price: number, prefer: 'above' | 'below'): ExtremePoint | null => {
+      const x = chart.timeScale().timeToCoordinate(Math.floor(timeMs / 1000) as LWCTimestamp);
+      const y = priceRef.current?.priceToCoordinate(price) ?? null;
+      // y lands outside the pane once the price scale is dragged off autoScale
+      // far enough to push the bar out of view — hide rather than clamp.
+      if (x === null || y === null || y < 0 || y > paneHeight) return null;
+      const above = prefer === 'above'
+        ? y >= STACK_H                  // high: drop below the bar only if clipped at the top
+        : y > paneHeight - STACK_H;     // low:  lift above the bar only if clipped at the bottom
+      return { x, y, price, above };
+    };
+
+    // Bail on an unchanged marker so a quiet tick doesn't force a re-render.
+    const nextHigh = place(bestHighTime, bestHigh, 'above');
+    const nextLow  = place(bestLowTime,  bestLow,  'below');
+    setHighMarker((prev) => (samePoint(prev, nextHigh) ? prev : nextHigh));
+    setLowMarker((prev)  => (samePoint(prev, nextLow)  ? prev : nextLow));
+  }, []);
+
+  // Recompute on every live tick and whenever the history array changes.
+  // recomputeExtremes has no deps, so this can't re-register anything.
+  useEffect(() => { recomputeExtremes(); }, [recomputeExtremes, livePrice, candles]);
+
+  // Recompute on every chart scroll/zoom — the callback identity is already
+  // stable, so this only re-registers on a new bar.
+  useEffect(() => {
+    const chart = priceRef.current?.getChart();
+    if (!chart) return;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(recomputeExtremes);
+    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(recomputeExtremes);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles.length]);
+
   // ── Header price ──────────────────────────────────────────────────────────
   const lastCandle   = candles[candles.length - 1];
   const prevCandle   = candles[candles.length - 2];
@@ -745,10 +883,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
         {displayPrice !== undefined && (
           <>
             <span className="font-mono text-text-price text-sm">
-              {displayPrice.toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: displayPrice < 1 ? 6 : 2,
-              })}
+              {fmtPrice(displayPrice)}
             </span>
             <span className={`font-mono text-xs ${priceChange >= 0 ? 'text-up' : 'text-down'}`}>
               {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
@@ -1004,6 +1139,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
             )}
           </div>
 
+          <ChartLayoutSelector />
           <IndicatorSelector />
           <TimeframeSelector />
           {/* Scroll back to the most recent candle — all panes together */}
@@ -1013,9 +1149,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               if (total === 0) return;
               // setVisibleLogicalRange fires subscribeVisibleLogicalRangeChange
               // synchronously, so the bidirectional sync propagates to all panes.
+              // Same right-hand gap the chart resets to on load, so "Now" and a
+              // reload frame the latest candle identically.
               priceRef.current?.getChart()?.timeScale().setVisibleLogicalRange({
                 from: (total - 81) as Logical,
-                to:   (total + 3)  as Logical,
+                to:   (total + gapBarsFor(80)) as Logical,
               });
             }}
             title="Go to current time"
@@ -1286,6 +1424,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               ? <CandleTimer closeTimeMs={closeMs} yPx={timerY} />
               : null;
           })()}
+
+          {/* Visible-range extremes — green on the highest high, amber on the lowest low */}
+          {highMarker && <ExtremeMarker point={highMarker} colorClass="text-up" />}
+          {lowMarker  && <ExtremeMarker point={lowMarker}  colorClass="text-warn" />}
 
           {/* OHLCV + indicator legend — updates on every crosshair move */}
           <ChartLegend

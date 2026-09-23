@@ -37,4 +37,5 @@ export const SOURCE_CREDIBILITY: Record<string, number> = {
   reddit:        0.6,
   nitter:        0.5,
   polymarket:    0.9, // prediction markets are strong signals
+  custom:        0.8, // user-curated personal sources
 };

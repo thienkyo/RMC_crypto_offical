@@ -43,7 +43,7 @@ const NAME_MAP: Record<string, string> = {
   cosmos: 'ATOMUSDT',
   stellar: 'XLMUSDT',
 
-  // ── Mag7 stocks ──────────────────────────────────────────────────────────
+  // ── Mag7 & Hardware stocks ──────────────────────────────────────────────
   apple: 'AAPL',
   microsoft: 'MSFT',
   nvidia: 'NVDA',
@@ -52,6 +52,25 @@ const NAME_MAP: Record<string, string> = {
   amazon: 'AMZN',
   facebook: 'META',
   tesla: 'TSLA',
+  broadcom: 'AVGO',
+  tsmc: 'TSM',
+  asml: 'ASML',
+  micron: 'MU',
+  'western digital': 'WDC',
+  seagate: 'STX',
+  supermicro: 'SMCI',
+  'super micro': 'SMCI',
+  palantir: 'PLTR',
+  intel: 'INTC',
+  dell: 'DELL',
+  qualcomm: 'QCOM',
+  marvell: 'MRVL',
+  'applied materials': 'AMAT',
+  'lam research': 'LRCX',
+  kla: 'KLAC',
+  vertiv: 'VRT',
+  arista: 'ANET',
+  'pure storage': 'PSTG',
 };
 
 /**
@@ -82,7 +101,7 @@ const TICKER_MAP: Record<string, string> = {
   ATOM: 'ATOMUSDT',
   XLM: 'XLMUSDT',
 
-  // ── Mag7 stocks ──────────────────────────────────────────────────────────
+  // ── Mag7 & Hardware stocks ──────────────────────────────────────────────
   AAPL: 'AAPL',
   MSFT: 'MSFT',
   NVDA: 'NVDA',
@@ -90,6 +109,27 @@ const TICKER_MAP: Record<string, string> = {
   AMZN: 'AMZN',
   META: 'META',
   TSLA: 'TSLA',
+  AVGO: 'AVGO',
+  AMD: 'AMD',
+  TSM: 'TSM',
+  ASML: 'ASML',
+  MU: 'MU',
+  WDC: 'WDC',
+  STX: 'STX',
+  SMCI: 'SMCI',
+  ARM: 'ARM',
+  PLTR: 'PLTR',
+  INTC: 'INTC',
+  DELL: 'DELL',
+  QCOM: 'QCOM',
+  MRVL: 'MRVL',
+  AMAT: 'AMAT',
+  LRCX: 'LRCX',
+  KLAC: 'KLAC',
+  VRT: 'VRT',
+  ANET: 'ANET',
+  PSTG: 'PSTG',
+  HPE: 'HPE',
 };
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

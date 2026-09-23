@@ -1,5 +1,6 @@
 import { db } from '@/lib/db/client';
 import { SettingsForm } from '@/components/settings/SettingsForm';
+import { CustomFeedsSection } from '@/components/settings/CustomFeedsSection';
 import type { AppSettings } from '@/app/api/settings/route';
 
 /**
@@ -52,6 +53,9 @@ export default async function SettingsPage() {
 
         {/* ── Settings form ─────────────────────────────────────────────── */}
         <SettingsForm initial={settings} />
+
+        {/* ── Custom news feeds management ─────────────────────────────────── */}
+        <CustomFeedsSection />
 
         {/* ── Q&A ───────────────────────────────────────────────────────── */}
         <div className="mt-12 border-t border-surface-border pt-8">

@@ -12,7 +12,7 @@
 import type { Crawler, RawArticle } from './types';
 
 /** Grab the first occurrence of a tag's text content. Returns null if missing. */
-function extractTag(xml: string, tag: string): string | null {
+export function extractTag(xml: string, tag: string): string | null {
   // Handle both <tag>text</tag> and <tag><![CDATA[text]]></tag>
   const re = new RegExp(
     `<${tag}[^>]*>(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([\\s\\S]*?))<\\/${tag}>`,
@@ -26,7 +26,7 @@ function extractTag(xml: string, tag: string): string | null {
   return decodeEntities(raw);
 }
 
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -38,12 +38,12 @@ function decodeEntities(s: string): string {
 }
 
 /** Strip all HTML tags from a string. */
-function stripHtml(s: string): string {
+export function stripHtml(s: string): string {
   return s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** Split XML into item/entry blocks. Handles both RSS 2.0 and Atom 1.0. */
-function splitItems(xml: string): string[] {
+export function splitItems(xml: string): string[] {
   const items: string[] = [];
   // Try RSS <item> first, then Atom <entry>
   for (const tag of ['item', 'entry']) {
@@ -57,7 +57,7 @@ function splitItems(xml: string): string[] {
   return items;
 }
 
-function parseItem(block: string, sourceName: string): RawArticle | null {
+export function parseItem(block: string, sourceName: string): RawArticle | null {
   const title = extractTag(block, 'title');
   if (!title) return null;
 

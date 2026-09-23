@@ -224,6 +224,26 @@ INSERT INTO nitter_accounts (handle, display_name, symbols) VALUES
   ('inversebrah',    'inversebrah',   ARRAY['BTCUSDT'])
 ON CONFLICT (handle) DO NOTHING;
 
+-- Custom news and research feeds (RSS / Atom / discovered feeds)
+CREATE TABLE IF NOT EXISTS custom_news_feeds (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name              TEXT NOT NULL,
+  url               TEXT UNIQUE NOT NULL,
+  resolved_feed_url TEXT,
+  mode              TEXT NOT NULL DEFAULT 'rss' CHECK (mode IN ('rss', 'discovered', 'html')),
+  active            BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed curated starter custom feeds (idempotent)
+INSERT INTO custom_news_feeds (name, url, resolved_feed_url, mode) VALUES
+  ('SemiAnalysis',    'https://www.semianalysis.com/feed',                                     'https://www.semianalysis.com/feed',                                     'rss'),
+  ('ServeTheHome',    'https://www.servethehome.com/feed/',                                    'https://www.servethehome.com/feed/',                                    'rss'),
+  ('The Verge AI',    'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',     'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',     'rss'),
+  ('Vitalik Buterin', 'https://vitalik.eth.limo/feed.xml',                                     'https://vitalik.eth.limo/feed.xml',                                     'rss'),
+  ('Bankless',        'https://www.bankless.com/rss/feed',                                     'https://www.bankless.com/rss/feed',                                     'rss')
+ON CONFLICT (url) DO NOTHING;
+
 -- ─── Phase 5: Alerts ─────────────────────────────────────────────────────────
 
 -- Alert rules: each row defines one indicator-condition alert.

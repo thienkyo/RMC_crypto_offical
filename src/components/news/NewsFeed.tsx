@@ -19,6 +19,7 @@ import { useChartStore } from '@/store/chart';
 import { useNewsFeed } from '@/hooks/useNewsFeed';
 import { SentimentHeatBar } from './SentimentHeatBar';
 import { HourlyDigest } from './HourlyDigest';
+import { CustomNewsSection } from './CustomNewsSection';
 import { NewsItem } from './NewsItem';
 
 const SOURCE_FILTERS = [
@@ -53,6 +54,7 @@ export function NewsFeed() {
       queryClient.invalidateQueries({ queryKey: ['news-feed'] });
       queryClient.invalidateQueries({ queryKey: ['news-digest'] });
       queryClient.invalidateQueries({ queryKey: ['polymarket'] });
+      queryClient.invalidateQueries({ queryKey: ['news-custom'] });
     },
   });
 
@@ -124,6 +126,11 @@ export function NewsFeed() {
       {/* Hourly digest (collapsed by default) */}
       <div className="flex-shrink-0 pt-2">
         <HourlyDigest symbol={symbol} />
+      </div>
+
+      {/* Custom user-configured feeds */}
+      <div className="flex-shrink-0">
+        <CustomNewsSection />
       </div>
 
       {/* Article list */}

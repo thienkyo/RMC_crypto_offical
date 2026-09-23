@@ -15,6 +15,7 @@ import { buildRssCrawlers } from '@/lib/crawlers/rss';
 import { buildRedditCrawlers } from '@/lib/crawlers/reddit';
 import { buildNitterCrawlers } from '@/lib/crawlers/nitter';
 import { crawlPolymarket } from '@/lib/crawlers/polymarket';
+import { crawlCustomFeeds } from '@/lib/crawlers/custom';
 import { upsertArticles } from '@/lib/crawlers/persist';
 import type { Crawler } from '@/lib/crawlers/types';
 import { getUnclassifiedArticles, updateArticleSentiment } from '@/lib/db/news';
@@ -74,6 +75,14 @@ async function runRefresh(): Promise<RefreshSummary> {
     bySource['polymarket'] = inserted;
   } catch (err) {
     console.error('[refresh:polymarket] error:', (err as Error).message);
+  }
+
+  try {
+    const { inserted } = await crawlCustomFeeds();
+    bySource['custom'] = inserted;
+    totalInserted += inserted;
+  } catch (err) {
+    console.error('[refresh:custom] error:', (err as Error).message);
   }
 
   // ── 2. Classify freshly-inserted (and any backlog) articles ─────────────────

@@ -58,3 +58,26 @@ export interface NitterAccount {
   symbols:     string[];
   active:      boolean;
 }
+
+export interface CustomNewsFeed {
+  id:              string;
+  name:            string;
+  url:             string;
+  resolvedFeedUrl: string | null;
+  mode:            'rss' | 'discovered' | 'html';
+  active:          boolean;
+  createdAt:       string;
+}
+
+export interface CustomFeedsResponse {
+  feeds: CustomNewsFeed[];
+}
+
+export interface TestFeedResult {
+  ok:            boolean;
+  mode?:         'rss' | 'discovered' | 'html';
+  itemCount?:    number;
+  sampleTitles?: string[];
+  error?:        string;
+}
+

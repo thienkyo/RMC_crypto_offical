@@ -10,6 +10,7 @@ import type {
   SentimentLabel,
   PolymarketSnapshot,
   NitterAccount,
+  CustomNewsFeed,
 } from '@/types/news';
 
 // ─── Row mappers ─────────────────────────────────────────────────────────────
@@ -198,3 +199,102 @@ export async function getActiveNitterAccounts(): Promise<NitterAccount[]> {
     active:      r['active'] as boolean,
   }));
 }
+
+// ─── Custom Feeds ─────────────────────────────────────────────────────────────
+
+export async function getCustomFeeds(activeOnly = false): Promise<CustomNewsFeed[]> {
+  const query = activeOnly
+    ? `SELECT id, name, url, resolved_feed_url, mode, active, created_at FROM custom_news_feeds WHERE active = TRUE ORDER BY created_at ASC`
+    : `SELECT id, name, url, resolved_feed_url, mode, active, created_at FROM custom_news_feeds ORDER BY created_at ASC`;
+  const { rows } = await db.query(query);
+  return rows.map((r) => ({
+    id:              r['id'] as string,
+    name:            r['name'] as string,
+    url:             r['url'] as string,
+    resolvedFeedUrl: (r['resolved_feed_url'] as string | null) ?? null,
+    mode:            r['mode'] as 'rss' | 'discovered' | 'html',
+    active:          r['active'] as boolean,
+    createdAt:       (r['created_at'] as Date).toISOString(),
+  }));
+}
+
+export async function addCustomFeed(feed: {
+  name: string;
+  url: string;
+  resolvedFeedUrl?: string | null;
+  mode?: 'rss' | 'discovered' | 'html';
+}): Promise<CustomNewsFeed> {
+  const { rows } = await db.query(
+    `INSERT INTO custom_news_feeds (name, url, resolved_feed_url, mode, active)
+     VALUES ($1, $2, $3, $4, TRUE)
+     ON CONFLICT (url) DO UPDATE SET
+       name = EXCLUDED.name,
+       resolved_feed_url = COALESCE(EXCLUDED.resolved_feed_url, custom_news_feeds.resolved_feed_url),
+       mode = COALESCE(EXCLUDED.mode, custom_news_feeds.mode),
+       active = TRUE
+     RETURNING id, name, url, resolved_feed_url, mode, active, created_at`,
+    [feed.name, feed.url, feed.resolvedFeedUrl ?? null, feed.mode ?? 'rss'],
+  );
+  const r = rows[0]!;
+  return {
+    id:              r['id'] as string,
+    name:            r['name'] as string,
+    url:             r['url'] as string,
+    resolvedFeedUrl: (r['resolved_feed_url'] as string | null) ?? null,
+    mode:            r['mode'] as 'rss' | 'discovered' | 'html',
+    active:          r['active'] as boolean,
+    createdAt:       (r['created_at'] as Date).toISOString(),
+  };
+}
+
+export async function updateCustomFeed(
+  id: string,
+  updates: { active?: boolean; name?: string; resolvedFeedUrl?: string; mode?: string },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+
+  if (updates.active !== undefined) {
+    params.push(updates.active);
+    sets.push(`active = $${params.length}`);
+  }
+  if (updates.name !== undefined) {
+    params.push(updates.name);
+    sets.push(`name = $${params.length}`);
+  }
+  if (updates.resolvedFeedUrl !== undefined) {
+    params.push(updates.resolvedFeedUrl);
+    sets.push(`resolved_feed_url = $${params.length}`);
+  }
+  if (updates.mode !== undefined) {
+    params.push(updates.mode);
+    sets.push(`mode = $${params.length}`);
+  }
+
+  if (sets.length === 0) return;
+
+  await db.query(
+    `UPDATE custom_news_feeds SET ${sets.join(', ')} WHERE id = $1`,
+    params,
+  );
+}
+
+export async function deleteCustomFeed(id: string): Promise<void> {
+  await db.query(`DELETE FROM custom_news_feeds WHERE id = $1`, [id]);
+}
+
+/**
+ * Fetch latest articles from custom feeds (source = 'custom'),
+ * ordered newest-first, unfiltered by chart symbol.
+ */
+export async function getLatestCustomArticles(limit: number = 20): Promise<NewsArticle[]> {
+  const { rows } = await db.query(
+    `SELECT * FROM news_articles
+     WHERE source = 'custom'
+     ORDER BY published_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return rows.map(rowToArticle);
+}
+

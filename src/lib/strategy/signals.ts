@@ -14,6 +14,7 @@
  */
 
 import { buildIndicatorCache, evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
+import { buildMtfIndicatorCache, hasHtfConditions, type HtfCandleSets } from '@/lib/strategy/mtf';
 import type { Strategy } from '@/types/strategy';
 import type { Candle } from '@/types/market';
 
@@ -28,7 +29,7 @@ export interface RawSignal {
  * checkMode + checkCandles window.  Matches the backtester exactly so chart
  * markers and trade counts are always in sync.
  */
-export function computeSignalCandles(strategy: Strategy, candles: Candle[]): RawSignal[] {
+export function computeSignalCandles(strategy: Strategy, candles: Candle[], htfCandles?: HtfCandleSets): RawSignal[] {
   const allConditions = strategy.entryConditions.flatMap((g) => g.conditions);
   if (allConditions.length === 0 || candles.length < 2) return [];
 
@@ -37,7 +38,9 @@ export function computeSignalCandles(strategy: Strategy, candles: Candle[]): Raw
 
   let cache: Map<string, Map<number, number>>;
   try {
-    cache = buildIndicatorCache(allConditions, candles);
+    cache = hasHtfConditions(strategy)
+      ? buildMtfIndicatorCache(strategy, candles, htfCandles ?? {})
+      : buildIndicatorCache(allConditions, candles);
   } catch {
     return [];
   }

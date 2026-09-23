@@ -20,6 +20,8 @@ import { useChartStore }    from '@/store/chart';
 import { useStrategyStore } from '@/store/strategy';
 import { runBacktest }      from '@/lib/strategy/backtester';
 import type { Strategy, BacktestTrade } from '@/types/strategy';
+import { useHtfCandles } from './useHtfCandles';
+import { collectHtfTimeframes } from '@/lib/strategy/mtf';
 
 /**
  * How many of the most recent candles to use for indicator computation.
@@ -64,6 +66,8 @@ export function useLiveStrategies(): LiveStrategyState[] {
     [strategies, symbol, timeframe],
   );
 
+  const { htfCandlesBySymbol, isLoading: isHtfLoading } = useHtfCandles(activeStrategies);
+
   // Bar-close count — only increments when a new candle is appended.
   // Using this as the memo dependency ensures we only recompute on bar close,
   // not on every live tick update (which would be wasteful).
@@ -79,10 +83,20 @@ export function useLiveStrategies(): LiveStrategyState[] {
     const now = Date.now();
     const window = candles.filter((c) => c.closeTime < now).slice(-MAX_CANDLES);
 
-    return activeStrategies.map((strategy): LiveStrategyState => {
+    return activeStrategies.map((strategy): LiveStrategyState | null => {
       let trades: BacktestTrade[] = [];
+      const htfCandles = htfCandlesBySymbol.get(strategy.symbol) ?? {};
+      
+      const requiredTfs = collectHtfTimeframes(strategy);
+      const isMissingHtf = requiredTfs.some((tf) => !htfCandles[tf]);
+      
+      if (isMissingHtf) {
+        console.info(`[useLiveStrategies] Skipping ${strategy.name} — waiting for HTF data to load.`);
+        return null;
+      }
+
       try {
-        trades = runBacktest(strategy, window).trades;
+        trades = runBacktest(strategy, window, { htfCandles }).trades;
       } catch (err) {
         console.error(`[useLiveStrategies:${strategy.id}] runBacktest failed:`, err);
       }
@@ -91,13 +105,13 @@ export function useLiveStrategies(): LiveStrategyState[] {
       // With maxPositions > 1 multiple concurrent positions may be open.
       const inPosition = trades.some((t) => t.exitReason === 'end_of_data');
       return { strategy, trades, inPosition, lastSignal };
-    });
+    }).filter((s): s is LiveStrategyState => s !== null);
 
     // candles is captured via closure — intentionally omitted from deps so we
     // only recompute when a new bar closes (barCloseCount) or the active
-    // strategy list changes (activeStrategies).
+    // strategy list changes (activeStrategies), OR when HTF data arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStrategies, barCloseCount]);
+  }, [activeStrategies, barCloseCount, htfCandlesBySymbol]);
 }
 
 /**

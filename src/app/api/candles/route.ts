@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db/client';
 import { backfillKlines, fetchKlines, TF_TO_MS } from '@/lib/exchange/binance';
+import { fetchEquityCandles, isEquitySymbol } from '@/lib/exchange/equities';
 import { TIMEFRAMES } from '@/types/market';
 import type { Timeframe } from '@/types/market';
 
@@ -66,11 +67,132 @@ export async function GET(req: NextRequest) {
     : SERVE_LIMIT[tf];
 
   const desired = BACKFILL_DEPTH[tf];
+  const isEquity = (searchParams.get('source') === 'equities') || isEquitySymbol(symbol);
 
+  // ── Equities Branch (Polygon / Yahoo) ──────────────────────────────────────
+  if (isEquity) {
+    try {
+      const { rows: countRows } = await db.query<{ count: string; latest: Date | null }>(
+        `SELECT COUNT(*) AS count, MAX(open_time) AS latest
+           FROM candles
+          WHERE symbol = $1 AND timeframe = $2 AND source = 'equities'`,
+        [symbol, tf],
+      );
+      const dbCount   = parseInt(countRows[0]?.count ?? '0', 10);
+      const latestMs  = countRows[0]?.latest?.getTime() ?? 0;
+
+      // Two reasons to hit the provider:
+      //   • too little history for this timeframe (initial backfill), or
+      //   • the newest stored bar is older than one bar-interval (tail refresh).
+      // The tail check is what keeps an equity chart live. Without it the count
+      // check alone passes forever once ~100 bars exist, and the chart silently
+      // froze at whatever was stored on the very first load — the crypto branch
+      // below has always had its own gap-aware refresh.
+      const needsBackfill = dbCount < Math.min(desired * 0.5, 100);
+      const isTailStale   = latestMs > 0 && Date.now() - latestMs > TF_TO_MS[tf];
+
+      if (needsBackfill || isTailStale) {
+        try {
+          const { candles: fetched, provider } = await fetchEquityCandles(
+            symbol,
+            tf,
+            // A tail refresh only needs the recent edge; a backfill wants depth.
+            needsBackfill ? limit : Math.min(limit, 300),
+          );
+          if (fetched.length > 0) {
+            await db.query(
+              `INSERT INTO candles
+                 (symbol, timeframe, open_time, open, high, low, close, volume, close_time, source, provider)
+               SELECT
+                 $1, $2,
+                 to_timestamp(open_ms  / 1000.0),
+                 o, h, l, c, v,
+                 to_timestamp(close_ms / 1000.0),
+                 'equities', $10
+               FROM unnest(
+                 $3::bigint[],
+                 $4::numeric[], $5::numeric[], $6::numeric[],
+                 $7::numeric[], $8::numeric[],
+                 $9::bigint[]
+               ) AS x(open_ms, o, h, l, c, v, close_ms)
+               -- Conflict target includes source, which is now part of the PK:
+               -- an equity write can no longer land on (and re-label) a Binance
+               -- bar for the same ticker string.
+               ON CONFLICT (symbol, source, timeframe, open_time)
+               DO UPDATE SET
+                 open       = EXCLUDED.open,
+                 high       = EXCLUDED.high,
+                 low        = EXCLUDED.low,
+                 close      = EXCLUDED.close,
+                 volume     = EXCLUDED.volume,
+                 close_time = EXCLUDED.close_time,
+                 provider   = EXCLUDED.provider`,
+              [
+                symbol, tf,
+                fetched.map((c) => c.openTime),
+                fetched.map((c) => c.open),
+                fetched.map((c) => c.high),
+                fetched.map((c) => c.low),
+                fetched.map((c) => c.close),
+                fetched.map((c) => c.volume),
+                fetched.map((c) => c.closeTime),
+                provider,
+              ],
+            );
+          }
+        } catch (fetchErr) {
+          console.warn(`[api/candles] Equity backfill failed for ${symbol}/${tf}:`, fetchErr);
+        }
+      }
+
+      const { rows } = await db.query<{
+        open_time:  Date;
+        open:       string;
+        high:       string;
+        low:        string;
+        close:      string;
+        volume:     string;
+        close_time: Date;
+      }>(
+        `SELECT open_time, open, high, low, close, volume, close_time
+         FROM candles
+         WHERE symbol = $1 AND timeframe = $2 AND source = 'equities'
+         ORDER BY open_time DESC
+         LIMIT $3`,
+        [symbol, tf, limit],
+      );
+
+      let data = rows.reverse().map((r) => ({
+        openTime:  r.open_time.getTime(),
+        open:      parseFloat(r.open),
+        high:      parseFloat(r.high),
+        low:       parseFloat(r.low),
+        close:     parseFloat(r.close),
+        volume:    parseFloat(r.volume),
+        closeTime: r.close_time.getTime(),
+      }));
+
+      if (data.length === 0) {
+        data = (await fetchEquityCandles(symbol, tf, limit)).candles;
+      }
+
+      return NextResponse.json({ symbol, interval: tf, data, source: 'equities' });
+    } catch (err) {
+      console.error('[api/candles] Equity error:', err);
+      try {
+        const { candles: data } = await fetchEquityCandles(symbol, tf, limit);
+        return NextResponse.json({ symbol, interval: tf, data, source: 'equities' });
+      } catch {
+        return NextResponse.json({ error: 'Failed to fetch equity candles' }, { status: 500 });
+      }
+    }
+  }
+
+  // ── Crypto Branch (Binance) ────────────────────────────────────────────────
   try {
     // ── 1. Check what we have in DB ──────────────────────────────────────────
     const { rows: countRows } = await db.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM candles WHERE symbol = $1 AND timeframe = $2`,
+      `SELECT COUNT(*) AS count FROM candles WHERE symbol = $1 AND timeframe = $2 AND source = 'binance'`,
       [symbol, tf],
     );
     const dbCount = parseInt(countRows[0]?.count ?? '0', 10);
@@ -90,19 +212,20 @@ export async function GET(req: NextRequest) {
       if (candles.length > 0) {
         await db.query(
           `INSERT INTO candles
-             (symbol, timeframe, open_time, open, high, low, close, volume, close_time)
+             (symbol, timeframe, open_time, open, high, low, close, volume, close_time, source)
            SELECT
              $1, $2,
              to_timestamp(open_ms  / 1000.0),
              o, h, l, c, v,
-             to_timestamp(close_ms / 1000.0)
+             to_timestamp(close_ms / 1000.0),
+             'binance'
            FROM unnest(
              $3::bigint[],
              $4::numeric[], $5::numeric[], $6::numeric[],
              $7::numeric[], $8::numeric[],
              $9::bigint[]
            ) AS x(open_ms, o, h, l, c, v, close_ms)
-           ON CONFLICT (symbol, timeframe, open_time)
+           ON CONFLICT (symbol, source, timeframe, open_time)
            DO UPDATE SET
              open       = EXCLUDED.open,
              high       = EXCLUDED.high,
@@ -167,19 +290,20 @@ export async function GET(req: NextRequest) {
       if (tailCandles.length > 0) {
         await db.query(
           `INSERT INTO candles
-             (symbol, timeframe, open_time, open, high, low, close, volume, close_time)
+             (symbol, timeframe, open_time, open, high, low, close, volume, close_time, source)
            SELECT
              $1, $2,
              to_timestamp(open_ms  / 1000.0),
              o, h, l, c, v,
-             to_timestamp(close_ms / 1000.0)
+             to_timestamp(close_ms / 1000.0),
+             'binance'
            FROM unnest(
              $3::bigint[],
              $4::numeric[], $5::numeric[], $6::numeric[],
              $7::numeric[], $8::numeric[],
              $9::bigint[]
            ) AS x(open_ms, o, h, l, c, v, close_ms)
-           ON CONFLICT (symbol, timeframe, open_time)
+           ON CONFLICT (symbol, source, timeframe, open_time)
            DO UPDATE SET
              open       = EXCLUDED.open,
              high       = EXCLUDED.high,
@@ -215,27 +339,27 @@ export async function GET(req: NextRequest) {
       volume:     string;
       close_time: Date;
     }>(
-      `SELECT open_time, open, high, low, close, volume, close_time
-       FROM candles
-       WHERE symbol = $1 AND timeframe = $2
-       ORDER BY open_time DESC
-       LIMIT $3`,
-      [symbol, tf, limit],
-    );
+        `SELECT open_time, open, high, low, close, volume, close_time
+        FROM candles
+        WHERE symbol = $1 AND timeframe = $2 AND source = 'binance'
+        ORDER BY open_time DESC
+        LIMIT $3`,
+        [symbol, tf, limit],
+      );
 
-    const data = rows.reverse().map((r) => ({
-      openTime:  r.open_time.getTime(),
-      open:      parseFloat(r.open),
-      high:      parseFloat(r.high),
-      low:       parseFloat(r.low),
-      close:     parseFloat(r.close),
-      volume:    parseFloat(r.volume),
-      closeTime: r.close_time.getTime(),
-    }));
+      const data = rows.reverse().map((r) => ({
+        openTime:  r.open_time.getTime(),
+        open:      parseFloat(r.open),
+        high:      parseFloat(r.high),
+        low:       parseFloat(r.low),
+        close:     parseFloat(r.close),
+        volume:    parseFloat(r.volume),
+        closeTime: r.close_time.getTime(),
+      }));
 
-    return NextResponse.json({ symbol, interval: tf, data });
-  } catch (err) {
-    console.error('[api/candles] Unhandled error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      return NextResponse.json({ symbol, interval: tf, data, source: 'binance' });
+    } catch (err) {
+      console.error('[api/candles] Unhandled error:', err);
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    }
   }
-}

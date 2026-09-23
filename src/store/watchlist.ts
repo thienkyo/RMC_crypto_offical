@@ -10,6 +10,8 @@ interface WatchlistState {
   customSymbols:   MarketSymbol[];
   /** Ordered list of starred symbol strings (any section). */
   favoriteSymbols: string[];
+  /** Section ids the user collapsed (e.g. 'crypto', 'equities', 'favorites'). */
+  collapsedSections: string[];
 
   // ── Actions ───────────────────────────────────────────────────────────────
   /** Move a default symbol to the hidden list (also removes from favorites). */
@@ -22,6 +24,8 @@ interface WatchlistState {
   removeCustomSymbol: (symbol: string) => void;
   /** Toggle a symbol in/out of the favorites list. */
   toggleFavorite:     (symbol: string) => void;
+  /** Collapse/expand a watchlist section by id. */
+  toggleSection:      (sectionId: string) => void;
 }
 
 export const useWatchlistStore = create<WatchlistState>()(
@@ -30,6 +34,7 @@ export const useWatchlistStore = create<WatchlistState>()(
       hiddenSymbols:   [],
       customSymbols:   [],
       favoriteSymbols: [],
+      collapsedSections: [],
 
       hideSymbol: (symbol) =>
         set((s) => ({
@@ -63,6 +68,13 @@ export const useWatchlistStore = create<WatchlistState>()(
             ? s.favoriteSymbols.filter((x) => x !== symbol)
             : [...s.favoriteSymbols, symbol],
         })),
+
+      toggleSection: (sectionId) =>
+        set((s) => ({
+          collapsedSections: s.collapsedSections.includes(sectionId)
+            ? s.collapsedSections.filter((x) => x !== sectionId)
+            : [...s.collapsedSections, sectionId],
+        })),
     }),
     {
       name: 'rmc-watchlist',
@@ -70,6 +82,7 @@ export const useWatchlistStore = create<WatchlistState>()(
         hiddenSymbols:   s.hiddenSymbols,
         customSymbols:   s.customSymbols,
         favoriteSymbols: s.favoriteSymbols,
+        collapsedSections: s.collapsedSections,
       }),
     },
   ),

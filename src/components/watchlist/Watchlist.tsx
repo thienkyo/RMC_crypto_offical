@@ -25,6 +25,18 @@ function StarIcon({ filled }: { filled: boolean }) {
   );
 }
 
+function ChevronIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" className={clsx(
+      'w-2.5 h-2.5 transition-transform duration-150',
+      collapsed ? '-rotate-90' : 'rotate-0',
+    )} fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6l5 5 5-5" />
+    </svg>
+  );
+}
+
 interface TickerState {
   price:     number;
   changePct: number;
@@ -154,8 +166,9 @@ export function Watchlist() {
   const setSymbol = useChartStore((s) => s.setSymbol);
 
   const {
-    hiddenSymbols, customSymbols, favoriteSymbols,
+    hiddenSymbols, customSymbols, favoriteSymbols, collapsedSections,
     hideSymbol, showSymbol, addCustomSymbol, removeCustomSymbol, toggleFavorite,
+    toggleSection,
   } = useWatchlistStore();
 
   const { data, isLoading, isError, error, refetch } = useSymbols();
@@ -189,6 +202,40 @@ export function Watchlist() {
     );
     return () => unsubs.forEach((u) => u());
   }, [data?.crypto, customSymbols, updateTicker]);
+
+  // Poll quotes for equities (Mag7 + user-added equities) every 30s
+  useEffect(() => {
+    const allEquities = [
+      ...(data?.equities ?? []),
+      ...customSymbols.filter((s) => s.source === 'equities'),
+    ];
+    if (allEquities.length === 0) return;
+
+    const symbols = allEquities.map((s) => s.symbol).join(',');
+
+    let isMounted = true;
+    const fetchQuotes = async () => {
+      try {
+        const res = await fetch(`/api/equities/quotes?symbols=${encodeURIComponent(symbols)}`);
+        if (!res.ok) return;
+        const json = (await res.json()) as { quotes?: Record<string, { price: number; changePct: number }> };
+        if (!isMounted || !json.quotes) return;
+
+        for (const [sym, q] of Object.entries(json.quotes)) {
+          updateTicker(sym, q.price, q.changePct);
+        }
+      } catch (err) {
+        console.warn('[watchlist] Equities quote poll failed:', err);
+      }
+    };
+
+    fetchQuotes();
+    const timer = setInterval(fetchQuotes, 30_000);
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, [data?.equities, customSymbols, updateTicker]);
 
   // ── Add-symbol flow ───────────────────────────────────────────────────────
   const [isAdding,    setIsAdding]    = useState(false);
@@ -276,16 +323,27 @@ export function Watchlist() {
   const hiddenSet       = new Set(hiddenSymbols);
   const customSymbolSet = new Set(customSymbols.map((s) => s.symbol));
   const favSet          = new Set(favoriteSymbols);
+  const collapsedSet    = new Set(collapsedSections);
 
   // Default crypto minus hidden and minus favorited (favorites shown in their own section)
   const cryptoItems = [
     ...(data?.crypto ?? []).filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol)),
     ...customSymbols.filter((s) => s.source === 'binance' && !favSet.has(s.symbol)),
   ];
-  // MAG7 minus hidden and minus favorited
-  const equityItems = (data?.equities ?? []).filter(
-    (s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol),
-  );
+  // Equities minus hidden and minus favorited.
+  // Includes user-added equities the same way cryptoItems includes user-added
+  // crypto — /api/symbols only returns the hard-coded Mag7, so filtering on it
+  // alone left a validated ticker like PLTR rendered in no section at all,
+  // unselectable and unremovable while still costing a quote every 30s.
+  const equityItems = [
+    ...(data?.equities ?? []).filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol)),
+    ...customSymbols.filter(
+      (s) => s.source === 'equities'
+        && !hiddenSet.has(s.symbol)
+        && !favSet.has(s.symbol)
+        && !(data?.equities ?? []).some((e) => e.symbol === s.symbol),
+    ),
+  ];
 
   // Build a lookup map for resolving favorite symbols to MarketSymbol objects
   const allMap = new Map<string, MarketSymbol>();
@@ -392,16 +450,31 @@ export function Watchlist() {
           </div>
         )}
 
-        {sections.map(({ id, label, items, isFavSection }) =>
-          items.length === 0 ? null : (
-            <div key={id}>
-              {/* Section header */}
-              <div className="px-3 py-1.5 text-[10px] text-text-muted uppercase tracking-wider
-                              sticky top-0 bg-surface-1 z-10">
-                {label}
-              </div>
+        {sections.map(({ id, label, items, isFavSection }) => {
+          if (items.length === 0) return null;
+          const isCollapsed = collapsedSet.has(id);
 
-              {items.map((item) => (
+          return (
+            <div key={id}>
+              {/* Section header — click to collapse/expand */}
+              <button
+                type="button"
+                onClick={() => toggleSection(id)}
+                aria-expanded={!isCollapsed}
+                title={isCollapsed ? `Expand ${label}` : `Collapse ${label}`}
+                className="w-full flex items-center gap-1 px-3 py-1.5 text-[10px] text-text-muted
+                           uppercase tracking-wider sticky top-0 bg-surface-1 z-10
+                           hover:text-text-secondary transition-colors select-none
+                           focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <ChevronIcon collapsed={isCollapsed} />
+                <span className="truncate">{label}</span>
+                <span className="ml-auto font-mono text-text-muted/60 normal-case tracking-normal">
+                  {items.length}
+                </span>
+              </button>
+
+              {!isCollapsed && items.map((item) => (
                 <SymbolRow
                   key={`${id}-${item.symbol}`}
                   item={item}
@@ -410,14 +483,14 @@ export function Watchlist() {
                   isFavorited={favSet.has(item.symbol)}
                   ticker={tickers[item.symbol]}
                   isFavSection={isFavSection}
-                  onSelect={() => setSymbol(item.symbol)}
+                  onSelect={() => setSymbol(item.symbol, item.source)}
                   onToggleFav={(e) => handleToggleFav(item.symbol, e)}
                   onRemove={(e) => handleRemove(item.symbol, customSymbolSet.has(item.symbol), e)}
                 />
               ))}
             </div>
-          ),
-        )}
+          );
+        })}
       </div>
     </aside>
   );

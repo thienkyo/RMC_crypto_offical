@@ -1,5 +1,6 @@
 import { db } from '@/lib/db/client';
 import { fetchKlines, TF_TO_MS } from '@/lib/exchange/binance';
+import { fetchEquityCandles, isEquitySymbol } from '@/lib/exchange/equities';
 import type { Candle, Timeframe } from '@/types/market';
 
 // Cache structure: maps "symbol:timeframe:limit" to candles and time of fetch
@@ -67,10 +68,10 @@ async function fetchLatestCandlesUncached(
   }>(
     `SELECT open_time, open, high, low, close, volume, close_time
      FROM candles
-     WHERE symbol = $1 AND timeframe = $2
+     WHERE symbol = $1 AND timeframe = $2 AND source = $4
      ORDER BY open_time DESC
      LIMIT $3`,
-    [symbol, timeframe, limit],
+    [symbol, timeframe, limit, isEquitySymbol(symbol) ? 'equities' : 'binance'],
   );
 
   const dbCandles: Candle[] = rows.reverse().map((r) => ({
@@ -83,8 +84,20 @@ async function fetchLatestCandlesUncached(
     closeTime: r.close_time.getTime(),
   }));
 
-  // ── 2. Always fetch a fresh tail from Binance ────────────────────────────
+  // ── 2. Fresh tail fetch (equities vs crypto) ────────────────────────────
   try {
+    if (isEquitySymbol(symbol)) {
+      const { candles: freshEquity } = await fetchEquityCandles(symbol, timeframe as Timeframe, limit);
+      if (freshEquity.length === 0) return dbCandles;
+
+      // Merge rather than return the provider result outright. Backtests and
+      // long-lookback indicators (a 200-period EMA, say) call this for far more
+      // history than one provider response carries, and returning only the fresh
+      // window silently shortened the series — so results moved run to run.
+      const cutoff = freshEquity[0]!.openTime;
+      return [...dbCandles.filter((c) => c.openTime < cutoff), ...freshEquity].slice(-limit);
+    }
+
     const dbTailTime = dbCandles.length > 0 ? dbCandles[dbCandles.length - 1]!.openTime : 0;
     const tfMs = TF_TO_MS[timeframe as Timeframe];
     const missingCandles = dbTailTime > 0 ? Math.ceil((Date.now() - dbTailTime) / tfMs) + 5 : limit;

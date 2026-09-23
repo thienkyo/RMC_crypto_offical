@@ -33,9 +33,19 @@ CREATE TABLE IF NOT EXISTS candles (
   -- NULL until the accumulator has run; callers should fall back to deltaApprox.
   buy_volume  NUMERIC,
   sell_volume NUMERIC,
+  -- Which universe the row belongs to: 'binance' | 'equities'.
+  source      TEXT        NOT NULL DEFAULT 'binance',
+  -- Which provider actually produced it: 'binance' | 'polygon' | 'yahoo'.
+  -- Split-adjusted (Polygon) and raw (Yahoo) bars are not interchangeable, so a
+  -- row whose provider is unknown cannot be reconciled after the fact.
+  provider    TEXT,
   close_time  TIMESTAMPTZ NOT NULL,
 
-  PRIMARY KEY (symbol, timeframe, open_time)
+  -- `source` is part of the key: the same ticker string can exist in both
+  -- universes (STX is Stacks on Binance and Seagate on the equity feeds), and
+  -- with source outside the key an equity upsert would overwrite the Binance
+  -- bar and flip its source, removing it from every crypto query.
+  PRIMARY KEY (symbol, source, timeframe, open_time)
 );
 
 -- Convert to TimescaleDB hypertable partitioned by open_time.
@@ -46,7 +56,7 @@ SELECT create_hypertable(
   if_not_exists       => TRUE
 );
 
--- Idempotent column additions for existing databases (Phase B — aggTrades).
+-- Idempotent column additions for existing databases (Phase B — aggTrades / Equities P0).
 -- ALTER TABLE IF NOT EXISTS is not standard; use DO block for safety.
 DO $$
 BEGIN
@@ -57,11 +67,42 @@ BEGIN
     ALTER TABLE candles ADD COLUMN buy_volume  NUMERIC;
     ALTER TABLE candles ADD COLUMN sell_volume NUMERIC;
   END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'candles' AND column_name = 'source'
+  ) THEN
+    ALTER TABLE candles ADD COLUMN source TEXT NOT NULL DEFAULT 'binance';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'candles' AND column_name = 'provider'
+  ) THEN
+    ALTER TABLE candles ADD COLUMN provider TEXT;
+  END IF;
+
+  -- Fold `source` into the primary key on databases created before Equities P0.
+  -- Widening a key cannot create duplicates, so this is safe with data present.
+  IF NOT EXISTS (
+    SELECT 1
+    FROM   pg_index i
+    JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+    WHERE  i.indrelid   = 'candles'::regclass
+      AND  i.indisprimary
+      AND  a.attname    = 'source'
+  ) THEN
+    ALTER TABLE candles DROP CONSTRAINT IF EXISTS candles_pkey;
+    ALTER TABLE candles ADD PRIMARY KEY (symbol, source, timeframe, open_time);
+  END IF;
 END $$;
 
 -- Fast lookups: symbol + timeframe + time range (most common query pattern)
 CREATE INDEX IF NOT EXISTS candles_sym_tf_time
   ON candles (symbol, timeframe, open_time DESC);
+
+CREATE INDEX IF NOT EXISTS candles_sym_source_tf_time
+  ON candles (symbol, source, timeframe, open_time DESC);
 
 -- ─── Strategies ──────────────────────────────────────────────────────────────
 -- Full strategy JSON stored in a JSONB column for schema flexibility.
@@ -246,6 +287,21 @@ CREATE TABLE IF NOT EXISTS backfill_status (
 
   PRIMARY KEY (symbol, timeframe)
 );
+
+-- Equities P0 column, declared here rather than with the candles migrations
+-- above: this table is created further down the file than those run, so an
+-- ALTER up there raises undefined_table on a fresh database — and migrate.ts
+-- sends the whole schema as one implicit transaction, so that rolls back every
+-- CREATE that preceded it and leaves an empty DB.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'backfill_status' AND column_name = 'source'
+  ) THEN
+    ALTER TABLE backfill_status ADD COLUMN source TEXT NOT NULL DEFAULT 'binance';
+  END IF;
+END $$;
 
 -- ─── Strategy signals ─────────────────────────────────────────────────────────
 -- One row per cron-fired entry signal that was delivered via Telegram.

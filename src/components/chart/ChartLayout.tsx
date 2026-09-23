@@ -161,6 +161,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const isStale            = useChartStore((s) => s.isStale);
   const setStale           = useChartStore((s) => s.setStale);
   const symbol             = useChartStore((s) => s.symbol);
+  const source             = useChartStore((s) => s.source);
   const timeframe          = useChartStore((s) => s.timeframe);
   const updateLastCandle   = useChartStore((s) => s.updateLastCandle);
   const savedBarSpacing    = useChartStore((s) => s.barSpacing);
@@ -292,6 +293,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     setLivePrice(null);
     setLiveCandle(null);
 
+    // Equities bypass Binance WebSocket (updates come via 30s background poll)
+    if (source === 'equities') {
+      return;
+    }
+
     const unsubscribe = subscribeKline(
       symbol,
       timeframe,
@@ -365,7 +371,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       clearInterval(staleTimer);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, source]);
 
   // ── Compute indicator series ───────────────────────────────────────────────
   const allSeries: IndicatorSeries[] = useMemo(() => {

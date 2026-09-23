@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Candle, Timeframe } from '@/types/market';
+import type { Candle, Timeframe, SymbolSource } from '@/types/market';
+import { isEquitySymbol } from '@/lib/exchange/equities';
 
 export interface MarkerVisibility {
   rawSignals:   boolean;  // amber squares — every candle where entry conditions fired
@@ -70,6 +71,7 @@ export interface VolumeProfileConfig {
 interface ChartState {
   // ── Selection ──────────────────────────────────────────────────────────────
   symbol:    string;
+  source:    SymbolSource;
   timeframe: Timeframe;
 
   // ── Candle data ────────────────────────────────────────────────────────────
@@ -100,7 +102,7 @@ interface ChartState {
   vpConfig: VolumeProfileConfig;
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  setSymbol:    (symbol: string) => void;
+  setSymbol:    (symbol: string, source?: SymbolSource) => void;
   setTimeframe: (tf: Timeframe) => void;
 
   /**
@@ -156,6 +158,7 @@ export const useChartStore = create<ChartState>()(
   persist(
     (set, get) => ({
       symbol:    'BTCUSDT',
+      source:    'binance',
       timeframe: '1h',
 
       candles:    [],
@@ -179,11 +182,19 @@ export const useChartStore = create<ChartState>()(
 
       // ── Actions ─────────────────────────────────────────────────────────────
 
-      setSymbol: (symbol) => {
-        if (get().symbol === symbol) return;
+      setSymbol: (symbol, source) => {
+        const inferredSource = source ?? (isEquitySymbol(symbol) ? 'equities' : 'binance');
+        if (get().symbol === symbol && get().source === inferredSource) return;
         // Clear the series immediately so a live tick cannot merge into the
         // previous symbol's OHLC while the new history is in flight.
-        set({ symbol, candles: [], candlesKey: null, isStale: false, lastTickAt: null });
+        set({
+          symbol,
+          source: inferredSource,
+          candles: [],
+          candlesKey: null,
+          isStale: false,
+          lastTickAt: null,
+        });
       },
 
       setTimeframe: (timeframe) => {
@@ -275,14 +286,18 @@ export const useChartStore = create<ChartState>()(
         set((s) => {
           const symbol    = snapshot.symbol    || s.symbol;
           const timeframe = snapshot.timeframe || s.timeframe;
+          // Keep source in step with symbol — a layout pinned to an equity would
+          // otherwise land an equity ticker on the crypto code paths.
+          const source    = isEquitySymbol(symbol) ? 'equities' : 'binance';
           // Changing either invalidates the loaded series, so we must clear it
           // exactly the way setSymbol/setTimeframe do — otherwise a live tick
           // merges into the previous context's OHLC and the chart renders the
           // old ticker's candles (and indicator values) under the new label.
-          const contextChanged = symbol !== s.symbol || timeframe !== s.timeframe;
+          const contextChanged = symbol !== s.symbol || timeframe !== s.timeframe || source !== s.source;
 
           return {
             symbol,
+            source,
             timeframe,
             ...(snapshot.activeIndicators !== undefined ? { activeIndicators: snapshot.activeIndicators } : {}),
             ...(snapshot.vpConfig ? { vpConfig: snapshot.vpConfig } : {}),
@@ -307,12 +322,24 @@ export const useChartStore = create<ChartState>()(
        */
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
-        return { ...current, ...p, markerSettings: withMarkerDefaults(p.markerSettings) };
+        const symbol = p.symbol ?? current.symbol;
+        return {
+          ...current,
+          ...p,
+          // Derive source from the symbol rather than trusting what was stored.
+          // setSymbol already does this, but nothing calls setSymbol on
+          // rehydrate — so state written before source was persisted came back
+          // as 'binance' on an equity symbol, which opened a Binance WebSocket
+          // for e.g. AAPL and left it reconnecting every 2s until the first click.
+          source: isEquitySymbol(symbol) ? 'equities' : 'binance',
+          markerSettings: withMarkerDefaults(p.markerSettings),
+        };
       },
       // Persist only user preferences — never the raw candle data (too large)
       // or ephemeral connection state.
       partialize: (s) => ({
         symbol:           s.symbol,
+        source:           s.source,
         timeframe:        s.timeframe,
         activeIndicators: s.activeIndicators,
         barSpacing:       s.barSpacing,

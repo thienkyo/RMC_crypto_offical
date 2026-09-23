@@ -22,23 +22,25 @@ interface CandlesResponse {
  */
 export function useCandles() {
   const symbol    = useChartStore((s) => s.symbol);
+  const source    = useChartStore((s) => s.source);
   const timeframe = useChartStore((s) => s.timeframe);
   const setCandles = useChartStore((s) => s.setCandles);
   const setLoading = useChartStore((s) => s.setLoading);
 
   const query = useQuery<Candle[]>({
-    queryKey: ['candles', symbol, timeframe],
+    queryKey: ['candles', symbol, timeframe, source],
 
     queryFn: async () => {
       const requestedSymbol = symbol;
       const requestedTf     = timeframe;
+      const requestedSource = source;
       const contextKey      = `${requestedSymbol}-${requestedTf}`;
 
       setLoading(true);
       try {
         // No limit param → server uses SERVE_LIMIT[tf] (timeframe-appropriate depth)
         const res = await fetch(
-          `/api/candles?symbol=${requestedSymbol}&interval=${requestedTf}`,
+          `/api/candles?symbol=${requestedSymbol}&interval=${requestedTf}&source=${requestedSource}`,
         );
         if (!res.ok) {
           const err = (await res.json()) as { error?: string };
@@ -54,8 +56,8 @@ export function useCandles() {
       }
     },
 
-    staleTime:       60_000,
-    refetchInterval: 60_000,
+    staleTime:       source === 'equities' ? 30_000 : 60_000,
+    refetchInterval: source === 'equities' ? 30_000 : 60_000,
     retry:           2,
   });
 

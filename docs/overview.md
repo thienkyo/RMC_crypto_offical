@@ -18,7 +18,7 @@ RMC is a **personal market intelligence dashboard** for crypto (top-20 by volume
 | 4     | News/social ingestion + sentiment                  | ✅ Built      |
 | 5     | Alerts (Telegram), polish, mobile view             | 🔄 In progress (Telegram alerts working) |
 
-Stock (Mag7) data integration is scaffolded at the type level (`source: 'equities'`) but no provider is wired in yet — crypto via Binance is the live data source today. Locked product plan: [docs/equities-plan.md](equities-plan.md).
+Stock (Mag7 + AI basket) data is live as of **Equities P0**: Polygon when `POLYGON_API_KEY` is set, Yahoo Finance otherwise. Crypto continues to come from Binance, untouched. Locked product plan: [docs/equities-plan.md](equities-plan.md).
 
 ---
 
@@ -61,6 +61,14 @@ Named snapshots of the whole chart workspace — timeframe, active indicators, V
 ### 💾 Persisted Client State
 Two zustand `persist` stores: `rmc-chart` (symbol, timeframe, indicators, viewport and marker preferences) and `rmc-saved-layouts` (user-created chart layouts only). Both rehydrate through a `merge` that backfills keys added since a browser last wrote its state — zustand's default merge is a shallow top-level one, so without it a newly added required field (e.g. `recentSignalsVisible`) would restore as `undefined` and read as "off" everywhere while TypeScript still believed it was a boolean. `withMarkerDefaults()` in `src/store/chart.ts` is the single place that backfill is defined, and `applyLayoutSnapshot` runs a layout's `markerSettings` through it too, so applying an older saved layout cannot blank a newer setting.
 
+### 🏦 Equities (`src/lib/exchange/`, Equities P0)
+US equities alongside crypto, routed by a `source` field (`'binance' | 'equities'`) on the chart store and every candle row.
+- **Providers:** `polygon.ts` when `POLYGON_API_KEY` is set, `yahoo.ts` (no key, cookie+crumb handshake) otherwise, behind `equities.ts`. `fetchEquityCandles` returns the provider that served the bars, and it is stored on the row — Polygon is split-adjusted and Yahoo is raw, so a history assembled from both is only reconcilable if each row says where it came from.
+- **Routes:** `/api/equities/quotes` (30s cache, whitelisted against the known universe before any symbol reaches a provider) and the equities branch of `/api/candles`, which backfills on first load and then tail-refreshes whenever the newest stored bar is older than one bar-interval.
+- **Timeframes:** Yahoo serves 1m/5m/15m/30m/1h/1d/1w. `3m`, `2h`, `4h`, `6h` and `12h` have no equivalent and are **rejected** rather than aliased onto a neighbouring interval — storing 60m bars under `4h` would poison the hypertable with rows nothing could later distinguish.
+- **Volume:** normalised to quote-asset (USD) volume like every other candle — providers report share counts, so bars are stored as `shares × price`.
+- **Live updates** come from the 30s quote poll, not a WebSocket; `ChartLayout` skips `subscribeKline` when `source === 'equities'`.
+
 ### 🧮 Indicators (`src/lib/indicators/`)
 37 entries in the `INDICATORS` registry, all implementing a shared `Indicator<P>` interface, so the **same `compute()` function** powers both chart overlays and the backtester:
 ADX, Bollinger Bands (+ width, %B), CVD (+ divergence), EMA (+ deviation), MACD, RSI, SMA, Stochastic, StochRSI, time-of-day, volume profile, volume ratio — plus the candlestick / price-action patterns in `src/lib/patterns/` (engulfing, hammer & shooting star, doji stars, abandoned baby, belt hold, breakaway, advance block, three white soldiers, identical three crows, fair value gaps, liquidity sweeps, absorption), which register the same way.
@@ -97,6 +105,7 @@ Cron-driven crawlers (see `vercel.json`):
 flowchart TB
     subgraph SRC["📥 Data Sources"]
         BIN["Binance<br/>REST + WebSocket"]
+        EQ["Polygon · Yahoo Finance<br/>US equities REST"]
         NEWS["RSS · Reddit · Nitter/X · Polymarket"]
     end
 
@@ -136,7 +145,7 @@ flowchart TB
 
 ## Database Tables
 
-`symbols` · `candles` (hypertable) · `backfill_status` · `strategies` · `strategy_versions` · `strategy_signals` · `ai_chart_analysis` · `news_articles` · `nitter_accounts` · `polymarket_snapshots` · `alert_rules` · `alert_history` · `settings`
+`symbols` · `candles` (hypertable; `source` is part of the primary key `(symbol, source, timeframe, open_time)` so the same ticker can exist in both universes — STX is Stacks on Binance and Seagate on the equity feeds — plus a `provider` column recording which upstream produced each row) · `backfill_status` · `strategies` · `strategy_versions` · `strategy_signals` · `ai_chart_analysis` · `news_articles` · `nitter_accounts` · `polymarket_snapshots` · `alert_rules` · `alert_history` · `settings`
 
 Full schema: [src/lib/db/schema.sql](../src/lib/db/schema.sql)
 

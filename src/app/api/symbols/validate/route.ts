@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { fetchEquityQuote, isEquitySymbol } from '@/lib/exchange/equities';
 import type { MarketSymbol } from '@/types/market';
 
 /** Common Binance quote assets, in priority order for suffix-stripping. */
@@ -59,6 +60,62 @@ export async function GET(req: Request) {
     );
   }
 
+  const rawTrimmed = raw.trim().toUpperCase();
+
+  // ── 1. Check Equities First (Mag7, AI basket, or live equity quote) ─────────
+  if (isEquitySymbol(rawTrimmed)) {
+    try {
+      const quote = await fetchEquityQuote(rawTrimmed);
+      const displayNameMap: Record<string, string> = {
+        AAPL: 'Apple',
+        MSFT: 'Microsoft',
+        GOOGL: 'Alphabet',
+        AMZN: 'Amazon',
+        NVDA: 'NVIDIA',
+        META: 'Meta',
+        TSLA: 'Tesla',
+        AVGO: 'Broadcom',
+        AMD: 'AMD',
+        TSM: 'TSMC',
+        ASML: 'ASML',
+        MU: 'Micron',
+        WDC: 'Western Digital',
+        STX: 'Seagate',
+        SMCI: 'Super Micro Computer',
+        ARM: 'Arm Holdings',
+        PLTR: 'Palantir',
+      };
+
+      const marketSymbol: MarketSymbol = {
+        symbol:      rawTrimmed,
+        baseAsset:   rawTrimmed,
+        quoteAsset:  'USD',
+        source:      'equities',
+        displayName: displayNameMap[rawTrimmed] ?? rawTrimmed,
+      };
+
+      // A null quote is a FAILURE, not a zero price. fetchEquityQuote swallows
+      // its own errors and returns null, so the catch below never fires — this
+      // used to answer {valid: true, price: 0} and the watchlist happily added a
+      // row reading 0.00. Falling through instead lets the Binance branch below
+      // have a go, which also keeps tickers that exist in both universes (STX is
+      // Stacks on Binance and Seagate here) resolvable as crypto.
+      if (!quote || !(quote.price > 0)) {
+        console.warn(`[api/symbols/validate] No equity quote for ${rawTrimmed}; trying Binance`);
+      } else {
+        return NextResponse.json({
+          valid:        true,
+          symbol:       rawTrimmed,
+          price:        quote.price,
+          marketSymbol,
+        });
+      }
+    } catch (err) {
+      console.warn(`[api/symbols/validate] Equity quote failed for ${rawTrimmed}:`, err);
+    }
+  }
+
+  // ── 2. Crypto Validation via Binance ────────────────────────────────────────
   const symbol = normalize(raw);
 
   try {

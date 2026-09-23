@@ -9,7 +9,7 @@ import { useWatchlistStore } from '@/store/watchlist';
 import { useStrategyStore } from '@/store/strategy';
 import { useLayoutStore } from '@/store/layout';
 import { INDICATORS } from '@/lib/indicators';
-import { TIMEFRAMES, type Timeframe, type MarketSymbol } from '@/types/market';
+import { TIMEFRAMES, type Timeframe, type MarketSymbol, type SymbolSource } from '@/types/market';
 import { clsx } from 'clsx';
 
 interface PaletteItem {
@@ -98,8 +98,8 @@ export function CommandPalette() {
   }, []);
 
   const goToChart = useCallback(
-    (sym?: string) => {
-      if (sym) setSymbol(sym);
+    (sym?: string, source?: SymbolSource) => {
+      if (sym) setSymbol(sym, source);
       if (pathname !== '/') router.push('/');
       close();
     },
@@ -148,7 +148,7 @@ export function CommandPalette() {
         subtitle: `${sym.displayName} (${sym.source === 'equities' ? 'NYSE/NASDAQ' : 'Binance'})`,
         badge: isCurrent ? 'Active' : undefined,
         icon: sym.source === 'equities' ? '📈' : '🪙',
-        action: () => goToChart(sym.symbol),
+        action: () => goToChart(sym.symbol, sym.source),
       });
     }
 

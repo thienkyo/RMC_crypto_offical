@@ -203,15 +203,17 @@ export function Watchlist() {
     return () => unsubs.forEach((u) => u());
   }, [data?.crypto, customSymbols, updateTicker]);
 
-  // Poll quotes for equities (Mag7 + user-added equities) every 30s
+  // Poll quotes for equities (Mag7 + AI + user-added equities) every 30s
   useEffect(() => {
-    const allEquities = [
-      ...(data?.equities ?? []),
+    const rawEquities = [
+      ...(data?.mag7 ?? data?.equities ?? []),
+      ...(data?.ai ?? []),
       ...customSymbols.filter((s) => s.source === 'equities'),
     ];
-    if (allEquities.length === 0) return;
+    const uniqueSymbols = Array.from(new Set(rawEquities.map((s) => s.symbol)));
+    if (uniqueSymbols.length === 0) return;
 
-    const symbols = allEquities.map((s) => s.symbol).join(',');
+    const symbols = uniqueSymbols.join(',');
 
     let isMounted = true;
     const fetchQuotes = async () => {
@@ -235,7 +237,7 @@ export function Watchlist() {
       isMounted = false;
       clearInterval(timer);
     };
-  }, [data?.equities, customSymbols, updateTicker]);
+  }, [data?.mag7, data?.equities, data?.ai, customSymbols, updateTicker]);
 
   // ── Add-symbol flow ───────────────────────────────────────────────────────
   const [isAdding,    setIsAdding]    = useState(false);
@@ -280,7 +282,8 @@ export function Watchlist() {
       // Check if already visible in any section
       const allVisible = [
         ...(data?.crypto   ?? []),
-        ...(data?.equities ?? []),
+        ...(data?.mag7     ?? data?.equities ?? []),
+        ...(data?.ai       ?? []),
         ...customSymbols,
       ];
       if (allVisible.some((s) => s.symbol === sym)) {
@@ -330,24 +333,39 @@ export function Watchlist() {
     ...(data?.crypto ?? []).filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol)),
     ...customSymbols.filter((s) => s.source === 'binance' && !favSet.has(s.symbol)),
   ];
-  // Equities minus hidden and minus favorited.
-  // Includes user-added equities the same way cryptoItems includes user-added
-  // crypto — /api/symbols only returns the hard-coded Mag7, so filtering on it
-  // alone left a validated ticker like PLTR rendered in no section at all,
-  // unselectable and unremovable while still costing a quote every 30s.
-  const equityItems = [
-    ...(data?.equities ?? []).filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol)),
-    ...customSymbols.filter(
-      (s) => s.source === 'equities'
-        && !hiddenSet.has(s.symbol)
-        && !favSet.has(s.symbol)
-        && !(data?.equities ?? []).some((e) => e.symbol === s.symbol),
-    ),
-  ];
+
+  // Mag 7 basket minus hidden and minus favorited
+  const mag7Items = (data?.mag7 ?? data?.equities ?? []).filter(
+    (s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol),
+  );
+
+  // AI / AI-infra starter basket minus hidden and minus favorited
+  const aiItems = (data?.ai ?? []).filter(
+    (s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol),
+  );
+
+  // Known default equity symbols (to avoid duplicate display if user also custom-added them)
+  const knownEquitySymbols = new Set([
+    ...(data?.mag7 ?? data?.equities ?? []).map((s) => s.symbol),
+    ...(data?.ai ?? []).map((s) => s.symbol),
+  ]);
+
+  // User-added custom equities that aren't in Mag 7 or AI
+  const customEquityItems = customSymbols.filter(
+    (s) => s.source === 'equities'
+      && !hiddenSet.has(s.symbol)
+      && !favSet.has(s.symbol)
+      && !knownEquitySymbols.has(s.symbol),
+  );
 
   // Build a lookup map for resolving favorite symbols to MarketSymbol objects
   const allMap = new Map<string, MarketSymbol>();
-  for (const s of [...(data?.crypto ?? []), ...customSymbols, ...(data?.equities ?? [])]) {
+  for (const s of [
+    ...(data?.crypto ?? []),
+    ...customSymbols,
+    ...(data?.mag7 ?? data?.equities ?? []),
+    ...(data?.ai ?? []),
+  ]) {
     allMap.set(s.symbol, s);
   }
   const favItems = favoriteSymbols
@@ -359,8 +377,12 @@ export function Watchlist() {
     ...(favItems.length > 0
       ? [{ id: 'favorites', label: '★ Favorites', items: favItems, isFavSection: true }]
       : []),
-    { id: 'crypto',   label: 'Crypto',   items: cryptoItems,  isFavSection: false },
-    { id: 'equities', label: 'Equities', items: equityItems,  isFavSection: false },
+    { id: 'crypto',          label: 'Crypto',         items: cryptoItems,       isFavSection: false },
+    { id: 'mag7',            label: 'Mag 7',          items: mag7Items,         isFavSection: false },
+    { id: 'ai',              label: 'AI & Hardware',  items: aiItems,           isFavSection: false },
+    ...(customEquityItems.length > 0
+      ? [{ id: 'custom-equities', label: 'Other Equities', items: customEquityItems, isFavSection: false }]
+      : []),
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────

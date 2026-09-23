@@ -125,7 +125,8 @@ export function CommandPalette() {
       [
         ...(symbolsData?.crypto ?? []),
         ...customSymbols,
-        ...(symbolsData?.equities ?? []),
+        ...(symbolsData?.mag7 ?? symbolsData?.equities ?? []),
+        ...(symbolsData?.ai ?? []),
       ].map((sym) => [sym.symbol, sym] as const),
     ).values()];
 

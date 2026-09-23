@@ -12,16 +12,43 @@ export const AI_BASKET_SYMBOLS = [
   'NVDA', 'AVGO', 'AMD', 'TSM', 'ASML', 'MU', 'WDC', 'STX', 'SMCI', 'ARM', 'PLTR',
 ] as const;
 
+/** Computer hardware, chips, storage, and infrastructure additions */
+export const HARDWARE_SYMBOLS = [
+  'INTC', 'DELL', 'QCOM', 'MRVL', 'AMAT', 'LRCX', 'KLAC', 'VRT', 'ANET', 'PSTG', 'HPE',
+] as const;
+
+/** Expanded AI & Hardware basket */
+export const AI_HARDWARE_SYMBOLS = [
+  ...AI_BASKET_SYMBOLS,
+  ...HARDWARE_SYMBOLS,
+] as const;
+
 /** Combined set of known first-class equities */
 export const KNOWN_EQUITIES = new Set<string>([
   ...MAG7_SYMBOLS,
-  ...AI_BASKET_SYMBOLS,
+  ...AI_HARDWARE_SYMBOLS,
 ]);
+
+/** Crypto bases and quote suffixes that must never be treated as US equities */
+export const CRYPTO_BASES = new Set<string>([
+  'BTC', 'ETH', 'SOL', 'BNB', 'DOGE', 'XRP', 'ADA', 'TRX', 'AVAX',
+  'LINK', 'DOT', 'MATIC', 'LTC', 'BCH', 'UNI', 'ATOM', 'ETC', 'XLM',
+  'NEAR', 'PAXG', 'PEPE', 'SHIB', 'SUI', 'APT', 'RENDER', 'FET',
+  'TAO', 'INJ', 'TIA', 'SEI', 'KAS', 'FIL', 'ICP', 'AAVE', 'MKR',
+]);
+
+const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'DAI', 'TUSD'];
+
+/** Valid US equity ticker format (1-5 uppercase letters with optional .A or .B) */
+const EQUITY_TICKER_REGEX = /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/;
 
 /** Check if a symbol is recognized as a US equity */
 export function isEquitySymbol(symbol: string): boolean {
   const s = symbol.toUpperCase().trim();
-  return KNOWN_EQUITIES.has(s);
+  if (KNOWN_EQUITIES.has(s)) return true;
+  if (CRYPTO_BASES.has(s)) return false;
+  if (CRYPTO_QUOTE_SUFFIXES.some((q) => s.endsWith(q) && s.length > q.length)) return false;
+  return EQUITY_TICKER_REGEX.test(s);
 }
 
 /**

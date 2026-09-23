@@ -25,6 +25,8 @@ import { IndicatorSelector } from '../ui/IndicatorSelector';
 import { ChartLayoutSelector } from './ChartLayoutSelector';
 import { RecentSignalsStrip } from './RecentSignalsStrip';
 import { StaleDataBanner }   from '../ui/StaleDataBanner';
+import { clsx }              from 'clsx';
+import { getUSEquityMarketStatus } from '@/lib/exchange/marketHours';
 import type { Candle } from '@/types/market';
 
 // ─── Pane resize handle ───────────────────────────────────────────────────────
@@ -262,6 +264,15 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // Last live tick stored here (not in Zustand candles) so the header price
   // updates without triggering a full candles→setData() re-render cycle.
   const [livePrice, setLivePrice] = useState<number | null>(null);
+
+  // US Equity Market Hours status (RTH vs Market closed)
+  const [marketStatus, setMarketStatus] = useState(() => getUSEquityMarketStatus());
+  useEffect(() => {
+    if (source !== 'equities') return;
+    const update = () => setMarketStatus(getUSEquityMarketStatus());
+    const interval = setInterval(update, 30_000);
+    return () => clearInterval(interval);
+  }, [source]);
 
   // Crosshair time from the main price chart — shared with sub-panes so their
   // legends stay live even when the cursor is on the price chart, not the sub-pane.
@@ -926,6 +937,29 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
             </span>
           </>
+        )}
+
+        {source === 'equities' ? (
+          <div className="flex items-center gap-1.5">
+            <span
+              className={clsx(
+                'px-1.5 py-0.5 rounded text-[10px] font-mono border leading-none',
+                marketStatus.isOpen
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-surface-3 text-text-muted border-surface-border',
+              )}
+              title={`Regular Trading Hours: 9:30 AM – 4:00 PM ET (${marketStatus.easternTime})`}
+            >
+              {marketStatus.label}
+            </span>
+            <span className="text-[10px] font-mono text-text-muted/60 uppercase">
+              US Cash
+            </span>
+          </div>
+        ) : (
+          <span className="text-[10px] font-mono text-text-muted/60 uppercase">
+            24/7 Spot
+          </span>
         )}
 
         {isLoading && (

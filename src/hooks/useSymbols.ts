@@ -3,6 +3,8 @@ import type { MarketSymbol } from '@/types/market';
 
 export interface SymbolsResponse {
   crypto:   MarketSymbol[];
+  mag7?:    MarketSymbol[];
+  ai?:      MarketSymbol[];
   equities: MarketSymbol[];
   /** Set by the route when it served a cached universe after a sync failure. */
   stale?:   boolean;

@@ -4,13 +4,47 @@ import type { MarketSymbol } from '@/types/market';
 // ─── Mag 7 equities ───────────────────────────────────────────────────────────
 
 const MAG7: MarketSymbol[] = [
-  { symbol: 'AAPL',  baseAsset: 'AAPL',  quoteAsset: 'USD', source: 'equities', displayName: 'Apple'   },
+  { symbol: 'AAPL',  baseAsset: 'AAPL',  quoteAsset: 'USD', source: 'equities', displayName: 'Apple'     },
   { symbol: 'MSFT',  baseAsset: 'MSFT',  quoteAsset: 'USD', source: 'equities', displayName: 'Microsoft' },
-  { symbol: 'GOOGL', baseAsset: 'GOOGL', quoteAsset: 'USD', source: 'equities', displayName: 'Alphabet' },
-  { symbol: 'AMZN',  baseAsset: 'AMZN',  quoteAsset: 'USD', source: 'equities', displayName: 'Amazon'  },
-  { symbol: 'NVDA',  baseAsset: 'NVDA',  quoteAsset: 'USD', source: 'equities', displayName: 'NVIDIA'  },
-  { symbol: 'META',  baseAsset: 'META',  quoteAsset: 'USD', source: 'equities', displayName: 'Meta'    },
-  { symbol: 'TSLA',  baseAsset: 'TSLA',  quoteAsset: 'USD', source: 'equities', displayName: 'Tesla'   },
+  { symbol: 'GOOGL', baseAsset: 'GOOGL', quoteAsset: 'USD', source: 'equities', displayName: 'Alphabet'  },
+  { symbol: 'AMZN',  baseAsset: 'AMZN',  quoteAsset: 'USD', source: 'equities', displayName: 'Amazon'    },
+  { symbol: 'NVDA',  baseAsset: 'NVDA',  quoteAsset: 'USD', source: 'equities', displayName: 'NVIDIA'    },
+  { symbol: 'META',  baseAsset: 'META',  quoteAsset: 'USD', source: 'equities', displayName: 'Meta'      },
+  { symbol: 'TSLA',  baseAsset: 'TSLA',  quoteAsset: 'USD', source: 'equities', displayName: 'Tesla'     },
+];
+
+// ─── AI & Hardware equities (Chips, RAM, HDD, Servers, Networking, Infra) ───────
+
+const AI_HARDWARE_BASKET: MarketSymbol[] = [
+  // Core AI & Accelerators
+  { symbol: 'NVDA', baseAsset: 'NVDA', quoteAsset: 'USD', source: 'equities', displayName: 'NVIDIA'               },
+  { symbol: 'AVGO', baseAsset: 'AVGO', quoteAsset: 'USD', source: 'equities', displayName: 'Broadcom'             },
+  { symbol: 'AMD',  baseAsset: 'AMD',  quoteAsset: 'USD', source: 'equities', displayName: 'AMD'                  },
+  { symbol: 'TSM',  baseAsset: 'TSM',  quoteAsset: 'USD', source: 'equities', displayName: 'TSMC'                 },
+  { symbol: 'ASML', baseAsset: 'ASML', quoteAsset: 'USD', source: 'equities', displayName: 'ASML'                 },
+  // Memory & RAM
+  { symbol: 'MU',   baseAsset: 'MU',   quoteAsset: 'USD', source: 'equities', displayName: 'Micron (RAM/HBM)'     },
+  // Storage & HDD
+  { symbol: 'WDC',  baseAsset: 'WDC',  quoteAsset: 'USD', source: 'equities', displayName: 'Western Digital (HDD)'},
+  { symbol: 'STX',  baseAsset: 'STX',  quoteAsset: 'USD', source: 'equities', displayName: 'Seagate (HDD)'        },
+  { symbol: 'PSTG', baseAsset: 'PSTG', quoteAsset: 'USD', source: 'equities', displayName: 'Pure Storage'         },
+  // Chips, CPUs, Foundry & Mobile
+  { symbol: 'INTC', baseAsset: 'INTC', quoteAsset: 'USD', source: 'equities', displayName: 'Intel'                },
+  { symbol: 'QCOM', baseAsset: 'QCOM', quoteAsset: 'USD', source: 'equities', displayName: 'Qualcomm'             },
+  { symbol: 'ARM',  baseAsset: 'ARM',  quoteAsset: 'USD', source: 'equities', displayName: 'Arm Holdings'         },
+  { symbol: 'MRVL', baseAsset: 'MRVL', quoteAsset: 'USD', source: 'equities', displayName: 'Marvell Tech'         },
+  // Semiconductor Equipment & Fab Tech
+  { symbol: 'AMAT', baseAsset: 'AMAT', quoteAsset: 'USD', source: 'equities', displayName: 'Applied Materials'    },
+  { symbol: 'LRCX', baseAsset: 'LRCX', quoteAsset: 'USD', source: 'equities', displayName: 'Lam Research'         },
+  { symbol: 'KLAC', baseAsset: 'KLAC', quoteAsset: 'USD', source: 'equities', displayName: 'KLA Corp'             },
+  // Computer Hardware, Servers & Cooling Infra
+  { symbol: 'SMCI', baseAsset: 'SMCI', quoteAsset: 'USD', source: 'equities', displayName: 'Super Micro Computer' },
+  { symbol: 'DELL', baseAsset: 'DELL', quoteAsset: 'USD', source: 'equities', displayName: 'Dell Technologies'   },
+  { symbol: 'HPE',  baseAsset: 'HPE',  quoteAsset: 'USD', source: 'equities', displayName: 'HP Enterprise'         },
+  { symbol: 'VRT',  baseAsset: 'VRT',  quoteAsset: 'USD', source: 'equities', displayName: 'Vertiv (Cooling)'     },
+  { symbol: 'ANET', baseAsset: 'ANET', quoteAsset: 'USD', source: 'equities', displayName: 'Arista Networks'      },
+  // AI Platforms
+  { symbol: 'PLTR', baseAsset: 'PLTR', quoteAsset: 'USD', source: 'equities', displayName: 'Palantir'              },
 ];
 
 // ─── Stablecoin blocklist ─────────────────────────────────────────────────────
@@ -156,5 +190,5 @@ export async function GET() {
     stale = true;
   }
 
-  return NextResponse.json({ crypto, equities: MAG7, stale });
+  return NextResponse.json({ crypto, mag7: MAG7, ai: AI_HARDWARE_BASKET, equities: MAG7, stale });
 }

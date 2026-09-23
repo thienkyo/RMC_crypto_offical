@@ -200,6 +200,12 @@ export interface BacktestTrade {
   /** Absolute P&L in quote currency against full portfolio at entry. */
   pnlAbs: number;
   exitReason: ExitReason;
+  /** Total exchange trading fees paid (entry + exit). */
+  feesPaid?: number;
+  /** Total funding fees paid (positive = cost, negative = yield). */
+  fundingPaid?: number;
+  /** Estimated slippage drag in quote currency. */
+  slippagePaid?: number;
 }
 
 export interface EquityPoint {
@@ -224,6 +230,10 @@ export interface BacktestMetrics {
   sortinoRatio: number;
   initialCapital: number;
   finalCapital: number;
+  /** Total exchange trading fees across all trades. */
+  totalFeesPaid?: number;
+  /** Total perpetual funding rate fees across all trades. */
+  totalFundingPaid?: number;
 }
 
 export interface BacktestResult {

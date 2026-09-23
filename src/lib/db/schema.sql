@@ -383,3 +383,27 @@ DO $$ BEGIN
       UNIQUE (strategy_id, candle_time);
   END IF;
 END $$;
+
+-- ─── AI Order Decision Evaluations ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ai_order_evaluations (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  symbol            TEXT NOT NULL,
+  timeframe         TEXT NOT NULL,
+  direction         VARCHAR(10) NOT NULL, -- 'long' | 'short'
+  candle_time       TIMESTAMPTZ NOT NULL,
+  model_provider    VARCHAR(30) NOT NULL, -- 'claude' | 'chatgpt' | 'gemini' | 'ensemble'
+  status            VARCHAR(10) NOT NULL, -- 'PASS' | 'CAVEAT' | 'REJECT'
+  evaluation        JSONB NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (symbol, timeframe, direction, candle_time, model_provider)
+);
+
+CREATE INDEX IF NOT EXISTS ai_order_evaluations_lookup
+  ON ai_order_evaluations (symbol, timeframe, direction, candle_time DESC);
+
+-- Enrich strategy signals table with AI evaluation snapshot
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS ai_evaluation JSONB;
+
+-- Support channel_type on custom_news_feeds
+ALTER TABLE custom_news_feeds ADD COLUMN IF NOT EXISTS channel_type VARCHAR(20) NOT NULL DEFAULT 'rss';
+

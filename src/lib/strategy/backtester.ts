@@ -30,6 +30,7 @@ import type {
   EquityPoint,
   ExitReason,
 } from '@/types/strategy';
+import { isEquitySymbol } from '@/lib/exchange/equities';
 import { buildIndicatorCache, evaluateConditionGroupsChecked } from './evaluate';
 import { computeMetrics } from './metrics';
 import { computeEntryPriceLimit, isMarketFill } from './entryPrice';
@@ -37,21 +38,42 @@ import { computeEntryPriceLimit, isMarketFill } from './entryPrice';
 export interface BacktestOptions {
   /** Starting portfolio value in quote currency. Default: 10 000. */
   initialCapital?: number;
-  /** Taker fee percentage per side, e.g. 0.1 for 0.1%. Default: 0.1. */
-  feePct?: number;
-  /** Slippage as percentage per side, e.g. 0.05 for 0.05%. Default: 0.05. */
+  /** Fee preset model: 'futures' (Binance USDT-M), 'spot', or 'custom'. */
+  feeModel?: 'futures' | 'spot' | 'custom';
+  /** Maker fee percentage (for resting limit orders). Default: 0.02% (futures). */
+  makerFeePct?: number;
+  /** Taker fee percentage (for market orders). Default: 0.05% (futures). */
+  takerFeePct?: number;
+  /** Base market order slippage percentage. Default: 0.02%. */
   slippagePct?: number;
+  /** Extra slippage penalty on stop-loss market fills during volatility. Default: 0.05%. */
+  stopLossSlippagePct?: number;
+  /** 8-hour perpetual funding rate as percentage, e.g. 0.01 for 0.01%. Default: 0.01%. */
+  fundingRate8hPct?: number;
+  /** When true, calculates 8-hour funding rate drag on perpetual futures. Default: true for crypto, false for equities. */
+  enableFunding?: boolean;
+  /** Legacy fallback: sets maker and taker fee to feePct if provided. */
+  feePct?: number;
 }
+
+const EIGHT_HOURS_MS = 28_800_000;
 
 export function runBacktest(
   strategy: Strategy,
   candles: Candle[],
   options: BacktestOptions = {},
 ): BacktestResult {
+  const isEquity = isEquitySymbol(strategy.symbol);
+
   const {
-    initialCapital = 10_000,
-    feePct         = 0.1,
-    slippagePct    = 0.05,
+    initialCapital      = 10_000,
+    feeModel            = isEquity ? 'spot' : 'futures',
+    makerFeePct         = options.feePct ?? (feeModel === 'spot' ? 0.1 : 0.02),
+    takerFeePct         = options.feePct ?? (feeModel === 'spot' ? 0.1 : 0.05),
+    slippagePct         = options.slippagePct ?? (feeModel === 'spot' ? 0.05 : 0.02),
+    stopLossSlippagePct = 0.05,
+    fundingRate8hPct    = isEquity ? 0 : (options.fundingRate8hPct ?? 0.01),
+    enableFunding       = isEquity ? false : (options.enableFunding ?? true),
   } = options;
 
   const makeEmptyResult = (): BacktestResult => ({
@@ -79,8 +101,12 @@ export function runBacktest(
   const direction                             = strategy.action.type === 'enter_long' ? 'long' : 'short';
   const { positionSizePct, maxPositions = 1 } = strategy.action;
   const { stopLossPct, takeProfitPct }        = strategy.risk;
-  // One-way fee (entry or exit), as a decimal
-  const sideFee = (feePct + slippagePct) / 100;
+
+  // Decimal rates
+  const makerFeeRate  = makerFeePct / 100;
+  const takerFeeRate  = takerFeePct / 100;
+  const baseSlipRate  = slippagePct / 100;
+  const slSlipRate    = (slippagePct + stopLossSlippagePct) / 100;
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -89,21 +115,17 @@ export function runBacktest(
   let capital = initialCapital;
   let tradeId = 0;
 
-  /** A single open position; entryPrice already includes the entry-side fee. */
+  /** A single open position with entry execution details. */
   interface OpenPos {
-    entryPrice: number;
-    entryTime:  number;
+    entryPrice:        number;
+    rawEntryPrice:     number;
+    entryTime:         number;
+    allocated:         number;
+    isLimit:           boolean;
+    entryFeePaid:      number;
+    entrySlippagePaid: number;
   }
 
-  /**
-   * A pending limit order placed when an entry signal fired but the limit has
-   * not yet been touched by a subsequent bar.  NULL = no pending order.
-   *
-   * The limit is cancelled if:
-   *   • The bar's price action fills it  → becomes an open position
-   *   • An exit signal fires             → cancelled (no position opened)
-   * It is never force-filled at end-of-data.
-   */
   interface PendingLimit {
     limitPrice: number;
   }
@@ -116,40 +138,93 @@ export function runBacktest(
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  function openPos(fillPrice: number, time: number): void {
+  function openPos(fillPrice: number, time: number, isLimit: boolean): void {
+    const allocated = capital * (positionSizePct / 100);
+    const feeRate   = isLimit ? makerFeeRate : takerFeeRate;
+    const slipRate  = isLimit ? 0 : baseSlipRate;
+    const totalSide = feeRate + slipRate;
+
     const effEntry = direction === 'long'
-      ? fillPrice * (1 + sideFee)
-      : fillPrice * (1 - sideFee);
-    openPositions.push({ entryPrice: effEntry, entryTime: time });
+      ? fillPrice * (1 + totalSide)
+      : fillPrice * (1 - totalSide);
+
+    openPositions.push({
+      entryPrice: effEntry,
+      rawEntryPrice: fillPrice,
+      entryTime: time,
+      allocated,
+      isLimit,
+      entryFeePaid: allocated * feeRate,
+      entrySlippagePaid: allocated * slipRate,
+    });
   }
 
   function closePos(pos: OpenPos, fillPrice: number, time: number, reason: ExitReason): void {
+    // Determine fee and slippage tier based on order type
+    let feeRate  = takerFeeRate;
+    let slipRate = baseSlipRate;
+
+    if (reason === 'take_profit') {
+      // Resting limit TP order fills as Maker with 0 slippage
+      feeRate  = makerFeeRate;
+      slipRate = 0;
+    } else if (reason === 'stop_loss') {
+      // Stop-loss market fill suffers elevated volatility slippage
+      feeRate  = takerFeeRate;
+      slipRate = slSlipRate;
+    }
+
+    const totalSide = feeRate + slipRate;
+
     // Fee decreases effective exit price for longs, increases for shorts
     const exitPrice = direction === 'long'
-      ? fillPrice * (1 - sideFee)
-      : fillPrice * (1 + sideFee);
+      ? fillPrice * (1 - totalSide)
+      : fillPrice * (1 + totalSide);
 
-    const allocated = capital * (positionSizePct / 100);
+    const exitFeePaid      = pos.allocated * feeRate;
+    const exitSlippagePaid = pos.allocated * slipRate;
 
-    const pnlPct =
+    // ── Price P&L on allocated capital ──
+    const pricePnlPct =
       direction === 'long'
         ? ((exitPrice - pos.entryPrice) / pos.entryPrice) * 100
         : ((pos.entryPrice - exitPrice) / pos.entryPrice) * 100;
 
-    const pnlAbs = allocated * (pnlPct / 100);
-    capital += pnlAbs;
+    let tradePnlAbs = pos.allocated * (pricePnlPct / 100);
+
+    // ── Compounding 8-hour Perpetual Funding Calculation ──
+    let fundingCost = 0;
+    if (enableFunding && fundingRate8hPct !== 0) {
+      const intervals = Math.floor(time / EIGHT_HOURS_MS) - Math.floor(pos.entryTime / EIGHT_HOURS_MS);
+      if (intervals > 0) {
+        const totalFundingRate = (fundingRate8hPct / 100) * intervals;
+        // Longs pay positive funding; shorts receive positive funding
+        fundingCost = direction === 'long'
+          ? pos.allocated * totalFundingRate
+          : -pos.allocated * totalFundingRate;
+      }
+    }
+
+    // Net P&L after funding
+    const netPnlAbs = tradePnlAbs - fundingCost;
+    const netPnlPct = (netPnlAbs / pos.allocated) * 100;
+
+    capital += netPnlAbs;
 
     trades.push({
-      id:             ++tradeId,
-      entryTime:      pos.entryTime,
-      exitTime:       time,
-      entryPrice:     pos.entryPrice,
+      id:              ++tradeId,
+      entryTime:       pos.entryTime,
+      exitTime:        time,
+      entryPrice:      pos.entryPrice,
       exitPrice,
       direction,
       positionSizePct,
-      pnlPct,
-      pnlAbs,
-      exitReason:     reason,
+      pnlPct:          netPnlPct,
+      pnlAbs:          netPnlAbs,
+      exitReason:      reason,
+      feesPaid:        pos.entryFeePaid + exitFeePaid,
+      fundingPaid:     fundingCost,
+      slippagePaid:    pos.entrySlippagePaid + exitSlippagePaid,
     });
   }
 
@@ -251,7 +326,7 @@ export function runBacktest(
           direction === 'long'
             ? Math.min(candle.open, limitPrice)
             : Math.max(candle.open, limitPrice);
-        openPos(fillPrice, candle.openTime);
+        openPos(fillPrice, candle.openTime, true);
         pendingLimit = null;
       }
     }
@@ -268,7 +343,7 @@ export function runBacktest(
     ) {
       if (isMarketFill(entryOffset)) {
         // Market fill — same behaviour as before this feature was added
-        openPos(candle.close, candle.openTime);
+        openPos(candle.close, candle.openTime, false);
       } else {
         // Place a limit order; it fills when a future bar's range touches limitPrice
         pendingLimit = {

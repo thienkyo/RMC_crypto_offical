@@ -224,12 +224,15 @@ export function formatStrategySignalMessage(opts: {
   takeProfitPct:    number;
   conditionGroups:  ConditionGroupDisplay[];
   timestamp:        number;
+  /** Optional AI order verdict & evaluation snapshot. */
+  aiEvaluation?:    import('@/lib/ai/evaluator/types').OrderEvaluationResult;
 }): string {
   const {
     strategyName, rating, symbol, timeframe, direction,
     entryPrice, entryPriceLimit, stopLossPct, takeProfitPct,
-    conditionGroups, timestamp,
+    conditionGroups, timestamp, aiEvaluation,
   } = opts;
+
 
   const W        = 9;  // label field width after icon (icon = 1 emoji + 1 space)
   const isLong   = direction === 'long';
@@ -330,8 +333,16 @@ export function formatStrategySignalMessage(opts: {
     }
   }
 
+  if (aiEvaluation) {
+    const icon = aiEvaluation.status === 'PASS' ? '🟢 PASS' : aiEvaluation.status === 'CAVEAT' ? '🟡 CAVEAT' : '🔴 REJECT';
+    lines.push('');
+    lines.push(`🤖 ${lbl('AI Verdict:', W)}${icon} (${aiEvaluation.confidence.toUpperCase()})`);
+    lines.push(`💡 ${lbl('AI Note:', W)}${aiEvaluation.summary}`);
+  }
+
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
 }
+
 
 /** Suffix like "  c2" or "  l3" — omitted when candles <= 1 (default). */
 function fmtCheckSuffix(

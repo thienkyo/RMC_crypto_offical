@@ -38,8 +38,9 @@ import type { ConditionSnapshotGroup } from '@/lib/db/signals';
 const CANDLE_WINDOW = 1_000;
 
 export type StrategyNotifyResult =
-  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; debug?: StrategyNotifyDebug }
+  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; debug?: StrategyNotifyDebug }
   | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error'; debug?: StrategyNotifyDebug };
+
 
 /** Debug context surfaced in the cron Manual response. */
 export interface StrategyNotifyDebug {
@@ -167,6 +168,39 @@ export async function evaluateStrategySignal(
     computeEntryPriceLimit(lastClosed.close, strategy.action.entryPriceOffset, direction).toFixed(8),
   );
 
+  // ── 8b. Optional AI Order Evaluation ───────────────────────────────────────
+  let aiEvaluation: import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined;
+  try {
+    const { isAiSignalGatekeeperEnabled, getAiKey } = await import('@/lib/db/aiSettings');
+    const gatekeeperActive = await isAiSignalGatekeeperEnabled();
+
+    if (gatekeeperActive) {
+      const [geminiKey, claudeKey, openaiKey] = await Promise.all([
+        getAiKey('gemini'),
+        getAiKey('claude'),
+        getAiKey('chatgpt'),
+      ]);
+
+      if (geminiKey || claudeKey || openaiKey) {
+        const { evaluateOrder } = await import('@/lib/ai/evaluator/gateway');
+        aiEvaluation = await evaluateOrder(
+          {
+            symbol: strategy.symbol,
+            timeframe: strategy.timeframe,
+            direction,
+            entryPrice: entryPriceLimit ?? lastClosed.close,
+            stopLossPct: strategy.risk.stopLossPct,
+            takeProfitPct: strategy.risk.takeProfitPct,
+            candleTime: lastClosed.openTime,
+          },
+          closed,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(`[strategy/notify] AI evaluation failed for ${strategy.id}:`, err);
+  }
+
   // ── 9. Build Telegram message ──────────────────────────────────────────────
   const message = formatStrategySignalMessage({
     strategyName:    strategy.name,
@@ -181,6 +215,7 @@ export async function evaluateStrategySignal(
     takeProfitPct:   strategy.risk.takeProfitPct,
     conditionGroups,
     timestamp:       lastClosed.closeTime + 1,
+    aiEvaluation,
   });
 
   return {
@@ -192,9 +227,11 @@ export async function evaluateStrategySignal(
     rating,
     candleTime: lastClosed.openTime,
     conditionGroups,
+    aiEvaluation,
     debug: fullDebug,
   };
 }
+
 
 // ─── Per-condition check ──────────────────────────────────────────────────────
 // Delegates to the shared evaluateConditionChecked() in evaluate.ts so the

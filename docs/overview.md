@@ -79,8 +79,9 @@ ADX, Bollinger Bands (+ width, %B), CVD (+ divergence), EMA (+ deviation), MACD,
 - Live signal evaluation (`strategy_signals`) with Telegram notification on trigger
 - Starter templates for common setups
 
-### 🤖 AI Chart Analysis (`/api/ai/chart-analysis`)
-- Gemini-powered analysis of the current chart; results persisted in `ai_chart_analysis`
+### 🤖 AI Evaluation & Chart Analysis (`/api/ai/evaluate-order`, `/api/ai/chart-analysis`)
+- **Order Decision Evaluator (`/api/ai/evaluate-order`)**: Multi-LLM pre-trade evaluation engine (Claude, ChatGPT, Gemini, and Ensemble mode). Synthesizes candles, 37+ technical indicators, price action patterns, and news/social sentiment to output a strict 3-state verdict: `PASS` 🟢, `CAVEAT` 🟡, or `REJECT` 🔴 with concise technical, sentiment, and risk explanations. Results cached in `ai_order_evaluations`.
+- **AI Chart Vision Analysis (`/api/ai/chart-analysis`)**: Gemini-powered visual analysis of the chart canvas; results persisted in `ai_chart_analysis`.
 
 ### 📰 News & Sentiment Pipeline (`src/lib/crawlers/`, `src/lib/sentiment/`)
 Cron-driven crawlers (see `vercel.json`):
@@ -88,7 +89,11 @@ Cron-driven crawlers (see `vercel.json`):
 - **Reddit** (every 30 min): r/cryptocurrency, r/bitcoin, r/ethtrader, r/CryptoMarkets
 - **Nitter/X** (every 20 min): tracked analyst accounts (configured in DB)
 - **Polymarket** (every 10 min): prediction-market odds snapshots
+- **Telegram** (every 15 min): zero-auth public channel web preview scraper (`t.me/s/*`)
+- **YouTube** (every 30 min): official channel RSS feeds for top crypto/macro analysts
+- **Tech News** (every 30 min): Hacker News Firebase API + TechCrunch & Verge RSS
 - Sentiment scoring runs as its own cron; news feed + digest exposed via `/api/news/*`, manual refresh via `/api/news/refresh`
+
 
 ### 🔔 Alerts (`src/lib/alerts/`, `src/lib/telegram.ts`)
 - User-defined alert rules (`alert_rules`) checked by the `check-alerts` cron
@@ -145,7 +150,8 @@ flowchart TB
 
 ## Database Tables
 
-`symbols` · `candles` (hypertable; `source` is part of the primary key `(symbol, source, timeframe, open_time)` so the same ticker can exist in both universes — STX is Stacks on Binance and Seagate on the equity feeds — plus a `provider` column recording which upstream produced each row) · `backfill_status` · `strategies` · `strategy_versions` · `strategy_signals` · `ai_chart_analysis` · `news_articles` · `nitter_accounts` · `polymarket_snapshots` · `alert_rules` · `alert_history` · `settings`
+`symbols` · `candles` (hypertable; `source` is part of the primary key `(symbol, source, timeframe, open_time)` so the same ticker can exist in both universes — STX is Stacks on Binance and Seagate on the equity feeds — plus a `provider` column recording which upstream produced each row) · `backfill_status` · `strategies` · `strategy_versions` · `strategy_signals` · `ai_chart_analysis` · `ai_order_evaluations` · `news_articles` · `nitter_accounts` · `polymarket_snapshots` · `custom_news_feeds` · `alert_rules` · `alert_history` · `settings`
+
 
 Full schema: [src/lib/db/schema.sql](../src/lib/db/schema.sql)
 

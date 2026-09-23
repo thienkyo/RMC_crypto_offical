@@ -143,6 +143,28 @@ export function RecentSignalsStrip() {
                   {grade}
                 </span>
 
+                {/* AI Verdict Badge */}
+                {signal.ai_evaluation?.status && (
+                  <span
+                    className={clsx(
+                      'text-[9px] font-mono font-bold px-1 py-0.2 rounded border flex-shrink-0 uppercase',
+                      signal.ai_evaluation.status === 'PASS'
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                        : signal.ai_evaluation.status === 'CAVEAT'
+                        ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                        : 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+                    )}
+                    title={`AI Verdict: ${signal.ai_evaluation.status}\n${signal.ai_evaluation.summary}`}
+                  >
+                    {signal.ai_evaluation.status === 'PASS'
+                      ? 'AI: PASS'
+                      : signal.ai_evaluation.status === 'CAVEAT'
+                      ? 'AI: CAVEAT'
+                      : 'AI: REJECT'}
+                  </span>
+                )}
+
+
                 {/* Signal price */}
                 <span className="text-text-muted text-[10px] flex-shrink-0">
                   {fmtPrice(signal.entry_price)}

@@ -68,6 +68,7 @@ function MetricCard({ label, value, colour }: { label: string; value: string; co
 }
 
 function TradeRow({ trade }: { trade: BacktestTrade }) {
+  const funding = trade.fundingPaid ?? 0;
   return (
     <tr className="border-t border-surface-border text-xs font-mono hover:bg-surface-2">
       <td className="py-1.5 px-2 text-text-muted">{trade.id}</td>
@@ -84,6 +85,10 @@ function TradeRow({ trade }: { trade: BacktestTrade }) {
       </td>
       <td className="py-1.5 px-2">{fmt2(trade.entryPrice)}</td>
       <td className="py-1.5 px-2">{fmt2(trade.exitPrice)}</td>
+      <td className="py-1.5 px-2 text-text-muted">${fmt2(trade.feesPaid ?? 0)}</td>
+      <td className={`py-1.5 px-2 ${funding > 0 ? 'text-amber-400/90' : funding < 0 ? 'text-green-400' : 'text-text-muted'}`}>
+        {funding > 0 ? `-$${fmt2(funding)}` : funding < 0 ? `+$${fmt2(Math.abs(funding))}` : '$0.00'}
+      </td>
       <td className={`py-1.5 px-2 ${colourPct(trade.pnlPct)}`}>{fmtPct(trade.pnlPct)}</td>
       <td className={`py-1.5 px-2 ${colourPct(trade.pnlAbs)}`}>
         {trade.pnlAbs >= 0 ? '+' : ''}{fmt2(trade.pnlAbs)}
@@ -230,6 +235,33 @@ export function BacktestPanel({ history, onClearHistory }: Props) {
                 value={`$${metrics.finalCapital.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
               />
             </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <MetricCard
+                label="Trading Fees"
+                value={`$${fmt2(metrics.totalFeesPaid ?? 0)}`}
+                colour="text-text-muted"
+              />
+              <MetricCard
+                label="Funding Drag"
+                value={
+                  (metrics.totalFundingPaid ?? 0) > 0
+                    ? `-$${fmt2(metrics.totalFundingPaid)}`
+                    : (metrics.totalFundingPaid ?? 0) < 0
+                      ? `+$${fmt2(Math.abs(metrics.totalFundingPaid!))}`
+                      : '$0.00'
+                }
+                colour={(metrics.totalFundingPaid ?? 0) > 0 ? 'text-amber-400/90' : (metrics.totalFundingPaid ?? 0) < 0 ? 'text-green-400' : 'text-text-muted'}
+              />
+              <MetricCard
+                label="Initial Capital"
+                value={`$${metrics.initialCapital.toLocaleString()}`}
+              />
+              <MetricCard
+                label="Net P&L"
+                value={`${(metrics.finalCapital - metrics.initialCapital) >= 0 ? '+' : ''}$${fmt2(metrics.finalCapital - metrics.initialCapital)}`}
+                colour={colourPct(metrics.finalCapital - metrics.initialCapital)}
+              />
+            </div>
           </div>
         )}
 
@@ -238,18 +270,20 @@ export function BacktestPanel({ history, onClearHistory }: Props) {
           <table className="w-full text-xs font-mono">
             <tbody>
               {([
-                ['Total Return',    fmtPct(metrics.totalReturnPct),  colourPct(metrics.totalReturnPct)],
-                ['Initial Capital', `$${metrics.initialCapital.toLocaleString()}`, ''],
-                ['Final Capital',   `$${metrics.finalCapital.toLocaleString('en-US', { maximumFractionDigits: 2 })}`, colourPct(metrics.finalCapital - metrics.initialCapital)],
-                ['Total Trades',    String(metrics.totalTrades), ''],
-                ['Winning Trades',  `${metrics.winningTrades} (${fmt2(metrics.winRatePct)}%)`, 'text-green-400'],
-                ['Losing Trades',   String(metrics.losingTrades), 'text-red-400'],
-                ['Avg Win',         fmtPct(metrics.avgWinPct), 'text-green-400'],
-                ['Avg Loss',        fmtPct(metrics.avgLossPct), 'text-red-400'],
-                ['Profit Factor',   metrics.profitFactor === Infinity ? '∞' : fmt2(metrics.profitFactor), metrics.profitFactor >= 1 ? 'text-green-400' : 'text-red-400'],
-                ['Max Drawdown',    `-${fmt2(metrics.maxDrawdownPct)}%`, 'text-red-400'],
-                ['Sharpe Ratio',    fmt2(metrics.sharpeRatio), ''],
-                ['Sortino Ratio',   metrics.sortinoRatio === Infinity ? '∞' : fmt2(metrics.sortinoRatio), ''],
+                ['Total Return',       fmtPct(metrics.totalReturnPct),  colourPct(metrics.totalReturnPct)],
+                ['Initial Capital',    `$${metrics.initialCapital.toLocaleString()}`, ''],
+                ['Final Capital',      `$${metrics.finalCapital.toLocaleString('en-US', { maximumFractionDigits: 2 })}`, colourPct(metrics.finalCapital - metrics.initialCapital)],
+                ['Trading Fees Paid',  `$${fmt2(metrics.totalFeesPaid ?? 0)}`, 'text-text-muted'],
+                ['Funding Rate Paid',  (metrics.totalFundingPaid ?? 0) > 0 ? `-$${fmt2(metrics.totalFundingPaid)}` : (metrics.totalFundingPaid ?? 0) < 0 ? `+$${fmt2(Math.abs(metrics.totalFundingPaid!))}` : '$0.00', (metrics.totalFundingPaid ?? 0) > 0 ? 'text-amber-400/90' : (metrics.totalFundingPaid ?? 0) < 0 ? 'text-green-400' : ''],
+                ['Total Trades',       String(metrics.totalTrades), ''],
+                ['Winning Trades',     `${metrics.winningTrades} (${fmt2(metrics.winRatePct)}%)`, 'text-green-400'],
+                ['Losing Trades',      String(metrics.losingTrades), 'text-red-400'],
+                ['Avg Win',            fmtPct(metrics.avgWinPct), 'text-green-400'],
+                ['Avg Loss',           fmtPct(metrics.avgLossPct), 'text-red-400'],
+                ['Profit Factor',      metrics.profitFactor === Infinity ? '∞' : fmt2(metrics.profitFactor), metrics.profitFactor >= 1 ? 'text-green-400' : 'text-red-400'],
+                ['Max Drawdown',       `-${fmt2(metrics.maxDrawdownPct)}%`, 'text-red-400'],
+                ['Sharpe Ratio',       fmt2(metrics.sharpeRatio), ''],
+                ['Sortino Ratio',      metrics.sortinoRatio === Infinity ? '∞' : fmt2(metrics.sortinoRatio), ''],
               ] as [string, string, string][]).map(([label, value, colour]) => (
                 <tr key={label} className="border-t border-surface-border">
                   <td className="py-2 pr-4 text-text-muted">{label}</td>
@@ -266,10 +300,10 @@ export function BacktestPanel({ history, onClearHistory }: Props) {
             <p className="text-xs text-text-muted italic">No trades generated.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px]">
+              <table className="w-full min-w-[760px]">
                 <thead>
                   <tr className="text-xs text-text-muted">
-                    {['#', 'Dir', 'Entry Time', 'Exit Time', 'Entry $', 'Exit $', 'P&L %', 'P&L $', 'Exit Reason'].map(
+                    {['#', 'Dir', 'Entry Time', 'Exit Time', 'Entry $', 'Exit $', 'Fees $', 'Funding $', 'P&L %', 'P&L $', 'Exit Reason'].map(
                       (h) => <th key={h} className="py-1.5 px-2 text-left font-normal">{h}</th>,
                     )}
                   </tr>

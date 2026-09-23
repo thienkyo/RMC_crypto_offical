@@ -23,6 +23,8 @@ import type {
   Bias,
 } from '@/lib/ai/types';
 
+import { OrderEvaluatorCard } from './OrderEvaluatorCard';
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const TREND_COLORS: Record<TrendDirection, string> = {
@@ -171,6 +173,7 @@ export function AnalysisPanel({ getScreenshot }: Props) {
   const timeframe = useChartStore((s) => s.timeframe);
   const candles   = useChartStore((s) => s.candles);
 
+  const [subTab, setSubTab] = useState<'evaluator' | 'vision'>('evaluator');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result,      setResult]      = useState<AnalyzeChartResponse | null>(null);
   const [error,       setError]       = useState<string | null>(null);
@@ -215,28 +218,51 @@ export function AnalysisPanel({ getScreenshot }: Props) {
   return (
     <div className="flex flex-col h-full bg-surface border-l border-surface-border overflow-hidden">
 
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 h-12 border-b border-surface-border flex-shrink-0">
-        <span className="text-[11px] font-mono uppercase tracking-widest text-text-muted">
-          AI Analysis
-        </span>
-        {result && (
-          <span
-            className={`text-[10px] font-mono px-1.5 py-0.5 rounded border
-              ${result.fromCache
-                ? 'text-text-muted border-surface-border bg-surface-2'
-                : 'text-accent border-accent/30 bg-accent/5'}`}
-            title={result.fromCache && result.cachedAt
-              ? `Cached at ${new Date(result.cachedAt).toLocaleTimeString()}`
-              : `Fresh · ${result.model}`}
-          >
-            {result.fromCache ? 'cached' : 'fresh'}
-          </span>
-        )}
+      {/* Sub-tab Switcher Header */}
+      <div className="flex items-center border-b border-surface-border flex-shrink-0 bg-surface-2/50">
+        <button
+          type="button"
+          onClick={() => setSubTab('evaluator')}
+          className={`flex-1 h-10 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+            subTab === 'evaluator'
+              ? 'text-accent border-b-2 border-accent bg-accent/5 font-bold'
+              : 'text-text-muted hover:text-text-primary'
+          }`}
+        >
+          🎯 Order Evaluator
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('vision')}
+          className={`flex-1 h-10 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+            subTab === 'vision'
+              ? 'text-accent border-b-2 border-accent bg-accent/5 font-bold'
+              : 'text-text-muted hover:text-text-primary'
+          }`}
+        >
+          📈 Chart Vision
+        </button>
       </div>
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-4">
+        {subTab === 'evaluator' ? (
+          <OrderEvaluatorCard />
+        ) : (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono text-text-muted">{contextLabel}</span>
+              {result && (
+                <span
+                  className={`text-[9px] font-mono px-1 py-0.5 rounded border
+                    ${result.fromCache
+                      ? 'text-text-muted border-surface-border bg-surface-2'
+                      : 'text-accent border-accent/30 bg-accent/5'}`}
+                >
+                  {result.fromCache ? 'cached' : 'fresh'}
+                </span>
+              )}
+            </div>
 
         {/* Analyze button */}
         <div className="flex flex-col gap-1.5">
@@ -292,8 +318,11 @@ export function AnalysisPanel({ getScreenshot }: Props) {
             Click "Analyze Chart" to get an AI read on the current candles, key levels, and patterns.
           </p>
         )}
+          </>
+        )}
 
       </div>
     </div>
   );
+
 }

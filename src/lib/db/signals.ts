@@ -30,6 +30,8 @@ export interface LogSignalInput {
   rating?:             number;
   /** Limit-order entry price = signalPrice × 0.97 */
   entryPriceLimit?:    number;
+  /** AI verdict & evaluation snapshot. */
+  aiEvaluation?:       import('@/lib/ai/evaluator/types').OrderEvaluationResult;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,12 +42,16 @@ export async function logStrategySignal(input: LogSignalInput): Promise<number> 
     ? JSON.stringify(input.conditionsSnapshot)
     : null;
 
+  const aiEval = input.aiEvaluation
+    ? JSON.stringify(input.aiEvaluation)
+    : null;
+
   const { rows } = await db.query<{ id: number }>(
     `INSERT INTO strategy_signals
        (strategy_id, strategy_name, symbol, timeframe, direction,
         entry_price, stop_loss_pct, take_profit_pct, candle_time,
-        telegram_delivered, conditions_snapshot, rating, entry_price_limit)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,to_timestamp($9::bigint / 1000.0),$10,$11,$12,$13)
+        telegram_delivered, conditions_snapshot, rating, entry_price_limit, ai_evaluation)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,to_timestamp($9::bigint / 1000.0),$10,$11,$12,$13,$14)
      RETURNING id`,
     [
       input.strategyId,
@@ -61,10 +67,12 @@ export async function logStrategySignal(input: LogSignalInput): Promise<number> 
       snapshot,
       input.rating   ?? null,
       input.entryPriceLimit ?? null,
+      aiEval,
     ],
   );
   return rows[0]!.id;
 }
+
 
 /** Fetch every signal across all strategies, newest first. Used by the Portfolio view. */
 export async function getAllSignals(): Promise<StrategySignalRow[]> {
@@ -89,6 +97,7 @@ export async function getAllSignals(): Promise<StrategySignalRow[]> {
     telegram_delivered:  boolean;
     rating:              number | null;
     entry_price_limit:   string | null;
+    ai_evaluation:       import('@/lib/ai/evaluator/types').OrderEvaluationResult | null;
   }>(
     `SELECT id, strategy_id, strategy_name, symbol, timeframe, direction,
             entry_price, stop_loss_pct, take_profit_pct,
@@ -96,7 +105,7 @@ export async function getAllSignals(): Promise<StrategySignalRow[]> {
             conditions_snapshot,
             actual_entry_price, actual_exit_price,
             pnl_pct, outcome_note, outcome_at,
-            telegram_delivered, rating, entry_price_limit
+            telegram_delivered, rating, entry_price_limit, ai_evaluation
      FROM strategy_signals
      ORDER BY fired_at DESC`,
   );
@@ -124,6 +133,7 @@ export async function getAllSignals(): Promise<StrategySignalRow[]> {
     entry_price_limit:   r.entry_price_limit !== null && r.entry_price_limit !== undefined
                            ? parseFloat(r.entry_price_limit as unknown as string)
                            : null,
+    ai_evaluation:       r.ai_evaluation ?? null,
   }));
 }
 
@@ -150,6 +160,7 @@ export async function getSignalsForStrategy(strategyId: string): Promise<Strateg
     telegram_delivered:  boolean;
     rating:              number | null;
     entry_price_limit:   string | null;
+    ai_evaluation:       import('@/lib/ai/evaluator/types').OrderEvaluationResult | null;
   }>(
     `SELECT id, strategy_id, strategy_name, symbol, timeframe, direction,
             entry_price, stop_loss_pct, take_profit_pct,
@@ -157,7 +168,7 @@ export async function getSignalsForStrategy(strategyId: string): Promise<Strateg
             conditions_snapshot,
             actual_entry_price, actual_exit_price,
             pnl_pct, outcome_note, outcome_at,
-            telegram_delivered
+            telegram_delivered, rating, entry_price_limit, ai_evaluation
      FROM strategy_signals
      WHERE strategy_id = $1
      ORDER BY fired_at DESC`,
@@ -187,8 +198,10 @@ export async function getSignalsForStrategy(strategyId: string): Promise<Strateg
     entry_price_limit:   r.entry_price_limit !== null && r.entry_price_limit !== undefined
                            ? parseFloat(r.entry_price_limit as unknown as string)
                            : null,
+    ai_evaluation:       r.ai_evaluation ?? null,
   }));
 }
+
 
 /**
  * Update the actual trade prices for a signal.

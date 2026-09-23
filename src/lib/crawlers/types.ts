@@ -38,4 +38,8 @@ export const SOURCE_CREDIBILITY: Record<string, number> = {
   nitter:        0.5,
   polymarket:    0.9, // prediction markets are strong signals
   custom:        0.8, // user-curated personal sources
+  telegram:      0.8, // verified channels & alpha desks
+  youtube:       0.7, // macro & technical analyst commentary
+  technews:      0.8, // hacker news & tech industry reporting
 };
+

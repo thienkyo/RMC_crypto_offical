@@ -131,7 +131,9 @@ async function runCheckAlerts(): Promise<Response> {
       conditionsSnapshot:  evalResult.conditionGroups,
       rating:              evalResult.rating,
       entryPriceLimit:     evalResult.entryPriceLimit,
+      aiEvaluation:        evalResult.aiEvaluation,
     }).catch((err) => console.error('[cron:check-alerts] logStrategySignal failed:', err));
+
 
     strategyDebug.push({
       name:      evalResult.strategy.name,

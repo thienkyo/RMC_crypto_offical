@@ -25,7 +25,7 @@ export const rsi: Indicator<RsiParams> = {
     emaPeriod: { label: 'EMA Period (0 = off)', min: 0, max: 100, step: 1 },
   },
 
-  compute(candles: Candle[], { period, emaPeriod }: RsiParams): IndicatorResult {
+  compute(candles: Candle[], { period = 14, emaPeriod = 10 }: Partial<RsiParams> = {}): IndicatorResult {
     if (candles.length < period + 1) return [];
 
     // ── RSI (Wilder smoothing) ────────────────────────────────────────────────
@@ -52,7 +52,7 @@ export const rsi: Indicator<RsiParams> = {
     }
 
     // ── EMA of RSI + crossover markers ───────────────────────────────────────
-    if (emaPeriod <= 0 || rsiData.length < emaPeriod) {
+    if (!emaPeriod || emaPeriod <= 0 || rsiData.length < emaPeriod) {
       return [{
         id: `rsi_${period}`, name: `RSI ${period}`, data: rsiData,
         panel: 'sub', color: '#a855f7', lineWidth: 1.5, seriesType: 'line',

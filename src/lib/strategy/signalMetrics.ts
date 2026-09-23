@@ -51,7 +51,10 @@ export interface StrategySignalRow {
   rating:             number | null;
   /** Limit-order entry = signal price × 0.97 (null for old rows). */
   entry_price_limit:  number | null;
+  /** AI verdict & evaluation snapshot (PASS / CAVEAT / REJECT). */
+  ai_evaluation?:     import('@/lib/ai/evaluator/types').OrderEvaluationResult | null;
 }
+
 
 export interface SignalMetrics {
   total:    number;

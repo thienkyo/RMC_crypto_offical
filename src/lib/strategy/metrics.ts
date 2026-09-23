@@ -118,5 +118,7 @@ export function computeMetrics(
     sortinoRatio:   sortino(barReturns),
     initialCapital,
     finalCapital,
+    totalFeesPaid: trades.reduce((s, t) => s + (t.feesPaid ?? 0), 0),
+    totalFundingPaid: trades.reduce((s, t) => s + (t.fundingPaid ?? 0), 0),
   };
 }

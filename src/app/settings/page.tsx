@@ -14,28 +14,47 @@ import type { AppSettings } from '@/app/api/settings/route';
 export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
-  // Load all known setting keys from DB
   let settings: AppSettings = {
     telegram_personal_chat_id: null,
     telegram_group_chat_id:    null,
     telegram_alert_chat_id:    null,
+    gemini_api_key:            null,
+    anthropic_api_key:         null,
+    openai_api_key:            null,
+    gemini_evaluator_model:    null,
+    anthropic_evaluator_model: null,
+    openai_evaluator_model:    null,
+    ai_evaluator_max_tokens:   null,
+    ai_evaluator_max_cost_usd: null,
+    ai_evaluator_monthly_budget_usd: null,
+    enable_ai_signal_gatekeeper: null,
   };
 
   try {
     const { rows } = await db.query<{ key: string; value: string | null }>(
-      `SELECT key, value FROM settings
-       WHERE key IN ('telegram_personal_chat_id', 'telegram_group_chat_id', 'telegram_alert_chat_id')`,
+      `SELECT key, value FROM settings`,
     );
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
     settings = {
       telegram_personal_chat_id: map['telegram_personal_chat_id'] ?? null,
       telegram_group_chat_id:    map['telegram_group_chat_id']    ?? null,
       telegram_alert_chat_id:    map['telegram_alert_chat_id']    ?? null,
+      gemini_api_key:            map['gemini_api_key']            ?? null,
+      anthropic_api_key:         map['anthropic_api_key']         ?? null,
+      openai_api_key:            map['openai_api_key']            ?? null,
+      gemini_evaluator_model:    map['gemini_evaluator_model']    ?? null,
+      anthropic_evaluator_model: map['anthropic_evaluator_model'] ?? null,
+      openai_evaluator_model:    map['openai_evaluator_model']    ?? null,
+      ai_evaluator_max_tokens:   map['ai_evaluator_max_tokens']   ?? null,
+      ai_evaluator_max_cost_usd: map['ai_evaluator_max_cost_usd'] ?? null,
+      ai_evaluator_monthly_budget_usd: map['ai_evaluator_monthly_budget_usd'] ?? null,
+      enable_ai_signal_gatekeeper: map['enable_ai_signal_gatekeeper'] ?? null,
     };
   } catch (err) {
     // DB may not have run the latest migration yet — form still renders with empty defaults
     console.warn('[settings/page] Could not load settings from DB:', err);
   }
+
 
   return (
     <div className="h-full overflow-y-auto">

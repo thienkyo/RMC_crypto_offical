@@ -16,6 +16,9 @@ import { buildRedditCrawlers } from '@/lib/crawlers/reddit';
 import { buildNitterCrawlers } from '@/lib/crawlers/nitter';
 import { crawlPolymarket } from '@/lib/crawlers/polymarket';
 import { crawlCustomFeeds } from '@/lib/crawlers/custom';
+import { TelegramCrawler } from '@/lib/crawlers/telegram';
+import { YouTubeCrawler } from '@/lib/crawlers/youtube';
+import { TechNewsCrawler } from '@/lib/crawlers/technews';
 import { upsertArticles } from '@/lib/crawlers/persist';
 import type { Crawler } from '@/lib/crawlers/types';
 import { getUnclassifiedArticles, updateArticleSentiment } from '@/lib/db/news';
@@ -84,6 +87,31 @@ async function runRefresh(): Promise<RefreshSummary> {
   } catch (err) {
     console.error('[refresh:custom] error:', (err as Error).message);
   }
+
+  // Telegram channels
+  try {
+    const tgCrawler = new TelegramCrawler();
+    totalInserted += await runCrawler('telegram', tgCrawler, bySource);
+  } catch (err) {
+    console.error('[refresh:telegram] error:', (err as Error).message);
+  }
+
+  // YouTube channels
+  try {
+    const ytCrawler = new YouTubeCrawler();
+    totalInserted += await runCrawler('youtube', ytCrawler, bySource);
+  } catch (err) {
+    console.error('[refresh:youtube] error:', (err as Error).message);
+  }
+
+  // Tech news (Hacker News + TechCrunch)
+  try {
+    const techCrawler = new TechNewsCrawler();
+    totalInserted += await runCrawler('technews', techCrawler, bySource);
+  } catch (err) {
+    console.error('[refresh:technews] error:', (err as Error).message);
+  }
+
 
   // ── 2. Classify freshly-inserted (and any backlog) articles ─────────────────
   let classified = 0;

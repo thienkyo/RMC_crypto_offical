@@ -13,8 +13,9 @@ import { useCallback } from 'react';
 import { useStrategyStore } from '@/store/strategy';
 import { runBacktest } from '@/lib/strategy/backtester';
 import { INDICATORS } from '@/lib/indicators';
+import { collectHtfTimeframes, type HtfCandleSets } from '@/lib/strategy/mtf';
 import type { Strategy } from '@/types/strategy';
-import type { Candle } from '@/types/market';
+import type { Candle, Timeframe } from '@/types/market';
 
 interface RawCandle {
   openTime:  number;
@@ -24,6 +25,24 @@ interface RawCandle {
   close:     number;
   volume:    number;
   closeTime: number;
+}
+
+async function fetchCandleWindow(symbol: string, tf: Timeframe): Promise<Candle[]> {
+  const url = `/api/candles?symbol=${encodeURIComponent(symbol)}&interval=${tf}&limit=1000`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ${tf} candles: ${res.statusText}`);
+  }
+  const { data: raw } = await res.json() as { data: RawCandle[] };
+  return raw.map((r) => ({
+    openTime:  Number(r.openTime),
+    open:      Number(r.open),
+    high:      Number(r.high),
+    low:       Number(r.low),
+    close:     Number(r.close),
+    volume:    Number(r.volume),
+    closeTime: Number(r.closeTime),
+  }));
 }
 
 export function useBacktest() {
@@ -37,31 +56,27 @@ export function useBacktest() {
       setBacktestResult(null);
 
       try {
-        // Fetch the maximum 1000-bar window for this symbol / timeframe.
-        // The API envelope is { symbol, interval, data: RawCandle[] }.
-        const url = `/api/candles?symbol=${encodeURIComponent(strategy.symbol)}&interval=${strategy.timeframe}&limit=1000`;
-        const res = await fetch(url);
-        if (!res.ok) {
-          throw new Error(`Failed to fetch candles: ${res.statusText}`);
-        }
-        const { data: raw } = await res.json() as { data: RawCandle[] };
+        const htfTfs = collectHtfTimeframes(strategy);
+        
+        // Fetch base + all required HTF windows in parallel
+        const fetchPromises = [
+          fetchCandleWindow(strategy.symbol, strategy.timeframe),
+          ...htfTfs.map((tf) => fetchCandleWindow(strategy.symbol, tf))
+        ];
 
-        // Normalise to internal Candle type (API may return strings from Postgres)
-        const candles: Candle[] = raw.map((r) => ({
-          openTime:  Number(r.openTime),
-          open:      Number(r.open),
-          high:      Number(r.high),
-          low:       Number(r.low),
-          close:     Number(r.close),
-          volume:    Number(r.volume),
-          closeTime: Number(r.closeTime),
-        }));
+        const results = await Promise.all(fetchPromises);
+        const candles = results[0]!;
+        
+        const htfCandles: HtfCandleSets = {};
+        htfTfs.forEach((tf, i) => {
+          htfCandles[tf] = results[i + 1]!;
+        });
 
         // Run sync but yield to the event loop first so the UI can update the
         // "Running…" spinner before the CPU-bound work starts
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-        const result = runBacktest(strategy, candles);
+        const result = runBacktest(strategy, candles, { htfCandles });
 
         // ── Diagnostic helper: log all entry/exit condition hit-rates ────────
         function logConditionHitRates(label: string, groups: typeof strategy.entryConditions) {

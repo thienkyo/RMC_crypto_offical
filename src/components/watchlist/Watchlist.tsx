@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery }         from '@tanstack/react-query';
+import { useSymbols }      from '@/hooks/useSymbols';
 import { useChartStore }    from '@/store/chart';
 import { useWatchlistStore } from '@/store/watchlist';
 import { subscribeTicker }  from '@/lib/exchange/binance';
@@ -9,12 +9,6 @@ import { clsx }             from 'clsx';
 import type { MarketSymbol } from '@/types/market';
 
 // ── API shapes ────────────────────────────────────────────────────────────────
-
-interface SymbolsResponse {
-  crypto:   MarketSymbol[];
-  equities: MarketSymbol[];
-  stale?:   boolean;
-}
 
 type ValidateResponse =
   | { valid: true;  symbol: string; price: number; marketSymbol: MarketSymbol }
@@ -164,12 +158,7 @@ export function Watchlist() {
     hideSymbol, showSymbol, addCustomSymbol, removeCustomSymbol, toggleFavorite,
   } = useWatchlistStore();
 
-  const { data, isLoading } = useQuery<SymbolsResponse>({
-    queryKey:        ['symbols'],
-    queryFn:         () => fetch('/api/symbols').then((r) => r.json()),
-    staleTime:       3_600_000,
-    refetchInterval: 3_600_000,
-  });
+  const { data, isLoading, isError, error, refetch } = useSymbols();
 
   // ── Live tickers ──────────────────────────────────────────────────────────
   const [tickers, setTickers] = useState<Record<string, TickerState>>({});
@@ -383,6 +372,24 @@ export function Watchlist() {
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {isLoading && (
           <div className="px-3 py-4 text-xs text-text-muted animate-pulse">Loading…</div>
+        )}
+
+        {isError && (
+          <div className="px-3 py-4 flex flex-col items-start gap-1.5">
+            <span className="text-xs text-down font-mono">Could not load symbols</span>
+            <span className="text-[10px] text-text-muted">
+              {error instanceof Error ? error.message : 'Unknown error'}
+            </span>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="mt-0.5 px-2 py-0.5 rounded bg-surface-2 border border-surface-border
+                         text-[10px] font-mono text-text-secondary
+                         hover:text-text-primary hover:border-accent/50 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         )}
 
         {sections.map(({ id, label, items, isFavSection }) =>

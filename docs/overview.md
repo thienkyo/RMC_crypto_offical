@@ -41,7 +41,7 @@ Stock (Mag7) data integration is scaffolded at the type level (`source: 'equitie
 
 ### 📈 Dashboard & Charts
 - Main dashboard at `/` — multi-pane chart layout: candlestick main chart plus indicator subcharts (RSI, MACD, …)
-- Live watchlist driven by the Binance miniTicker WebSocket
+- Live watchlist driven by the Binance miniTicker WebSocket; the symbol universe itself comes from the shared `useSymbols()` hook (`src/hooks/useSymbols.ts`), used by both the watchlist and the command palette so the two observers cannot desync the cache entry's refetching
 - Timeframes from `1m` to `1w`; stale-data banner when the feed is down
 - On load / reload / ticker or timeframe switch the view resets with ~20% of the price pane kept empty to the right of the newest candle (`RIGHT_GAP_RATIO` in `PriceChart.tsx`), so the live bar never sits flush against the price axis and the volume profile has room to draw. The offset is derived from bar spacing, so the gap stays visually constant across zoom levels; a range the user scrolled to is restored untouched.
 - Chart overlays on the price pane: OHLCV + indicator legend, candle-close countdown, strategy signal drop-lines, and **visible-range extreme markers** — a green price chip above the bar that printed the highest high and an amber one below the bar that printed the lowest low, across the bars currently on screen (recomputed on scroll/zoom and on every live tick)
@@ -50,10 +50,16 @@ Stock (Mag7) data integration is scaffolded at the type level (`source: 'equitie
 ### ⌨️ Command Palette (`src/components/ui/CommandPalette.tsx`)
 Global **Cmd/Ctrl+K** omnibar mounted once in `providers.tsx`, so it is reachable from every route (also openable by dispatching an `open-command-palette` window event). One fuzzy search across six categories: symbols (API top-20 + user-added watchlist entries, deduped), timeframes (with aliases — `60` finds `1h`), indicators, saved layouts, strategies, and navigation/panel commands. The indicator rows are generated from the `INDICATORS` registry rather than a hand-kept list, so every registered indicator is reachable and its params always match what the indicator declares; with no query typed the ~20 candlestick pattern detectors are held back (they are the entries carrying `bias`) so the core indicators stay visible.
 
+### 🔔 Recent Signals Strip (`src/components/chart/RecentSignalsStrip.tsx`)
+Collapsible strip under the chart header listing the most recently fired strategy signals for the active symbol, each with its rating grade (`ratingToGrade`), entry price and relative time; clicking a row switches the chart to that symbol. Visibility is the `recentSignalsVisible` flag on `markerSettings`, toggled from the **Signals** control in the chart header.
+
 ### 🗂️ Saved Chart Layouts (`src/store/chartLayouts.ts`)
 Named snapshots of the whole chart workspace — timeframe, active indicators, Volume Profile config, marker visibility, sub-pane heights, bar spacing, and optionally a pinned symbol. Applied atomically through `useChartStore.applyLayoutSnapshot`, which clears the candle series whenever the symbol or timeframe changes, exactly as `setSymbol`/`setTimeframe` do, so a layout switch can never leave the previous ticker's candles on screen under the new label. Switchable from the chart toolbar (`ChartLayoutSelector`) or the palette.
 - Three built-ins ship in code: **Trend & Momentum**, **Scalp 5m**, **Clean Price Action**. Only user-created layouts are persisted (`rmc-saved-layouts`) — built-ins are rebuilt from `DEFAULT_LAYOUTS` on every load, so fixes to them reach browsers that already have storage written.
 - One `ActiveIndicator` per indicator id: the store keys indicators by their registry id, so a layout cannot hold two configurations of the same indicator (e.g. a 9/21 EMA pair) — that would need per-instance ids throughout the store and renderer.
+
+### 💾 Persisted Client State
+Two zustand `persist` stores: `rmc-chart` (symbol, timeframe, indicators, viewport and marker preferences) and `rmc-saved-layouts` (user-created chart layouts only). Both rehydrate through a `merge` that backfills keys added since a browser last wrote its state — zustand's default merge is a shallow top-level one, so without it a newly added required field (e.g. `recentSignalsVisible`) would restore as `undefined` and read as "off" everywhere while TypeScript still believed it was a boolean. `withMarkerDefaults()` in `src/store/chart.ts` is the single place that backfill is defined, and `applyLayoutSnapshot` runs a layout's `markerSettings` through it too, so applying an older saved layout cannot blank a newer setting.
 
 ### 🧮 Indicators (`src/lib/indicators/`)
 37 entries in the `INDICATORS` registry, all implementing a shared `Indicator<P>` interface, so the **same `compute()` function** powers both chart overlays and the backtester:

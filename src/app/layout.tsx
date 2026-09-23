@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 import './globals.css';
 import { Providers } from './providers';
-import { CommandPaletteTrigger } from '@/components/ui/CommandPalette';
+import { CommandPaletteTrigger } from '@/components/ui/CommandPaletteTrigger';
 
 export const metadata: Metadata = {
   title: 'RMC Crypto',

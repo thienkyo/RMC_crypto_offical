@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useChartLayoutStore, type SavedChartLayout } from '@/store/chartLayouts';
 import { useChartStore } from '@/store/chart';
 import { clsx } from 'clsx';
@@ -28,12 +28,25 @@ export function ChartLayoutSelector() {
 
   const activeLayout = layouts.find((l) => l.id === activeLayoutId) ?? null;
 
+  /**
+   * Reset every field of the save form together.
+   * `pinSymbol` lives in this component, not the form, so leaving it set after a
+   * save meant the next layout was silently pinned to whatever symbol happened
+   * to be active then — turning an asset-agnostic template into one that hijacks
+   * the symbol on every apply.
+   */
+  const closeSaveForm = useCallback(() => {
+    setIsSaving(false);
+    setNewLayoutName('');
+    setPinSymbol(false);
+  }, []);
+
   // Close dropdown on click outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setOpen(false);
-        setIsSaving(false);
+        closeSaveForm();
         setEditingId(null);
       }
     };
@@ -52,8 +65,7 @@ export function ChartLayoutSelector() {
     e.preventDefault();
     if (!newLayoutName.trim()) return;
     saveCurrentLayout(newLayoutName, pinSymbol);
-    setNewLayoutName('');
-    setIsSaving(false);
+    closeSaveForm();
     setOpen(false);
   };
 
@@ -242,10 +254,7 @@ export function ChartLayoutSelector() {
               <div className="flex items-center justify-end gap-1.5 pt-0.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsSaving(false);
-                    setNewLayoutName('');
-                  }}
+                  onClick={closeSaveForm}
                   className="px-2 py-0.5 text-text-muted hover:text-text-primary text-[10px]"
                 >
                   Cancel

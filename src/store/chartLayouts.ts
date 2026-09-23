@@ -6,7 +6,7 @@ import type {
   VolumeProfileConfig,
   MarkerSettings,
 } from '@/store/chart';
-import { useChartStore } from '@/store/chart';
+import { useChartStore, withMarkerDefaults } from '@/store/chart';
 
 export interface SavedChartLayout {
   id: string;
@@ -52,6 +52,7 @@ const DEFAULT_LAYOUTS: SavedChartLayout[] = [
       },
       showLabels: true,
       stripVisible: true,
+      recentSignalsVisible: true,
     },
     subPaneHeights: { rsi: 120, macd: 140 },
     barSpacing: 8,
@@ -89,6 +90,7 @@ const DEFAULT_LAYOUTS: SavedChartLayout[] = [
       },
       showLabels: true,
       stripVisible: true,
+      recentSignalsVisible: true,
     },
     subPaneHeights: { rsi: 110 },
     barSpacing: 10,
@@ -119,6 +121,7 @@ const DEFAULT_LAYOUTS: SavedChartLayout[] = [
       },
       showLabels: true,
       stripVisible: true,
+      recentSignalsVisible: true,
     },
     subPaneHeights: {},
     barSpacing: 8,
@@ -233,7 +236,10 @@ export const useChartLayoutStore = create<ChartLayoutState>()(
         const remaining = layouts.filter((l) => l.id !== id);
         set({
           layouts: remaining,
-          activeLayoutId: activeLayoutId === id ? (remaining[0]?.id ?? null) : activeLayoutId,
+          // null, not remaining[0]: nothing has been applied, and falling back to
+          // the first built-in would badge it Active while the chart still holds
+          // the deleted layout's settings.
+          activeLayoutId: activeLayoutId === id ? null : activeLayoutId,
         });
 
         return true;
@@ -242,6 +248,11 @@ export const useChartLayoutStore = create<ChartLayoutState>()(
       renameLayout: (id: string, newName: string) => {
         const name = newName.trim();
         if (!name) return false;
+
+        // Built-ins are rebuilt from DEFAULT_LAYOUTS on every load, so a rename
+        // here would show in the UI and then silently vanish on reload. Refuse
+        // it the way deleteLayout and updateActiveLayout do.
+        if (get().layouts.find((l) => l.id === id)?.isBuiltIn) return false;
 
         set((s) => ({
           layouts: s.layouts.map((l) =>
@@ -286,7 +297,11 @@ export const useChartLayoutStore = create<ChartLayoutState>()(
         const p = (persisted ?? {}) as Partial<
           Pick<ChartLayoutState, 'layouts' | 'activeLayoutId'>
         >;
-        const userLayouts = (p.layouts ?? []).filter((l) => !l.isBuiltIn);
+        // Backfill marker keys added since a layout was saved, so applying an
+        // older layout cannot write undefined over a required setting.
+        const userLayouts = (p.layouts ?? [])
+          .filter((l) => !l.isBuiltIn)
+          .map((l) => ({ ...l, markerSettings: withMarkerDefaults(l.markerSettings) }));
         return {
           ...current,
           layouts:        [...DEFAULT_LAYOUTS, ...userLayouts],

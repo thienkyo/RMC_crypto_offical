@@ -120,3 +120,73 @@ export function strategyRating(entryGroups: ConditionGroup[]): number {
   const { min, max } = strategyScoreRange(entryGroups);
   return Math.round((min + max) / 2);
 }
+
+// ─── Letter Grade Mapping ───────────────────────────────────────────────────
+
+export interface SignalGrade {
+  grade: string;
+  color: string;
+  badgeClass: string;
+}
+
+/**
+ * Maps a 1–7 star rating to a letter grade with terminal theme colors:
+ *  7   -> A+ (Emerald)
+ *  6   -> A  (Emerald)
+ *  5   -> B+ (Blue)
+ *  4   -> B  (Blue)
+ *  3   -> C+ (Amber)
+ *  2   -> C  (Amber)
+ *  1/0 -> D  (Gray)
+ */
+export function ratingToGrade(score: number | null | undefined): SignalGrade {
+  const s = typeof score === 'number' ? Math.round(score) : 4; // default to B if unrated
+
+  if (s >= 7) {
+    return {
+      grade: 'A+',
+      color: '#10b981',
+      badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    };
+  }
+  if (s >= 6) {
+    return {
+      grade: 'A',
+      color: '#34d399',
+      badgeClass: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+    };
+  }
+  if (s >= 5) {
+    return {
+      grade: 'B+',
+      color: '#60a5fa',
+      badgeClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+    };
+  }
+  if (s >= 4) {
+    return {
+      grade: 'B',
+      color: '#93c5fd',
+      badgeClass: 'bg-blue-500/10 text-blue-300 border-blue-500/20',
+    };
+  }
+  if (s >= 3) {
+    return {
+      grade: 'C+',
+      color: '#fbbf24',
+      badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    };
+  }
+  if (s >= 2) {
+    return {
+      grade: 'C',
+      color: '#f59e0b',
+      badgeClass: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+    };
+  }
+  return {
+    grade: 'D',
+    color: '#9ca3af',
+    badgeClass: 'bg-surface-3 text-text-muted border-surface-border',
+  };
+}

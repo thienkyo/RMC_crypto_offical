@@ -2,7 +2,7 @@
 
 import { useRef, useMemo, useEffect, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { LogicalRange, IChartApi, Logical, SeriesMarker, UTCTimestamp as LWCTimestamp } from 'lightweight-charts';
+import type { LogicalRange, IChartApi, SeriesMarker, UTCTimestamp as LWCTimestamp } from 'lightweight-charts';
 import { format } from 'date-fns';
 import { useChartStore } from '@/store/chart';
 import type { MarkerVisibility } from '@/store/chart';
@@ -15,7 +15,7 @@ import type { IndicatorSeries, IndicatorPoint, IndicatorMarker } from '@/lib/ind
 import { useLiveStrategies } from '@/hooks/useLiveStrategy';
 import { computeSignalCandles } from '@/lib/strategy/signals';
 import { strategyScoreRange }  from '@/lib/strategy/rating';
-import { PriceChart, gapBarsFor, type PriceChartHandle } from './PriceChart';
+import { PriceChart, type PriceChartHandle } from './PriceChart';
 import { SubChart,   type SubChartHandle   } from './SubChart';
 import { VPConfigCard }                      from './VPConfigCard';
 import { CandleTimer, CandleTimerInline }       from './CandleTimer';
@@ -23,6 +23,7 @@ import { ChartLegend }                       from './ChartLegend';
 import { TimeframeSelector } from '../ui/TimeframeSelector';
 import { IndicatorSelector } from '../ui/IndicatorSelector';
 import { ChartLayoutSelector } from './ChartLayoutSelector';
+import { RecentSignalsStrip } from './RecentSignalsStrip';
 import { StaleDataBanner }   from '../ui/StaleDataBanner';
 import type { Candle } from '@/types/market';
 
@@ -166,7 +167,6 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const savedSubHeights    = useChartStore((s) => s.subPaneHeights);
   const savedMarkerSettings = useChartStore((s) => s.markerSettings);
   const setBarSpacing      = useChartStore((s) => s.setBarSpacing);
-  const setSubPaneHeight   = useChartStore((s) => s.setSubPaneHeight);
   const setMarkerSettings  = useChartStore((s) => s.setMarkerSettings);
   const vpConfig           = useChartStore((s) => s.vpConfig);
   const setVpConfig        = useChartStore((s) => s.setVpConfig);
@@ -232,6 +232,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   );
 
   const priceRef = useRef<PriceChartHandle>(null);
+  const pricePaneRef = useRef<HTMLDivElement>(null);
   const subRefs  = useRef<Map<string, SubChartHandle>>(new Map());
 
   // ── Sub-pane heights (resizable via drag, persisted to store) ────────────
@@ -244,11 +245,18 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     savedSubHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK,
   [savedSubHeights]);
 
+  // Reads the live height via getState() rather than closing over it. PaneResizer
+  // captures this callback once on mousedown and then feeds it one INCREMENTAL
+  // delta per mousemove, so a height from the closure would stay pinned at the
+  // drag-start value and every event would recompute `start + 5px` — the pane
+  // would stop growing after the first few pixels. Keeping the deps empty also
+  // means the mid-drag listener never goes stale.
   const handlePaneDelta = useCallback((id: string, delta: number) => {
-    const current = savedSubHeights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK;
+    const heights = useChartStore.getState().subPaneHeights;
+    const current = heights[id] ?? SUB_HEIGHT_DEFAULT[id] ?? SUB_HEIGHT_FALLBACK;
     const next = Math.max(SUB_HEIGHT_MIN, Math.min(SUB_HEIGHT_MAX, current + delta));
-    setSubPaneHeight(id, next);
-  }, [savedSubHeights, setSubPaneHeight]);
+    useChartStore.getState().setSubPaneHeight(id, next);
+  }, []);
 
   // Last live tick stored here (not in Zustand candles) so the header price
   // updates without triggering a full candles→setData() re-render cycle.
@@ -827,8 +835,12 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
     // Height of the chip + caret stack, used both to keep it inside the pane
     // and as the flip threshold.
-    const STACK_H    = 26;
-    const paneHeight = chart.options().height;
+    const STACK_H = 26;
+    // paneSize().height is the PLOT area. chart.options().height includes the
+    // time-axis band, and priceToCoordinate returns plot-relative pixels — so
+    // measuring against the chart height put the low chip's flip threshold in a
+    // strip no bar can reach, and it drew over the axis labels instead.
+    const paneHeight = chart.paneSize().height;
 
     const place = (timeMs: number, price: number, prefer: 'above' | 'below'): ExtremePoint | null => {
       const x = chart.timeScale().timeToCoordinate(Math.floor(timeMs / 1000) as LWCTimestamp);
@@ -862,6 +874,25 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(recomputeExtremes);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles.length]);
+
+  // Recompute on pane resize too. A height-only change — dragging a sub-pane
+  // resizer, toggling a side rail, resizing the window — rescales the price axis
+  // without altering the visible logical range, so the subscription above never
+  // fires and the chips would hold pre-resize coordinates until the next tick
+  // (indefinitely on a quiet symbol or a closed 1d/1w bar).
+  useEffect(() => {
+    const el = pricePaneRef.current;
+    if (!el) return;
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      // Defer a frame so PriceChart's own ResizeObserver has pushed the new
+      // width/height into the chart before we read coordinates back out of it.
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(recomputeExtremes);
+    });
+    ro.observe(el);
+    return () => { cancelAnimationFrame(frame); ro.disconnect(); };
+  }, [recomputeExtremes]);
 
   // ── Header price ──────────────────────────────────────────────────────────
   const lastCandle   = candles[candles.length - 1];
@@ -899,7 +930,20 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
         )}
 
         <div className="ml-auto flex items-center gap-3">
-          {/* Signals strip toggle */}
+          {/* Live Signals strip toggle */}
+          <button
+            type="button"
+            onClick={() => setMarkerSettings({ recentSignalsVisible: !savedMarkerSettings.recentSignalsVisible })}
+            className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors
+                        ${savedMarkerSettings.recentSignalsVisible
+                          ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10'
+                          : 'border-surface-border text-text-muted hover:text-text-primary hover:border-emerald-500/30'}`}
+            title="Toggle live recent signals feed"
+          >
+            Signals {savedMarkerSettings.recentSignalsVisible ? '▾' : '▸'}
+          </button>
+
+          {/* Strategy rules strip toggle */}
           {chartStrategies.length > 0 && (
             <button
               type="button"
@@ -908,9 +952,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                           ${savedMarkerSettings.stripVisible
                             ? 'border-accent/40 text-accent bg-accent/5 hover:bg-accent/10'
                             : 'border-surface-border text-text-muted hover:text-text-primary hover:border-accent/30'}`}
-              title="Toggle signal strip"
+              title="Toggle strategy rules strip"
             >
-              Signals {chartStrategies.length} {savedMarkerSettings.stripVisible ? '▾' : '▸'}
+              Rules {chartStrategies.length} {savedMarkerSettings.stripVisible ? '▾' : '▸'}
             </button>
           )}
 
@@ -1145,16 +1189,14 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           {/* Scroll back to the most recent candle — all panes together */}
           <button
             onClick={() => {
-              const total = candles.length;
-              if (total === 0) return;
-              // setVisibleLogicalRange fires subscribeVisibleLogicalRangeChange
-              // synchronously, so the bidirectional sync propagates to all panes.
-              // Same right-hand gap the chart resets to on load, so "Now" and a
-              // reload frame the latest candle identically.
-              priceRef.current?.getChart()?.timeScale().setVisibleLogicalRange({
-                from: (total - 81) as Logical,
-                to:   (total + gapBarsFor(80)) as Logical,
-              });
+              if (candles.length === 0) return;
+              // scrollToRealTime, not setVisibleLogicalRange: forcing a fixed
+              // logical span made LWC recompute barSpacing to fit it, and the
+              // debounced captureBarSpacing then persisted that over whatever
+              // zoom the user had chosen. Scrolling keeps their bar spacing and
+              // lands on the chart's own rightOffset gap. It fires the range
+              // subscription synchronously, so the pane sync still propagates.
+              priceRef.current?.scrollToNow();
             }}
             title="Go to current time"
             className="px-2 py-1 rounded bg-surface-2 border border-surface-border
@@ -1165,6 +1207,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           </button>
         </div>
       </div>
+
+      {/* ── Recent Signals Strip ────────────────────────────────────────── */}
+      <RecentSignalsStrip />
 
       {/* ── Signal strip ─────────────────────────────────────────────────── */}
       {savedMarkerSettings.stripVisible && chartStrategies.length > 0 && (
@@ -1387,7 +1432,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
         )}
 
         {/* Price chart */}
-        <div className="flex-1 min-h-0 relative">
+        <div ref={pricePaneRef} className="flex-1 min-h-0 relative">
           {isLoading && (
             <div className="absolute inset-0 z-20 bg-surface/50 flex items-center
                             justify-center pointer-events-none">

@@ -11,9 +11,10 @@ export interface MarkerVisibility {
 }
 
 export interface MarkerSettings {
-  visibility:   MarkerVisibility;
-  showLabels:   boolean;  // strategy name text on arrows/circles
-  stripVisible: boolean;  // signal strip below the chart header
+  visibility:           MarkerVisibility;
+  showLabels:           boolean;  // strategy name text on arrows/circles
+  stripVisible:         boolean;  // strategy rules strip below the chart header
+  recentSignalsVisible: boolean;  // recent fired signals strip
 }
 
 const DEFAULT_MARKER_SETTINGS: MarkerSettings = {
@@ -24,9 +25,26 @@ const DEFAULT_MARKER_SETTINGS: MarkerSettings = {
     patterns:     true,
     dropLines:    true,
   },
-  showLabels:   true,
-  stripVisible: true,
+  showLabels:           true,
+  stripVisible:         true,
+  recentSignalsVisible: true,
 };
+
+/**
+ * Fill in MarkerSettings keys a payload predates.
+ *
+ * Every field on MarkerSettings is required, so state written before a key
+ * existed — a browser's persisted store, or a chart layout saved under an older
+ * build — would otherwise restore it as `undefined`, which reads as "off" at
+ * every call site while TypeScript still believes it is a boolean.
+ */
+export function withMarkerDefaults(m?: Partial<MarkerSettings>): MarkerSettings {
+  return {
+    ...DEFAULT_MARKER_SETTINGS,
+    ...m,
+    visibility: { ...DEFAULT_MARKER_SETTINGS.visibility, ...m?.visibility },
+  };
+}
 
 export interface ActiveIndicator {
   /** Matches a key in INDICATORS registry, e.g. "ema", "rsi", "macd". */
@@ -102,16 +120,14 @@ interface ChartState {
   updateLastCandle: (candle: Candle) => boolean;
 
   addIndicator:          (indicator: ActiveIndicator) => void;
-  setActiveIndicators:   (indicators: ActiveIndicator[]) => void;
   removeIndicator:       (id: string) => void;
   toggleIndicator:       (id: string) => void;
   updateIndicatorParams: (id: string, params: Record<string, number>) => void;
 
   setBarSpacing:     (barSpacing: number) => void;
   setSubPaneHeight:  (id: string, height: number) => void;
-  setSubPaneHeights: (heights: Record<string, number>) => void;
   /** Merge a partial update into markerSettings. */
-  setMarkerSettings: (patch: { visibility?: Partial<MarkerVisibility>; showLabels?: boolean; stripVisible?: boolean }) => void;
+  setMarkerSettings: (patch: { visibility?: Partial<MarkerVisibility>; showLabels?: boolean; stripVisible?: boolean; recentSignalsVisible?: boolean }) => void;
   /** Merge a partial update into vpConfig. */
   setVpConfig: (patch: Partial<VolumeProfileConfig>) => void;
 
@@ -217,9 +233,6 @@ export const useChartStore = create<ChartState>()(
           ],
         })),
 
-      setActiveIndicators: (indicators) =>
-        set({ activeIndicators: indicators }),
-
       removeIndicator: (id) =>
         set((s) => ({ activeIndicators: s.activeIndicators.filter((i) => i.id !== id) })),
 
@@ -241,9 +254,6 @@ export const useChartStore = create<ChartState>()(
 
       setSubPaneHeight: (id, height) =>
         set((s) => ({ subPaneHeights: { ...s.subPaneHeights, [id]: height } })),
-
-      setSubPaneHeights: (heights) =>
-        set({ subPaneHeights: heights }),
 
       setMarkerSettings: (patch) =>
         set((s) => ({
@@ -276,7 +286,9 @@ export const useChartStore = create<ChartState>()(
             timeframe,
             ...(snapshot.activeIndicators !== undefined ? { activeIndicators: snapshot.activeIndicators } : {}),
             ...(snapshot.vpConfig ? { vpConfig: snapshot.vpConfig } : {}),
-            ...(snapshot.markerSettings ? { markerSettings: snapshot.markerSettings } : {}),
+            // Backfilled, not assigned raw: a layout saved before a marker key
+            // existed would otherwise write undefined over a live setting.
+            ...(snapshot.markerSettings ? { markerSettings: withMarkerDefaults(snapshot.markerSettings) } : {}),
             ...(snapshot.subPaneHeights !== undefined ? { subPaneHeights: snapshot.subPaneHeights } : {}),
             ...(snapshot.barSpacing !== undefined ? { barSpacing: snapshot.barSpacing } : {}),
             ...(contextChanged
@@ -287,6 +299,16 @@ export const useChartStore = create<ChartState>()(
     }),
     {
       name: 'rmc-chart',
+      /**
+       * Rehydrate through withMarkerDefaults so a browser whose stored
+       * markerSettings predates a key (e.g. recentSignalsVisible) does not
+       * restore it as undefined — zustand's default merge is a shallow
+       * top-level merge, so the whole object is replaced, gaps and all.
+       */
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<ChartState>;
+        return { ...current, ...p, markerSettings: withMarkerDefaults(p.markerSettings) };
+      },
       // Persist only user preferences — never the raw candle data (too large)
       // or ephemeral connection state.
       partialize: (s) => ({

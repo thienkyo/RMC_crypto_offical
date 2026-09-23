@@ -123,11 +123,8 @@ const INITIAL_BARS = 100;
  */
 const RIGHT_GAP_RATIO = 0.2;
 
-/**
- * Gap in bars that leaves RIGHT_GAP_RATIO of a `windowBars`-wide view empty.
- * Exported so the "Now" button in ChartLayout lands on the same gap a reload does.
- */
-export function gapBarsFor(windowBars: number): number {
+/** Gap in bars that leaves RIGHT_GAP_RATIO of a `windowBars`-wide view empty. */
+function gapBarsFor(windowBars: number): number {
   return Math.round(windowBars * RIGHT_GAP_RATIO / (1 - RIGHT_GAP_RATIO));
 }
 
@@ -297,6 +294,18 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
             width:  containerRef.current.clientWidth,
             height: containerRef.current.clientHeight,
           });
+          // rightOffset is a BAR count derived from the pixel width, so a pane
+          // that changes size (rail toggle, window resize) would otherwise keep
+          // the count computed for the old width and the gap would drift well
+          // off RIGHT_GAP_RATIO — 20% becomes ~34% when the pane halves.
+          //
+          // Only while parked at the live edge, though: applyOptions({ rightOffset })
+          // scrolls the chart, so re-deriving it unconditionally would yank a user
+          // who is browsing history back to the present every time they resized.
+          // scrollPosition() equals rightOffset exactly when scrolled to real time.
+          const ts = chart.timeScale();
+          const atLiveEdge = Math.abs(ts.scrollPosition() - (ts.options().rightOffset ?? 0)) < 1;
+          if (atLiveEdge) ts.applyOptions({ rightOffset: rightOffsetBars(chart) });
         }
       });
       ro.observe(containerRef.current);

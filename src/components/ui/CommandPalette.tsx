@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useSymbols } from '@/hooks/useSymbols';
 import { useChartStore } from '@/store/chart';
 import { useChartLayoutStore } from '@/store/chartLayouts';
 import { useWatchlistStore } from '@/store/watchlist';
@@ -11,11 +11,6 @@ import { useLayoutStore } from '@/store/layout';
 import { INDICATORS } from '@/lib/indicators';
 import { TIMEFRAMES, type Timeframe, type MarketSymbol } from '@/types/market';
 import { clsx } from 'clsx';
-
-interface SymbolsResponse {
-  crypto: MarketSymbol[];
-  equities: MarketSymbol[];
-}
 
 interface PaletteItem {
   id: string;
@@ -46,7 +41,6 @@ export function CommandPalette() {
   const setSymbol = useChartStore((s) => s.setSymbol);
   const setTimeframe = useChartStore((s) => s.setTimeframe);
   const addIndicator = useChartStore((s) => s.addIndicator);
-  const removeIndicator = useChartStore((s) => s.removeIndicator);
   const toggleIndicator = useChartStore((s) => s.toggleIndicator);
   const setVpConfig = useChartStore((s) => s.setVpConfig);
 
@@ -62,15 +56,11 @@ export function CommandPalette() {
   const toggleRight = useLayoutStore((s) => s.toggleRight);
 
   // Fetch symbols from API
-  // No staleTime here: Watchlist registers the same ['symbols'] key with a
-  // 1-hour staleTime, and TanStack evaluates staleness per observer — a 60s
-  // value on this always-mounted observer would mark the shared entry stale
-  // every minute and refetch /api/symbols behind the route's own 1-hour revalidate.
-  const { data: symbolsData } = useQuery<SymbolsResponse>({
-    queryKey: ['symbols'],
-    queryFn: () => fetch('/api/symbols').then((r) => r.json()),
-    staleTime: 3_600_000,
-  });
+  // `enabled: open` — this component is mounted on every route, so without it a
+  // page that never opens the palette still fires /api/symbols (a CoinGecko +
+  // Binance sync) purely to fill a hidden list. The cache config lives in the
+  // hook, shared with Watchlist, so neither can desync the other's refetching.
+  const { data: symbolsData, isError: symbolsError } = useSymbols(open);
 
   // Global keydown listener for Cmd+K / Ctrl+K and custom event
   useEffect(() => {
@@ -118,6 +108,12 @@ export function CommandPalette() {
 
   // Build searchable items
   const items: PaletteItem[] = useMemo(() => {
+    // Mounted on every route, so without this the list is rebuilt — deduping the
+    // symbol universe, filtering the whole INDICATORS registry and allocating a
+    // closure per row — on every chart-store change, for a component rendering
+    // nothing. The hook itself must still run unconditionally.
+    if (!open) return [];
+
     const q = query.trim().toLowerCase();
     const result: PaletteItem[] = [];
 
@@ -340,6 +336,7 @@ export function CommandPalette() {
     symbolsData,
     customSymbols,
     activeSymbol,
+    open,
     activeTimeframe,
     activeIndicators,
     vpConfig,
@@ -348,7 +345,6 @@ export function CommandPalette() {
     strategies,
     setTimeframe,
     addIndicator,
-    removeIndicator,
     toggleIndicator,
     setVpConfig,
     applyLayout,
@@ -448,6 +444,14 @@ export function CommandPalette() {
 
         {/* ── Scrollable Results ── */}
         <div ref={listRef} className="flex-1 overflow-y-auto p-2 space-y-3">
+          {symbolsError && (
+            <div className="px-3 py-2 mb-1 rounded border border-down/30 bg-down/10">
+              <span className="text-[11px] text-down">
+                Symbols failed to load — symbol results are unavailable.
+              </span>
+            </div>
+          )}
+
           {items.length === 0 ? (
             <div className="py-12 text-center text-xs text-text-muted">
               No matching symbols, timeframes, or commands found for &ldquo;{query}&rdquo;
@@ -537,29 +541,3 @@ export function CommandPalette() {
   );
 }
 
-/** Nav bar trigger button for opening the command palette */
-export function CommandPaletteTrigger() {
-  return (
-    <button
-      type="button"
-      onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
-      className="hidden sm:flex items-center gap-2 px-2 py-0.5 rounded bg-surface-2 border border-surface-border text-[11px] font-mono text-text-muted hover:text-text-primary hover:border-accent/40 transition-colors ml-3"
-      title="Open Command Palette (⌘K)"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        className="w-3 h-3 text-text-muted"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <circle cx="7" cy="7" r="5" />
-        <path d="M11 11l4 4" />
-      </svg>
-      <span>Jump / Search</span>
-      <kbd className="text-[9px] bg-surface-3 px-1 rounded border border-surface-border text-text-secondary">
-        ⌘K
-      </kbd>
-    </button>
-  );
-}

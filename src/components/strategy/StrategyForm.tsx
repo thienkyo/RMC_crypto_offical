@@ -18,6 +18,7 @@ import { useStrategyStore }     from '@/store/strategy';
 import { pushStrategyToDb }     from '@/lib/strategy/api';
 import { useBacktest }          from '@/hooks/useBacktest';
 import { TIMEFRAMES }           from '@/types/market';
+import { TF_TO_MS }             from '@/lib/exchange/binance';
 import type {
   Strategy,
   StrategyAction,
@@ -141,6 +142,12 @@ export function StrategyForm({ strategy: initial }: Props) {
                 TEMPLATE
               </span>
             )}
+            {draft.isMtf && (
+              <span className="text-[10px] font-mono font-semibold px-1.5 py-px rounded
+                               bg-cyan-500/15 text-cyan-400 tracking-wider">
+                MTF
+              </span>
+            )}
             <span className={`text-[10px] font-mono font-semibold px-1.5 py-px rounded ${
               draft.action.type === 'enter_long'
                 ? 'bg-emerald-500/15 text-emerald-400'
@@ -177,7 +184,24 @@ export function StrategyForm({ strategy: initial }: Props) {
               <span className="field-label">Timeframe</span>
               <select
                 value={draft.timeframe}
-                onChange={(e) => patch('timeframe', e.target.value as Strategy['timeframe'])}
+                onChange={(e) => {
+                  const newTf = e.target.value as Strategy['timeframe'];
+                  patch('timeframe', newTf);
+                  if (draft.isMtf) {
+                    const baseMs = TF_TO_MS[newTf];
+                    const cleanConditions = (groups: ConditionGroup[]) => groups.map((g) => ({
+                      ...g,
+                      conditions: g.conditions.map((c) => {
+                        if (c.timeframe && TF_TO_MS[c.timeframe] <= baseMs) {
+                          return { ...c, timeframe: undefined };
+                        }
+                        return c;
+                      })
+                    }));
+                    patch('entryConditions', cleanConditions(draft.entryConditions));
+                    patch('exitConditions', cleanConditions(draft.exitConditions));
+                  }
+                }}
                 className="select-sm"
               >
                 {TIMEFRAMES.map((tf) => (
@@ -247,6 +271,8 @@ export function StrategyForm({ strategy: initial }: Props) {
                 totalGroups={draft.entryConditions.length}
                 onChange={(updated) => updateEntryGroup(i, updated)}
                 onRemoveGroup={() => removeEntryGroup(i)}
+                isMultiTf={draft.isMtf === true}
+                baseTimeframe={draft.timeframe}
               />
             </div>
           ))}
@@ -299,6 +325,8 @@ export function StrategyForm({ strategy: initial }: Props) {
                 totalGroups={draft.exitConditions.length}
                 onChange={(updated) => updateExitGroup(i, updated)}
                 onRemoveGroup={() => removeExitGroup(i)}
+                isMultiTf={draft.isMtf === true}
+                baseTimeframe={draft.timeframe}
               />
             </div>
           ))}

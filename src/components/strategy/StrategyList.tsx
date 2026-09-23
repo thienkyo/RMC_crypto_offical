@@ -527,7 +527,7 @@ interface SectionHeaderProps {
   onAdd:       () => void;
   addTitle:    string;
   count:       number;
-  accent?:     'blue' | 'violet';
+  accent?:     'blue' | 'violet' | 'cyan';
 }
 
 function SectionHeader({ label, isCollapsed, onToggle, onAdd, addTitle, count, accent = 'blue' }: SectionHeaderProps) {
@@ -542,7 +542,8 @@ function SectionHeader({ label, isCollapsed, onToggle, onAdd, addTitle, count, a
           ▾
         </span>
         <span className={`text-[11px] font-semibold uppercase tracking-wider ${
-          accent === 'violet' ? 'text-violet-400' : 'text-blue-400'
+          accent === 'violet' ? 'text-violet-400' :
+          accent === 'cyan' ? 'text-cyan-400' : 'text-blue-400'
         }`}>
           {label}
         </span>
@@ -671,21 +672,14 @@ export function StrategyList() {
   const templates         = useMemo(() => strategies.filter((s) => s.isTemplate),   [strategies]);
   const longTemplates     = useMemo(() => templates.filter((t) => t.action.type === 'enter_long'),  [templates]);
   const shortTemplates    = useMemo(() => templates.filter((t) => t.action.type === 'enter_short'), [templates]);
-  const regularStrategies = useMemo(() => strategies.filter((s) => !s.isTemplate), [strategies]);
-
-  const groups = useMemo(() => {
-    const map = new Map<string, Strategy[]>();
-    for (const s of regularStrategies) {
-      if (!map.has(s.symbol)) map.set(s.symbol, []);
-      map.get(s.symbol)!.push(s);
-    }
-    return map;
-  }, [regularStrategies]);
+  
+  const regularStrategies = useMemo(() => strategies.filter((s) => !s.isTemplate && !s.isMtf), [strategies]);
+  const mtfStrategies     = useMemo(() => strategies.filter((s) => !s.isTemplate && s.isMtf), [strategies]);
 
   // All unique symbols — quick-picks for the group-level clone-all popover
   const allSymbols = useMemo(
-    () => Array.from(new Set(regularStrategies.map((s) => s.symbol))).sort(),
-    [regularStrategies],
+    () => Array.from(new Set([...regularStrategies, ...mtfStrategies].map((s) => s.symbol))).sort(),
+    [regularStrategies, mtfStrategies],
   );
 
   function handleNewStrategy() {
@@ -695,6 +689,17 @@ export function StrategyList() {
     pushStrategyToDb(s).catch((err) =>
       console.warn('[strategy-list:new] DB push failed:', err),
     );
+  }
+
+  function handleNewMtfStrategy() {
+    const s = import('@/store/strategy').then(({ createDefaultMtfStrategy }) => {
+      const mtf = createDefaultMtfStrategy();
+      upsertStrategy(mtf);
+      setActiveStrategy(mtf.id);
+      pushStrategyToDb(mtf).catch((err) =>
+        console.warn('[strategy-list:new-mtf] DB push failed:', err),
+      );
+    });
   }
 
   function handleNewTemplate() {
@@ -725,6 +730,8 @@ export function StrategyList() {
       showFeedback(false, `Delete failed: ${err instanceof Error ? err.message : 'DB error'}`);
     }
   }
+
+  const [mtfCollapsed, setMtfCollapsed] = useState(false);
 
   return (
     <aside className="w-52 flex-shrink-0 border-r border-surface-border flex flex-col bg-surface">
@@ -990,6 +997,40 @@ export function StrategyList() {
         </div>
       )}
 
+      {/* ── MTF Strategies section ──────────────────────────────────────────── */}
+      <SectionHeader
+        label="MTF Strategies"
+        isCollapsed={mtfCollapsed}
+        onToggle={() => setMtfCollapsed((v) => !v)}
+        onAdd={handleNewMtfStrategy}
+        addTitle="New MTF strategy"
+        count={mtfStrategies.length}
+        accent="cyan"
+      />
+      {!mtfCollapsed && (
+        <div className="flex-1 overflow-y-auto py-1 border-b border-surface-border">
+          <SymbolGroupList
+            strategies={mtfStrategies}
+            allStrategies={strategies}
+            expandedGroups={expandedGroups}
+            toggleGroup={toggleGroup}
+            clonePopoverSymbol={clonePopoverSymbol}
+            setClonePopoverSymbol={setClonePopoverSymbol}
+            activeId={activeId}
+            setActiveStrategy={setActiveStrategy}
+            handleToggle={handleToggle}
+            handleDelete={handleDelete}
+            duplicateStrategy={duplicateStrategy}
+            cloneStrategyToSymbol={cloneStrategyToSymbol}
+            mergeStrategy={mergeStrategy}
+            setGroupActive={setGroupActive}
+            copyGroupToSymbol={copyGroupToSymbol}
+            setStrategiesCollapsed={setMtfCollapsed}
+            allSymbols={allSymbols}
+          />
+        </div>
+      )}
+
       {/* ── Strategies section ──────────────────────────────────────────────── */}
       <SectionHeader
         label="Strategies"
@@ -1003,146 +1044,189 @@ export function StrategyList() {
 
       {!strategiesCollapsed && (
         <div className="flex-1 overflow-y-auto py-1">
-          {regularStrategies.length === 0 && (
-            <p className="px-3 py-4 text-xs text-text-muted italic">
-              No strategies yet.
-            </p>
-          )}
-
-          {Array.from(groups.entries()).map(([symbol, list]) => {
-            const isCollapsed   = !expandedGroups.has(symbol);
-            const activeLongs   = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_long').length;
-            const activeShorts  = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_short').length;
-            const anyActive     = activeLongs + activeShorts > 0;
-            const popoverOpen   = clonePopoverSymbol === symbol;
-
-            // Sort: longs first then shorts, alphabetically within each group
-            const sorted = [...list].sort((a, b) => {
-              const aLong = a.action.type === 'enter_long' ? 0 : 1;
-              const bLong = b.action.type === 'enter_long' ? 0 : 1;
-              if (aLong !== bLong) return aLong - bLong;
-              return a.name.localeCompare(b.name);
-            });
-
-            return (
-              <div key={symbol} className="relative">
-                {/* ── Symbol group header ──────────────────────────────── */}
-                <div className="group/group flex items-center gap-1.5 px-3 py-1.5
-                                text-text-muted hover:text-text-primary hover:bg-surface-2
-                                transition-colors select-none">
-                  {/* Collapse toggle (takes up all remaining space) */}
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(symbol)}
-                    className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
-                  >
-                    <span className={`text-[10px] transition-transform duration-150 flex-shrink-0 ${isCollapsed ? '-rotate-90' : ''}`}>
-                      ▾
-                    </span>
-                    <span className="text-[11px] font-mono font-semibold text-text-secondary truncate">
-                      {symbol}
-                    </span>
-                    {activeLongs > 0 && (
-                      <span className="text-[9px] font-bold text-emerald-400 flex-shrink-0 animate-pulse">▲</span>
-                    )}
-                    {activeShorts > 0 && (
-                      <span className="text-[9px] font-bold text-red-400 flex-shrink-0 animate-pulse">▼</span>
-                    )}
-                    <span className="text-[10px] font-mono text-text-muted flex-shrink-0">
-                      {list.length}
-                    </span>
-                  </button>
-
-                  {/* Toggle-all button — always visible when any active, hover otherwise */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const nextActive = !anyActive;
-                      const updated = list.map((s) => ({ ...s, isActive: nextActive }));
-                      setGroupActive(symbol);
-                      // Optimistic — fire-and-forget DB sync for each strategy
-                      pushManyStrategiesToDb(updated).catch((err) =>
-                        console.warn('[strategy-list:group-toggle] DB sync failed:', err),
-                      );
-                    }}
-                    title={anyActive ? 'Turn off all in group' : 'Turn on all in group'}
-                    className={`btn-icon-xs flex-shrink-0 transition-colors
-                      ${anyActive
-                        ? 'text-emerald-400 hover:text-red-400'
-                        : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-emerald-400'
-                      }`}
-                  >
-                    ⏻
-                  </button>
-
-                  {/* Clone-group button — visible on group hover */}
-                  <button
-                    type="button"
-                    onClick={() => setClonePopoverSymbol(popoverOpen ? null : symbol)}
-                    title={`Clone all ${list.length} ${list.length === 1 ? 'strategy' : 'strategies'} to another symbol`}
-                    className={`btn-icon-xs flex-shrink-0 transition-colors
-                      ${popoverOpen
-                        ? 'text-accent opacity-100'
-                        : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-accent'
-                      }`}
-                  >
-                    →
-                  </button>
-                </div>
-
-                {/* Clone-group popover */}
-                {popoverOpen && (
-                  <CloneGroupPopover
-                    fromSymbol={symbol}
-                    allSymbols={allSymbols}
-                    count={list.length}
-                    onClone={(target) => {
-                      const copies = copyGroupToSymbol(symbol, target);
-                      setStrategiesCollapsed(false);
-                      if (copies.length > 0) pushManyStrategiesToDb(copies).catch((err) =>
-                        console.warn('[strategy-list:copy-group] DB push failed:', err),
-                      );
-                    }}
-                    onClose={() => setClonePopoverSymbol(null)}
-                  />
-                )}
-
-                {/* Strategy rows */}
-                {!isCollapsed && sorted.map((s) => (
-                  <StrategyRow
-                    key={s.id}
-                    s={s}
-                    active={activeId === s.id}
-                    allStrategies={strategies}
-                    onSelect={() => setActiveStrategy(s.id)}
-                    onToggle={() => handleToggle(s)}
-                    onDuplicate={() => {
-                      const copy = duplicateStrategy(s.id);
-                      if (copy) pushStrategyToDb(copy).catch((err) =>
-                        console.warn('[strategy-list:duplicate] DB push failed:', err),
-                      );
-                    }}
-                    onDelete={() => handleDelete(s)}
-                    onCloneToSymbol={(target) => {
-                      const clone = cloneStrategyToSymbol(s.id, target);
-                      if (clone) pushStrategyToDb(clone).catch((err) =>
-                        console.warn('[strategy-list:clone-to-symbol] DB push failed:', err),
-                      );
-                    }}
-                    onMerge={(sourceIds) => {
-                      const merged = mergeStrategy(sourceIds, s.id);
-                      if (merged) pushStrategyToDb(merged).catch((err) =>
-                        console.warn('[strategy-list:merge] DB push failed:', err),
-                      );
-                    }}
-                  />
-                ))}
-              </div>
-            );
-          })}
+          <SymbolGroupList
+            strategies={regularStrategies}
+            allStrategies={strategies}
+            expandedGroups={expandedGroups}
+            toggleGroup={toggleGroup}
+            clonePopoverSymbol={clonePopoverSymbol}
+            setClonePopoverSymbol={setClonePopoverSymbol}
+            activeId={activeId}
+            setActiveStrategy={setActiveStrategy}
+            handleToggle={handleToggle}
+            handleDelete={handleDelete}
+            duplicateStrategy={duplicateStrategy}
+            cloneStrategyToSymbol={cloneStrategyToSymbol}
+            mergeStrategy={mergeStrategy}
+            setGroupActive={setGroupActive}
+            copyGroupToSymbol={copyGroupToSymbol}
+            setStrategiesCollapsed={setStrategiesCollapsed}
+            allSymbols={allSymbols}
+          />
         </div>
       )}
     </aside>
+  );
+}
+
+// ── Symbol group component ───────────────────────────────────────────────────
+
+interface SymbolGroupListProps {
+  strategies: Strategy[];
+  allStrategies: Strategy[];
+  expandedGroups: Set<string>;
+  toggleGroup: (symbol: string) => void;
+  clonePopoverSymbol: string | null;
+  setClonePopoverSymbol: (sym: string | null) => void;
+  activeId: string | null;
+  setActiveStrategy: (id: string) => void;
+  handleToggle: (s: Strategy) => void;
+  handleDelete: (s: Strategy) => void;
+  duplicateStrategy: (id: string) => Strategy | undefined;
+  cloneStrategyToSymbol: (id: string, target: string) => Strategy | undefined;
+  mergeStrategy: (sources: string[], dest: string) => Strategy | undefined;
+  setGroupActive: (symbol: string) => void;
+  copyGroupToSymbol: (symbol: string, target: string) => Strategy[];
+  setStrategiesCollapsed: (b: boolean) => void;
+  allSymbols: string[];
+}
+
+function SymbolGroupList({
+  strategies, allStrategies, expandedGroups, toggleGroup, clonePopoverSymbol, setClonePopoverSymbol,
+  activeId, setActiveStrategy, handleToggle, handleDelete, duplicateStrategy, cloneStrategyToSymbol, mergeStrategy,
+  setGroupActive, copyGroupToSymbol, setStrategiesCollapsed, allSymbols
+}: SymbolGroupListProps) {
+  const groups = useMemo(() => {
+    const map = new Map<string, Strategy[]>();
+    for (const s of strategies) {
+      if (!map.has(s.symbol)) map.set(s.symbol, []);
+      map.get(s.symbol)!.push(s);
+    }
+    return map;
+  }, [strategies]);
+
+  if (strategies.length === 0) {
+    return <p className="px-3 py-4 text-xs text-text-muted italic">No strategies yet.</p>;
+  }
+
+  return (
+    <>
+      {Array.from(groups.entries()).map(([symbol, list]) => {
+        const isCollapsed   = !expandedGroups.has(symbol);
+        const activeLongs   = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_long').length;
+        const activeShorts  = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_short').length;
+        const anyActive     = activeLongs + activeShorts > 0;
+        const popoverOpen   = clonePopoverSymbol === symbol;
+
+        const sorted = [...list].sort((a, b) => {
+          const aLong = a.action.type === 'enter_long' ? 0 : 1;
+          const bLong = b.action.type === 'enter_long' ? 0 : 1;
+          if (aLong !== bLong) return aLong - bLong;
+          return a.name.localeCompare(b.name);
+        });
+
+        return (
+          <div key={symbol} className="relative">
+            <div className="group/group flex items-center gap-1.5 px-3 py-1.5
+                            text-text-muted hover:text-text-primary hover:bg-surface-2
+                            transition-colors select-none">
+              <button
+                type="button"
+                onClick={() => toggleGroup(symbol)}
+                className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+              >
+                <span className={`text-[10px] transition-transform duration-150 flex-shrink-0 ${isCollapsed ? '-rotate-90' : ''}`}>
+                  ▾
+                </span>
+                <span className="text-[11px] font-mono font-semibold text-text-secondary truncate">
+                  {symbol}
+                </span>
+                {activeLongs > 0 && <span className="text-[9px] font-bold text-emerald-400 flex-shrink-0 animate-pulse">▲</span>}
+                {activeShorts > 0 && <span className="text-[9px] font-bold text-red-400 flex-shrink-0 animate-pulse">▼</span>}
+                <span className="text-[10px] font-mono text-text-muted flex-shrink-0">{list.length}</span>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const nextActive = !anyActive;
+                  const updated = list.map((s) => ({ ...s, isActive: nextActive }));
+                  setGroupActive(symbol);
+                  import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
+                    pushManyStrategiesToDb(updated).catch(err => console.warn('[group-toggle] sync failed:', err));
+                  });
+                }}
+                title={anyActive ? 'Turn off all in group' : 'Turn on all in group'}
+                className={`btn-icon-xs flex-shrink-0 transition-colors
+                  ${anyActive ? 'text-emerald-400 hover:text-red-400' : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-emerald-400'}`}
+              >
+                ⏻
+              </button>
+              <button
+                type="button"
+                onClick={() => setClonePopoverSymbol(popoverOpen ? null : symbol)}
+                title={`Clone all ${list.length} to another symbol`}
+                className={`btn-icon-xs flex-shrink-0 transition-colors
+                  ${popoverOpen ? 'text-accent opacity-100' : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-accent'}`}
+              >
+                →
+              </button>
+            </div>
+            {popoverOpen && (
+              <CloneGroupPopover
+                fromSymbol={symbol}
+                allSymbols={allSymbols}
+                count={list.length}
+                onClone={(target) => {
+                  const copies = copyGroupToSymbol(symbol, target);
+                  setStrategiesCollapsed(false);
+                  if (copies.length > 0) {
+                    import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
+                      pushManyStrategiesToDb(copies).catch(err => console.warn('[copy-group] sync failed:', err));
+                    });
+                  }
+                }}
+                onClose={() => setClonePopoverSymbol(null)}
+              />
+            )}
+            {!isCollapsed && sorted.map((s) => (
+              <StrategyRow
+                key={s.id}
+                s={s}
+                active={activeId === s.id}
+                allStrategies={allStrategies}
+                onSelect={() => setActiveStrategy(s.id)}
+                onToggle={() => handleToggle(s)}
+                onDuplicate={() => {
+                  const copy = duplicateStrategy(s.id);
+                  if (copy) {
+                    import('@/lib/strategy/api').then(({ pushStrategyToDb }) => {
+                      pushStrategyToDb(copy).catch(err => console.warn('[duplicate] sync failed:', err));
+                    });
+                  }
+                }}
+                onDelete={() => handleDelete(s)}
+                onCloneToSymbol={(target) => {
+                  const clone = cloneStrategyToSymbol(s.id, target);
+                  if (clone) {
+                    import('@/lib/strategy/api').then(({ pushStrategyToDb }) => {
+                      pushStrategyToDb(clone).catch(err => console.warn('[clone-to-symbol] sync failed:', err));
+                    });
+                  }
+                }}
+                onMerge={(sourceIds) => {
+                  const merged = mergeStrategy(sourceIds, s.id);
+                  if (merged) {
+                    import('@/lib/strategy/api').then(({ pushStrategyToDb }) => {
+                      pushStrategyToDb(merged).catch(err => console.warn('[merge] sync failed:', err));
+                    });
+                  }
+                }}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </>
   );
 }

@@ -40,6 +40,14 @@ export function createDefaultStrategy(): Strategy {
   };
 }
 
+export function createDefaultMtfStrategy(): Strategy {
+  return {
+    ...createDefaultStrategy(),
+    name: 'New MTF Strategy',
+    isMtf: true,
+  };
+}
+
 export function createDefaultTemplate(): Strategy {
   return {
     ...createDefaultStrategy(),

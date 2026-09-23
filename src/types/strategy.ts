@@ -50,6 +50,9 @@ export interface StrategyCondition {
    * re-enabled without re-entering everything. Defaults to true when absent.
    */
   enabled?: boolean;
+  /** MTF: evaluate this condition on a higher timeframe. Undefined → strategy.timeframe.
+      On each base bar, uses the last fully CLOSED candle of this timeframe. */
+  timeframe?: Timeframe;
 }
 
 /**
@@ -181,6 +184,8 @@ export interface Strategy {
    * Requires the strategy to also be saved (synced to DB via /api/strategies).
    */
   notifyOnSignal?: boolean;
+  /** Created via the MTF section's + button; drives left-rail grouping + per-condition TF UI. */
+  isMtf?: boolean;
 }
 
 // ── Backtest output types ─────────────────────────────────────────────────────

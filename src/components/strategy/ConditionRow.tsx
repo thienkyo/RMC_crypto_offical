@@ -68,13 +68,18 @@ function EnableToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () =>
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+import type { Timeframe } from '@/types/market';
+import { TF_TO_MS } from '@/lib/exchange/binance';
+
 interface Props {
   condition: StrategyCondition;
   onChange:  (updated: StrategyCondition) => void;
   onRemove:  () => void;
+  isMultiTf?: boolean;
+  baseTimeframe?: Timeframe;
 }
 
-export function ConditionRow({ condition, onChange, onRemove }: Props) {
+export function ConditionRow({ condition, onChange, onRemove, isMultiTf, baseTimeframe }: Props) {
   const allIds = Object.keys(INDICATORS);
   // Patterns are indicators with a bias field; plain indicators have no bias.
   const patternIds    = allIds.filter((id) => INDICATORS[id]?.bias !== undefined);
@@ -167,6 +172,35 @@ export function ConditionRow({ condition, onChange, onRemove }: Props) {
         enabled={isEnabled}
         onToggle={() => set('enabled', !isEnabled)}
       />
+
+      {/* ── MTF Timeframe Selector ─────────────────────────────────────── */}
+      {isMultiTf && baseTimeframe && (
+        <div className="flex items-center gap-1 bg-surface-2 border border-surface-border rounded pr-1">
+          <select
+            value={condition.timeframe ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              set('timeframe', val === '' ? undefined : (val as Timeframe));
+            }}
+            className="select-sm text-xs border-none bg-transparent py-0.5 focus:ring-0"
+          >
+            <option value="">Base ({baseTimeframe})</option>
+            {(Object.keys(TF_TO_MS) as Timeframe[])
+              .filter((tf) => TF_TO_MS[tf] > TF_TO_MS[baseTimeframe])
+              .map((tf) => (
+                <option key={tf} value={tf}>
+                  {tf}
+                </option>
+              ))}
+          </select>
+          {condition.timeframe && condition.timeframe !== baseTimeframe && (
+            <span className="text-[9px] font-mono font-medium px-1.5 py-px rounded bg-cyan-500/10 text-cyan-400">
+              HTF
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Indicator selector ─────────────────────────────────────────── */}
       <div className="relative flex items-center gap-1" ref={helpContainerRef}>
         <div className="relative" ref={dropdownRef}>

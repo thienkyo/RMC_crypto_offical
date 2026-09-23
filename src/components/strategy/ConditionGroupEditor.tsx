@@ -15,6 +15,7 @@
 import { useState } from 'react';
 import { ConditionRow } from './ConditionRow';
 import type { ConditionGroup, StrategyCondition } from '@/types/strategy';
+import type { Timeframe } from '@/types/market';
 import { INDICATORS } from '@/lib/indicators';
 
 function makeCondition(): StrategyCondition {
@@ -44,6 +45,7 @@ interface Props {
   onRemoveGroup: () => void;
   /** When true, renders a timeframe selector in the group header (Multi-TF mode). */
   isMultiTf?:    boolean;
+  baseTimeframe?: Timeframe;
 }
 
 export function ConditionGroupEditor({
@@ -53,6 +55,7 @@ export function ConditionGroupEditor({
   onChange,
   onRemoveGroup,
   isMultiTf = false,
+  baseTimeframe,
 }: Props) {
   const [collapsed, setCollapsed] = useState(groupIndex > 0);
   const groupOp  = group.operator ?? 'or';
@@ -195,6 +198,8 @@ export function ConditionGroupEditor({
                 condition={condition}
                 onChange={(updated) => updateCondition(i, updated)}
                 onRemove={() => removeCondition(i)}
+                isMultiTf={isMultiTf}
+                baseTimeframe={baseTimeframe}
               />
             </div>
           ))}

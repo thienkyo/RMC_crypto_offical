@@ -27,6 +27,7 @@ import { buildIndicatorCache,
          conditionCacheKey,
          evaluateConditionChecked,
          evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
+import { collectHtfTimeframes, buildMtfIndicatorCache, type HtfCandleSets } from '@/lib/strategy/mtf';
 import { formatStrategySignalMessage }  from '@/lib/alerts/telegram';
 import { signalScore }                 from '@/lib/strategy/rating';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
@@ -90,11 +91,23 @@ export async function evaluateStrategySignal(
     return { fired: false, strategy, reason: 'dedup_blocked', debug: baseDebug };
   }
 
-  // ── 4. Build indicator cache ───────────────────────────────────────────────
+  // ── 4. Fetch HTF candles & Build indicator cache ───────────────────────────
   let cache: Map<string, Map<number, number>>;
   try {
+    const htfTfs = collectHtfTimeframes(strategy);
+    const htfCandles: HtfCandleSets = {};
+    if (htfTfs.length > 0) {
+      const htfPromises = htfTfs.map((tf) => fetchLatestCandlesCached(strategy.symbol, tf, CANDLE_WINDOW));
+      const htfResults = await Promise.all(htfPromises);
+      htfTfs.forEach((tf, i) => {
+        htfCandles[tf] = htfResults[i]!;
+      });
+    }
+
     const allConditions = strategy.entryConditions.flatMap((g) => g.conditions);
-    cache = buildIndicatorCache(allConditions, closed);
+    cache = htfTfs.length > 0 
+      ? buildMtfIndicatorCache(strategy, closed, htfCandles)
+      : buildIndicatorCache(allConditions, closed);
   } catch (err) {
     console.error(`[strategy/notify] buildIndicatorCache failed for ${strategy.id}:`, err);
     return { fired: false, strategy, reason: 'error', debug: baseDebug };

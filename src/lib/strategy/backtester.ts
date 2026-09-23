@@ -32,6 +32,7 @@ import type {
 } from '@/types/strategy';
 import { isEquitySymbol } from '@/lib/exchange/equities';
 import { buildIndicatorCache, evaluateConditionGroupsChecked } from './evaluate';
+import { buildMtfIndicatorCache, hasHtfConditions, type HtfCandleSets } from './mtf';
 import { computeMetrics } from './metrics';
 import { computeEntryPriceLimit, isMarketFill } from './entryPrice';
 
@@ -54,6 +55,8 @@ export interface BacktestOptions {
   enableFunding?: boolean;
   /** Legacy fallback: sets maker and taker fee to feePct if provided. */
   feePct?: number;
+  /** Multi-timeframe: optional map of timeframe -> candles arrays for MTF conditions. */
+  htfCandles?: HtfCandleSets;
 }
 
 const EIGHT_HOURS_MS = 28_800_000;
@@ -95,7 +98,9 @@ export function runBacktest(
     ...strategy.entryConditions.flatMap((g) => g.conditions),
     ...strategy.exitConditions.flatMap((g) => g.conditions),
   ];
-  const cache = buildIndicatorCache(allConditions, candles);
+  const cache = hasHtfConditions(strategy)
+    ? buildMtfIndicatorCache(strategy, candles, options.htfCandles ?? {})
+    : buildIndicatorCache(allConditions, candles);
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const direction                             = strategy.action.type === 'enter_long' ? 'long' : 'short';

@@ -13,6 +13,7 @@ import { subscribeKline } from '@/lib/exchange/binance';
 import { INDICATORS }    from '@/lib/indicators';
 import type { IndicatorSeries, IndicatorPoint, IndicatorMarker } from '@/lib/indicators';
 import { useLiveStrategies } from '@/hooks/useLiveStrategy';
+import { useHtfCandles } from '@/hooks/useHtfCandles';
 import { computeSignalCandles } from '@/lib/strategy/signals';
 import { strategyScoreRange }  from '@/lib/strategy/rating';
 import { PriceChart, type PriceChartHandle } from './PriceChart';
@@ -565,6 +566,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const STRATEGY_COLORS = ['#3b82f6', '#f59e0b', '#a855f7', '#06b6d4', '#f97316', '#ec4899'] as const;
 
   const liveStrategies = useLiveStrategies();
+  const { htfCandlesBySymbol } = useHtfCandles(chartStrategies);
 
   // ── Marker visibility controls — init from persisted store ──────────────
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
@@ -650,9 +652,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       for (let idx = 0; idx < liveStrategies.length; idx++) {
         const { strategy, trades } = liveStrategies[idx]!;
         const label = (strategy.name.split(' ')[0] ?? 'S').slice(0, 4).toUpperCase();
+        const htfCandles = htfCandlesBySymbol.get(strategy.symbol) ?? {};
 
         // Raw condition-signal markers — amber squares
-        const rawSignals = computeSignalCandles(strategy, candles);
+        const rawSignals = computeSignalCandles(strategy, candles, htfCandles);
         for (const signal of rawSignals) {
           const isLong = signal.direction === 'long';
           raw.push({
@@ -690,7 +693,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       }
       return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveStrategies, candles.length, savedMarkerSettings.showLabels]);
+    }, [liveStrategies, candles.length, savedMarkerSettings.showLabels, htfCandlesBySymbol]);
 
   // ── Pattern markers on price chart ───────────────────────────────────────
   // Extract IndicatorMarker[] from any indicator series that carries them

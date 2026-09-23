@@ -50,9 +50,10 @@ function combineGroupResults(
 /** Maps openTime (Unix ms) → indicator value at that bar. */
 type TimeValueMap = Map<number, number>;
 
-/** Stable cache key for a (indicator, params, seriesIndex) triple. */
+/** Stable cache key for a (indicator, params, seriesIndex, timeframe) tuple. */
 export function conditionCacheKey(c: StrategyCondition): string {
-  return `${c.indicatorId}|${c.seriesIndex}|${JSON.stringify(c.params)}`;
+  const base = `${c.indicatorId}|${c.seriesIndex}|${JSON.stringify(c.params)}`;
+  return c.timeframe ? `${c.timeframe}|${base}` : base;  // old keys byte-identical
 }
 
 /**

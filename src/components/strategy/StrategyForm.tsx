@@ -381,11 +381,57 @@ export function StrategyForm({ strategy: initial }: Props) {
               </span>
             </label>
             {draft.notifyOnSignal && (
-              <p className="text-xs text-text-muted pl-12">
-                Save to sync this strategy to the server. The cron checks every minute
-                and fires when entry conditions are met. Configure{' '}
-                <span className="text-text-primary">Confirm / Lookback</span> per condition above.
-              </p>
+              <>
+                <p className="text-xs text-text-muted pl-12 mb-3">
+                  Save to sync this strategy to the server. The cron checks every minute
+                  and fires when entry conditions are met. Configure{' '}
+                  <span className="text-text-primary">Confirm / Lookback</span> per condition above.
+                </p>
+                <div className="pl-12 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer select-none">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={draft.telegramTopic?.enabled ?? false}
+                      onClick={() => {
+                        const current = draft.telegramTopic || { enabled: false, name: '' };
+                        patch('telegramTopic', { ...current, enabled: !current.enabled });
+                      }}
+                      className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${
+                        draft.telegramTopic?.enabled ? 'bg-emerald-500' : 'bg-surface-border'
+                      }`}
+                    >
+                      <span className={`block w-3.5 h-3.5 rounded-full bg-white shadow transition-transform mx-0.5 ${
+                        draft.telegramTopic?.enabled ? 'translate-x-4' : 'translate-x-0'
+                      }`} />
+                    </button>
+                    <span className="text-xs text-text-primary">
+                      Send to Telegram topic
+                    </span>
+                  </label>
+                  {draft.telegramTopic?.enabled && (
+                    <div className="flex flex-col gap-1.5 max-w-[240px]">
+                      <span className="text-xs text-text-muted">Topic name</span>
+                      <input
+                        type="text"
+                        placeholder={draft.symbol}
+                        value={draft.telegramTopic.name || ''}
+                        onChange={(e) => {
+                          const name = e.target.value.substring(0, 128);
+                          patch('telegramTopic', { ...draft.telegramTopic, enabled: true, name });
+                        }}
+                        onBlur={(e) => {
+                          const name = e.target.value.trim().substring(0, 128);
+                          if (name !== draft.telegramTopic?.name) {
+                            patch('telegramTopic', { ...draft.telegramTopic, enabled: true, name });
+                          }
+                        }}
+                        className="w-full bg-surface-elevated text-text-primary text-xs px-2 py-1.5 border border-surface-border rounded outline-none focus:border-indigo-500 transition-colors"
+                      />
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </section>
         )}

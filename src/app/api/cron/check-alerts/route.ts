@@ -107,7 +107,12 @@ async function runCheckAlerts(): Promise<Response> {
     firedCount++;
     console.log(`[cron:check-alerts] STRATEGY FIRED: ${evalResult.strategy.name} (${evalResult.strategy.symbol})`);
 
-    const telegramResult = await sendTelegramAlert(evalResult.message, evalResult.strategy.name);
+    const telegramResult = await sendTelegramAlert(
+      evalResult.message, 
+      evalResult.strategy.name, 
+      'signal', 
+      evalResult.strategy.telegramTopic
+    );
     const telegramStatus = telegramResult.ok
       ? `sent to ${telegramResult.delivered} chat(s)`
       : `failed: ${telegramResult.error}`;

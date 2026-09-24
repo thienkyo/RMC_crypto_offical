@@ -29,7 +29,7 @@ import { buildIndicatorCache,
          evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
 import { collectHtfTimeframes, buildMtfIndicatorCache, type HtfCandleSets } from '@/lib/strategy/mtf';
 import { formatStrategySignalMessage }  from '@/lib/alerts/telegram';
-import { signalScore }                 from '@/lib/strategy/rating';
+import { signalScore, shouldRunAiVerdict } from '@/lib/strategy/rating';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
 import { computeEntryPriceLimit }      from '@/lib/strategy/entryPrice';
 import type { Strategy, StrategyCondition } from '@/types/strategy';
@@ -183,35 +183,37 @@ export async function evaluateStrategySignal(
 
   // ── 8b. Optional AI Order Evaluation ───────────────────────────────────────
   let aiEvaluation: import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined;
-  try {
-    const { isAiSignalGatekeeperEnabled, getAiKey } = await import('@/lib/db/aiSettings');
-    const gatekeeperActive = await isAiSignalGatekeeperEnabled();
+  if (shouldRunAiVerdict(rating)) {
+    try {
+      const { isAiSignalGatekeeperEnabled, getAiKey } = await import('@/lib/db/aiSettings');
+      const gatekeeperActive = await isAiSignalGatekeeperEnabled();
 
-    if (gatekeeperActive) {
-      const [geminiKey, claudeKey, openaiKey] = await Promise.all([
-        getAiKey('gemini'),
-        getAiKey('claude'),
-        getAiKey('chatgpt'),
-      ]);
+      if (gatekeeperActive) {
+        const [geminiKey, claudeKey, openaiKey] = await Promise.all([
+          getAiKey('gemini'),
+          getAiKey('claude'),
+          getAiKey('chatgpt'),
+        ]);
 
-      if (geminiKey || claudeKey || openaiKey) {
-        const { evaluateOrder } = await import('@/lib/ai/evaluator/gateway');
-        aiEvaluation = await evaluateOrder(
-          {
-            symbol: strategy.symbol,
-            timeframe: strategy.timeframe,
-            direction,
-            entryPrice: entryPriceLimit ?? lastClosed.close,
-            stopLossPct: strategy.risk.stopLossPct,
-            takeProfitPct: strategy.risk.takeProfitPct,
-            candleTime: lastClosed.openTime,
-          },
-          closed,
-        );
+        if (geminiKey || claudeKey || openaiKey) {
+          const { evaluateOrder } = await import('@/lib/ai/evaluator/gateway');
+          aiEvaluation = await evaluateOrder(
+            {
+              symbol: strategy.symbol,
+              timeframe: strategy.timeframe,
+              direction,
+              entryPrice: entryPriceLimit ?? lastClosed.close,
+              stopLossPct: strategy.risk.stopLossPct,
+              takeProfitPct: strategy.risk.takeProfitPct,
+              candleTime: lastClosed.openTime,
+            },
+            closed,
+          );
+        }
       }
+    } catch (err) {
+      console.warn(`[strategy/notify] AI evaluation failed for ${strategy.id}:`, err);
     }
-  } catch (err) {
-    console.warn(`[strategy/notify] AI evaluation failed for ${strategy.id}:`, err);
   }
 
   // ── 9. Build Telegram message ──────────────────────────────────────────────

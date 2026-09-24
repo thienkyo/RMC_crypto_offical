@@ -91,6 +91,9 @@ export function StrategyForm({ strategy: initial }: Props) {
     setError(null);
     setSaving(true);
     const saved = { ...draft, version: draft.version + 1 };
+    if (saved.telegramTopic?.enabled && !saved.telegramTopic.name.trim()) {
+      saved.telegramTopic = { ...saved.telegramTopic, name: saved.symbol };
+    }
     try {
       await pushStrategyToDb(saved);
       upsertStrategy(saved);
@@ -110,6 +113,9 @@ export function StrategyForm({ strategy: initial }: Props) {
     setSaving(true);
     // DB-first save so results are associated with the persisted state
     const saved = { ...draft, version: draft.version + 1 };
+    if (saved.telegramTopic?.enabled && !saved.telegramTopic.name.trim()) {
+      saved.telegramTopic = { ...saved.telegramTopic, name: saved.symbol };
+    }
     try {
       await pushStrategyToDb(saved);
       upsertStrategy(saved);

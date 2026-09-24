@@ -19,7 +19,7 @@ import { isCronAuthorized, cronUnauthorized } from '@/lib/crawlers/cron-auth';
 import { getEnabledAlertRules, logAlertFired, markAlertDelivered } from '@/lib/db/alerts';
 import { evaluateAlertRule } from '@/lib/alerts/evaluate';
 import { getNotifiableStrategies, evaluateStrategySignal } from '@/lib/strategy/notify';
-import { sendTelegramAlert } from '@/lib/alerts/telegram';
+import { sendTelegramAlert, resolveStrategyTelegramTopic } from '@/lib/alerts/telegram';
 import { logStrategySignal } from '@/lib/db/signals';
 
 export const maxDuration = 60;
@@ -107,11 +107,12 @@ async function runCheckAlerts(): Promise<Response> {
     firedCount++;
     console.log(`[cron:check-alerts] STRATEGY FIRED: ${evalResult.strategy.name} (${evalResult.strategy.symbol})`);
 
+    const resolvedTopic = resolveStrategyTelegramTopic(evalResult.strategy.telegramTopic, evalResult.strategy.symbol);
     const telegramResult = await sendTelegramAlert(
       evalResult.message, 
       evalResult.strategy.name, 
       'signal', 
-      evalResult.strategy.telegramTopic
+      resolvedTopic
     );
     const telegramStatus = telegramResult.ok
       ? `sent to ${telegramResult.delivered} chat(s)`

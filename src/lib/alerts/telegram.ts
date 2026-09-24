@@ -133,7 +133,11 @@ export async function sendTelegramAlert(
             console.warn(`[telegram] Topic send failed for topic "${finalTopicName}" in chat ${chatId}: ${errMsg}. Falling back to main chat.`);
             if (errMsg.match(/thread not found|topic not found|topic deleted|message thread not found/i)) {
               console.warn(`[telegram] Thread not found, deleting stale DB row.`);
-              await db.query(`DELETE FROM telegram_topics WHERE chat_id = $1 AND lower(name) = lower($2)`, [chatId, finalTopicName]);
+              try {
+                await db.query(`DELETE FROM telegram_topics WHERE chat_id = $1 AND lower(name) = lower($2)`, [chatId, finalTopicName]);
+              } catch (delErr) {
+                console.warn(`[telegram] Failed to delete stale topic row: ${delErr}`);
+              }
             }
             
             delete body.message_thread_id;
@@ -174,16 +178,16 @@ export async function sendTelegramAlert(
 async function resolveTopicThreadId(chatId: string, topicName: string): Promise<number | undefined> {
   if (!topicName) return undefined;
   
-  const { rows } = await db.query<{ message_thread_id: string }>(
-    `SELECT message_thread_id FROM telegram_topics
-     WHERE chat_id = $1 AND lower(name) = lower($2)`,
-    [chatId, topicName]
-  );
-  if (rows.length > 0) {
-    return parseInt(rows[0]!.message_thread_id, 10);
-  }
-
   try {
+    const { rows } = await db.query<{ message_thread_id: string }>(
+      `SELECT message_thread_id FROM telegram_topics
+       WHERE chat_id = $1 AND lower(name) = lower($2)`,
+      [chatId, topicName]
+    );
+    if (rows.length > 0) {
+      return parseInt(rows[0]!.message_thread_id, 10);
+    }
+
     if (!process.env.TELEGRAM_BOT_TOKEN) return undefined;
     const res = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/createForumTopic`, {
       method: 'POST',
@@ -220,9 +224,22 @@ async function resolveTopicThreadId(chatId: string, topicName: string): Promise<
     
     return threadId;
   } catch (err) {
-    console.warn(`[telegram] Error creating topic "${topicName}": ${err}`);
+    console.warn(`[telegram] Error looking up/creating topic "${topicName}": ${err}`);
     return undefined;
   }
+}
+
+/**
+ * Resolves the strategy telegram topic. If enabled but name is empty, defaults to symbol.
+ */
+export function resolveStrategyTelegramTopic(
+  topic: { enabled: boolean; name: string } | undefined,
+  symbol: string
+): { enabled: boolean; name: string } | undefined {
+  if (!topic) return undefined;
+  if (!topic.enabled) return topic;
+  const trimmed = topic.name?.trim() || '';
+  return { enabled: true, name: trimmed || symbol };
 }
 
 // ─── Message formatters ───────────────────────────────────────────────────────

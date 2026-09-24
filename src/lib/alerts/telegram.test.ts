@@ -1,7 +1,7 @@
 process.env.TELEGRAM_BOT_TOKEN = 'fake-bot-token';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendTelegramAlert } from './telegram';
+import { sendTelegramAlert, resolveStrategyTelegramTopic } from './telegram';
 import { db } from '@/lib/db/client';
 
 // We need to mock db.query to handle settings and telegram_topics.
@@ -292,5 +292,50 @@ describe('Telegram Alerts with Topics', () => {
       expect.stringContaining('DELETE FROM telegram_topics'),
       expect.anything()
     );
+  });
+
+  it('topics SELECT throws -> logs warning, signal goes to main chat (no thread id)', async () => {
+    (db.query as any).mockImplementation((queryText: string) => {
+      const sql = queryText.toLowerCase();
+      if (sql.includes('select key, value from settings')) {
+        return Promise.resolve({ rows: [{ key: 'telegram_group_chat_id', value: '222' }] });
+      }
+      if (sql.includes('select message_thread_id from telegram_topics')) {
+        return Promise.reject(new Error('DB Connection Lost'));
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/sendMessage')) {
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return { ok: false };
+    });
+
+    const res = await sendTelegramAlert('test msg', 'strategy1', 'signal', { enabled: true, name: 'ERRUSDT' });
+    
+    expect(res.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    
+    const sendCall = fetchMock.mock.calls[0];
+    const sendBody = JSON.parse(sendCall[1].body);
+    expect(sendBody.message_thread_id).toBeUndefined(); // Fallback to main chat
+  });
+});
+
+describe('resolveStrategyTelegramTopic', () => {
+  it('uses symbol when enabled and name is empty/whitespace', () => {
+    expect(resolveStrategyTelegramTopic({ enabled: true, name: '' }, 'BTCUSDT')).toEqual({ enabled: true, name: 'BTCUSDT' });
+    expect(resolveStrategyTelegramTopic({ enabled: true, name: '   ' }, 'ETHUSDT')).toEqual({ enabled: true, name: 'ETHUSDT' });
+  });
+
+  it('keeps name when enabled and name is present', () => {
+    expect(resolveStrategyTelegramTopic({ enabled: true, name: 'CustomTopic' }, 'BTCUSDT')).toEqual({ enabled: true, name: 'CustomTopic' });
+  });
+
+  it('stays off if disabled or undefined', () => {
+    expect(resolveStrategyTelegramTopic(undefined, 'BTCUSDT')).toBeUndefined();
+    expect(resolveStrategyTelegramTopic({ enabled: false, name: '' }, 'BTCUSDT')).toEqual({ enabled: false, name: '' });
   });
 });

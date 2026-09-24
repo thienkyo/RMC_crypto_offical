@@ -407,3 +407,19 @@ ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS ai_evaluation JSONB;
 -- Support channel_type on custom_news_feeds
 ALTER TABLE custom_news_feeds ADD COLUMN IF NOT EXISTS channel_type VARCHAR(20) NOT NULL DEFAULT 'rss';
 
+
+-- ─── Telegram Topics ─────────────────────────────────────────────────────────
+-- Maps a requested topic name (e.g. "BTCUSDT") to an actual Telegram message_thread_id
+-- within a specific chat.
+CREATE TABLE IF NOT EXISTS telegram_topics (
+  chat_id            TEXT        NOT NULL,
+  name               TEXT        NOT NULL,
+  message_thread_id  BIGINT      NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (chat_id, name)
+);
+
+-- UNIQUE on (chat_id, lower(name)) is required by the plan for case-insensitive sharing.
+-- We use a separate unique index because PostgreSQL PRIMARY KEY cannot wrap columns in functions like lower().
+CREATE UNIQUE INDEX IF NOT EXISTS telegram_topics_chat_lower_name_idx 
+  ON telegram_topics (chat_id, lower(name));

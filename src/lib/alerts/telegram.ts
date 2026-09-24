@@ -18,7 +18,6 @@ import { db } from '@/lib/db/client';
 import { parseChatIds, isTestTarget } from '@/lib/telegram';
 export { strategyRating } from '@/lib/strategy/rating';
 
-const BOT_TOKEN    = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = 'https://api.telegram.org';
 
 export interface TelegramSendResult {
@@ -52,8 +51,9 @@ export async function sendTelegramAlert(
   text:       string,
   targetName: string,
   channel:    'signal' | 'alert' = 'signal',
+  topic?:     { enabled: boolean; name: string }
 ): Promise<TelegramSendResult> {
-  if (!BOT_TOKEN) {
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
     return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set in .env.local' };
   }
 
@@ -107,17 +107,57 @@ export async function sendTelegramAlert(
   await Promise.all(
     chatIds.map(async (chatId) => {
       try {
-        const res = await fetch(`${TELEGRAM_API}/bot${BOT_TOKEN}/sendMessage`, {
+        let threadId: number | undefined;
+        const finalTopicName = topic?.enabled ? topic.name.trim() : '';
+
+        if (finalTopicName) {
+          threadId = await resolveTopicThreadId(chatId, finalTopicName);
+        }
+
+        const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: 'HTML' };
+        if (threadId) {
+          body.message_thread_id = threadId;
+        }
+
+        let res = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+          body:    JSON.stringify(body),
         });
 
         if (!res.ok) {
-          const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
-          const errMsg  = (payload['description'] as string | undefined) ?? `HTTP ${res.status}`;
-          console.error(`[telegram] Failed to deliver to ${chatId}: ${errMsg}`);
-          firstError ??= `chat ${chatId}: ${errMsg}`;
+          let payload = await res.json().catch(() => ({})) as Record<string, unknown>;
+          let errMsg  = (payload['description'] as string | undefined) ?? `HTTP ${res.status}`;
+          
+          if (threadId) {
+            console.warn(`[telegram] Topic send failed for topic "${finalTopicName}" in chat ${chatId}: ${errMsg}. Falling back to main chat.`);
+            if (errMsg.match(/thread not found|topic not found|topic deleted|message thread not found/i)) {
+              console.warn(`[telegram] Thread not found, deleting stale DB row.`);
+              try {
+                await db.query(`DELETE FROM telegram_topics WHERE chat_id = $1 AND lower(name) = lower($2)`, [chatId, finalTopicName]);
+              } catch (delErr) {
+                console.warn(`[telegram] Failed to delete stale topic row: ${delErr}`);
+              }
+            }
+            
+            delete body.message_thread_id;
+            res = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify(body),
+            });
+            if (!res.ok) {
+              payload = await res.json().catch(() => ({})) as Record<string, unknown>;
+              errMsg  = (payload['description'] as string | undefined) ?? `HTTP ${res.status}`;
+            }
+          }
+          
+          if (!res.ok) {
+            console.error(`[telegram] Failed to deliver to ${chatId}: ${errMsg}`);
+            firstError ??= `chat ${chatId}: ${errMsg}`;
+          } else {
+            delivered++;
+          }
         } else {
           delivered++;
         }
@@ -132,6 +172,74 @@ export async function sendTelegramAlert(
   return delivered > 0
     ? { ok: true, delivered }
     : { ok: false, error: firstError ?? 'All deliveries failed', delivered: 0 };
+}
+
+
+async function resolveTopicThreadId(chatId: string, topicName: string): Promise<number | undefined> {
+  if (!topicName) return undefined;
+  
+  try {
+    const { rows } = await db.query<{ message_thread_id: string }>(
+      `SELECT message_thread_id FROM telegram_topics
+       WHERE chat_id = $1 AND lower(name) = lower($2)`,
+      [chatId, topicName]
+    );
+    if (rows.length > 0) {
+      return parseInt(rows[0]!.message_thread_id, 10);
+    }
+
+    if (!process.env.TELEGRAM_BOT_TOKEN) return undefined;
+    const res = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/createForumTopic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, name: topicName }),
+    });
+    
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
+      console.warn(`[telegram] Failed to create topic "${topicName}" in chat ${chatId}: ${payload['description']}`);
+      return undefined;
+    }
+    
+    const payload = await res.json() as { result: { message_thread_id: number } };
+    const threadId = payload.result.message_thread_id;
+    
+    const insertRes = await db.query(
+      `INSERT INTO telegram_topics (chat_id, name, message_thread_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (chat_id, (lower(name))) DO NOTHING`,
+       [chatId, topicName, threadId]
+    );
+    
+    if (insertRes.rowCount === 0) {
+      const { rows: winnerRows } = await db.query<{ message_thread_id: string }>(
+        `SELECT message_thread_id FROM telegram_topics
+         WHERE chat_id = $1 AND lower(name) = lower($2)`,
+        [chatId, topicName]
+      );
+      if (winnerRows.length > 0) {
+        return parseInt(winnerRows[0]!.message_thread_id, 10);
+      }
+    }
+    
+    return threadId;
+  } catch (err) {
+    console.warn(`[telegram] Error looking up/creating topic "${topicName}": ${err}`);
+    return undefined;
+  }
+}
+
+/**
+ * Resolves the strategy telegram topic. If enabled but name is empty, defaults to symbol.
+ */
+export function resolveStrategyTelegramTopic(
+  topic: { enabled: boolean; name: string } | undefined,
+  symbol: string
+): { enabled: boolean; name: string } | undefined {
+  if (!topic) return undefined;
+  if (!topic.enabled) return topic;
+  const trimmed = topic.name?.trim() || '';
+  return { enabled: true, name: trimmed || symbol };
 }
 
 // ─── Message formatters ───────────────────────────────────────────────────────
@@ -411,9 +519,9 @@ function fmtLocal(ms: number): string {
  * Used by the /api/alerts/test endpoint.
  */
 export async function verifyTelegramConfig(): Promise<{ ok: boolean; botName?: string; error?: string }> {
-  if (!BOT_TOKEN) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set' };
+  if (!process.env.TELEGRAM_BOT_TOKEN) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set' };
   try {
-    const res  = await fetch(`${TELEGRAM_API}/bot${BOT_TOKEN}/getMe`);
+    const res  = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/getMe`);
     const data = await res.json() as { ok: boolean; result?: { username: string } };
     if (!data.ok) return { ok: false, error: 'Invalid bot token' };
     return { ok: true, botName: data.result?.username };

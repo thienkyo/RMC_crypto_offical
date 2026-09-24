@@ -184,6 +184,10 @@ export interface Strategy {
    * Requires the strategy to also be saved (synced to DB via /api/strategies).
    */
   notifyOnSignal?: boolean;
+  /**
+   * Telegram topic configuration for grouping signals.
+   */
+  telegramTopic?: { enabled: boolean; name: string };
   /** Created via the MTF section's + button; drives left-rail grouping + per-condition TF UI. */
   isMtf?: boolean;
 }

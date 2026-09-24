@@ -190,3 +190,11 @@ export function ratingToGrade(score: number | null | undefined): SignalGrade {
     badgeClass: 'bg-surface-3 text-text-muted border-surface-border',
   };
 }
+
+// ─── AI Verdict Gating ──────────────────────────────────────────────────────
+
+export const AI_VERDICT_MIN_RATING = 4;
+
+export function shouldRunAiVerdict(rating: number): boolean {
+  return rating >= AI_VERDICT_MIN_RATING;
+}

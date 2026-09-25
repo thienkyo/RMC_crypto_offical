@@ -583,8 +583,30 @@ export function StrategyList() {
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
   const [strategiesCollapsed,      setStrategiesCollapsed]      = useState(false);
-  // Symbol groups are collapsed by default — track which ones are EXPANDED
+  // Symbol groups: auto-expand groups that have active strategies or the selected strategy
   const [expandedGroups,           setExpandedGroups]           = useState<Set<string>>(new Set());
+  const hasAutoExpanded = useRef(false);
+
+  useEffect(() => {
+    if (strategies.length > 0 && !hasAutoExpanded.current) {
+      hasAutoExpanded.current = true;
+      setExpandedGroups((prev) => {
+        if (prev.size > 0) return prev;
+        const initial = new Set<string>();
+        const active = strategies.find((s) => s.id === activeId);
+        if (active && !active.isTemplate) initial.add(active.symbol);
+        for (const s of strategies) {
+          if (s.isActive && !s.isTemplate) initial.add(s.symbol);
+        }
+        if (initial.size === 0) {
+          const first = strategies.find((s) => !s.isTemplate);
+          if (first) initial.add(first.symbol);
+        }
+        return initial;
+      });
+    }
+  }, [strategies, activeId]);
+
   // Template direction sub-groups start collapsed
   const [collapsedTplDir, setCollapsedTplDir] = useState<Set<'long' | 'short'>>(new Set(['long', 'short']));
   // Which symbol group's clone popover is open (null = none)

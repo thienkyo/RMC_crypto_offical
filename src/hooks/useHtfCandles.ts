@@ -1,5 +1,5 @@
 import { useQueries } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import type { Strategy } from '@/types/strategy';
 import type { Timeframe, Candle } from '@/types/market';
 import { collectHtfTimeframes, type HtfCandleSets } from '@/lib/strategy/mtf';
@@ -62,10 +62,21 @@ export function useHtfCandles(strategies: Strategy[]) {
 
   const isLoading = queryResults.some((q) => q.isLoading);
 
-  // Group fetched candles by symbol -> htfCandles
+  // Group fetched candles by symbol -> htfCandles.
+  //
+  // `useQueries` hands back a brand-new results array on every render, so this
+  // memo can never be skipped — it rebuilds the Map each time.  Returning that
+  // fresh Map is what caused "Maximum update depth exceeded": it flowed into
+  // useLiveStrategies' memo deps → new liveStrategies array → ChartLayout's
+  // recomputeSignalLines useCallback → its useEffect → setSignalLines → render
+  // → repeat, forever.  React Query keeps each query's `data` reference stable
+  // between refetches, so compare the built Map against the previous one and
+  // hand back the old reference whenever nothing actually changed.
+  const prevMapRef = useRef<Map<string, HtfCandleSets>>(new Map());
+
   const htfCandlesBySymbol = useMemo(() => {
     const map = new Map<string, HtfCandleSets>();
-    
+
     requiredPairs.forEach((pair, i) => {
       const data = queryResults[i]?.data;
       if (data) {
@@ -76,8 +87,38 @@ export function useHtfCandles(strategies: Strategy[]) {
       }
     });
 
+    const prev = prevMapRef.current;
+    if (sameHtfMap(prev, map)) return prev;
+    prevMapRef.current = map;
     return map;
   }, [requiredPairs, queryResults]);
 
   return { htfCandlesBySymbol, isLoading };
+}
+
+/**
+ * Shallow structural comparison of two symbol -> HtfCandleSets maps.  Candle
+ * arrays are compared by reference because React Query only swaps `data` when
+ * a fetch actually produced different content.
+ */
+function sameHtfMap(
+  a: Map<string, HtfCandleSets>,
+  b: Map<string, HtfCandleSets>,
+): boolean {
+  if (a.size !== b.size) return false;
+
+  for (const [symbol, aSets] of a) {
+    const bSets = b.get(symbol);
+    if (!bSets) return false;
+
+    const aTfs = Object.keys(aSets) as (keyof HtfCandleSets)[];
+    const bTfs = Object.keys(bSets) as (keyof HtfCandleSets)[];
+    if (aTfs.length !== bTfs.length) return false;
+
+    for (const tf of aTfs) {
+      if (aSets[tf] !== bSets[tf]) return false;
+    }
+  }
+
+  return true;
 }

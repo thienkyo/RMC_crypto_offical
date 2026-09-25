@@ -81,8 +81,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── 3. Call Gemini ──────────────────────────────────────────────────────────
   let analysis: ChartAnalysis;
+  let modelUsed: string;
   try {
-    analysis = await analyzeChartWithGemini(imageBase64, symbol, timeframe);
+    const result = await analyzeChartWithGemini(imageBase64, symbol, timeframe);
+    analysis = result.analysis;
+    modelUsed = result.model;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[chart-analysis] Gemini call failed:', message);
@@ -99,7 +102,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
          (symbol, timeframe, candle_close_time, analysis, model)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (symbol, timeframe, candle_close_time) DO NOTHING`,
-      [symbol, timeframe, candleCloseTs, JSON.stringify(analysis), GEMINI_MODEL_NAME],
+      [symbol, timeframe, candleCloseTs, JSON.stringify(analysis), modelUsed],
     );
   } catch (err) {
     // Cache write failure is non-fatal — return the analysis anyway.
@@ -110,7 +113,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const response: AnalyzeChartResponse = {
     analysis,
     fromCache: false,
-    model:     GEMINI_MODEL_NAME,
+    model:     modelUsed,
   };
   return NextResponse.json(response);
 }

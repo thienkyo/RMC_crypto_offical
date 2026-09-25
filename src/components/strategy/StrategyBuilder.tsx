@@ -51,6 +51,13 @@ export function StrategyBuilder() {
       }
       setDbOffline(false);
       setStrategies(remote);
+      if (!useStrategyStore.getState().activeStrategyId && remote.length > 0) {
+        const first =
+          remote.find((s) => !s.isTemplate && s.isActive) ??
+          remote.find((s) => !s.isTemplate) ??
+          remote[0];
+        if (first) setActiveStrategy(first.id);
+      }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

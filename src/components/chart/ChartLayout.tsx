@@ -143,6 +143,20 @@ function PaneResizer({ onDelta }: { onDelta: (delta: number) => void }) {
 
 // ─── Main layout ──────────────────────────────────────────────────────────────
 
+/** A vertical strategy-signal drop-line rendered over the price pane. */
+interface SignalLine { x: number; color: string; label: string; }
+
+/** Value equality for signal-line arrays, so identical recomputes don't re-render. */
+function sameSignalLines(a: SignalLine[], b: SignalLine[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!, y = b[i]!;
+    if (x.x !== y.x || x.color !== y.color || x.label !== y.label) return false;
+  }
+  return true;
+}
+
 interface ChartLayoutProps {
   /**
    * Called once after the chart mounts with a function that captures the
@@ -757,12 +771,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // render an absolutely-positioned vertical line + strategy label at the bottom
   // of the price pane.  Re-computes on scroll/zoom (range change) and whenever
   // liveStrategies changes (new bar close, strategy toggle).
-  interface SignalLine { x: number; color: string; label: string; }
   const [signalLines, setSignalLines] = useState<SignalLine[]>([]);
 
   const recomputeSignalLines = useCallback(() => {
     const chart = priceRef.current?.getChart();
-    if (!chart) { setSignalLines([]); return; }
+    if (!chart) { setSignalLines((prev) => (prev.length === 0 ? prev : [])); return; }
 
     const lines: SignalLine[] = [];
     for (let idx = 0; idx < liveStrategies.length; idx++) {
@@ -784,7 +797,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
         }
       }
     }
-    setSignalLines(lines);
+    // Bail out when nothing moved.  This callback re-creates whenever
+    // liveStrategies changes identity, which fires the effect below; without a
+    // value check every scroll tick (and any upstream reference churn) would
+    // push a fresh array into state and re-render forever.
+    setSignalLines((prev) => (sameSignalLines(prev, lines) ? prev : lines));
   // STRATEGY_COLORS is a module-level const; liveStrategies covers dynamic deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStrategies]);

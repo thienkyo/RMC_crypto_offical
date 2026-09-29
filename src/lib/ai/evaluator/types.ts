@@ -113,8 +113,44 @@ export interface TechnicalSnapshot {
     pocPrice?: number;
     status: string;
   };
+  marketRegime?: {
+    adx: number;
+    plusDI: number;
+    minusDI: number;
+    regime: string;
+  };
+  cvdDivergence?: {
+    status: string;
+  };
+  htfConfluence?: {
+    timeframe: string;
+    trendEma: string;
+    rsi14?: number;
+    summary: string;
+  };
   activePatterns: string[];
   recentCandlesSummary: string;
+}
+
+/**
+ * Returns the higher-timeframe parent for top-down multi-timeframe analysis.
+ * Returns null if the timeframe is already macro (e.g. 1d, 1w).
+ */
+export function getParentTimeframe(tf: string): string | null {
+  const map: Record<string, string> = {
+    '1m': '15m',
+    '3m': '15m',
+    '5m': '1h',
+    '15m': '4h',
+    '30m': '4h',
+    '1h': '4h',
+    '2h': '4h',
+    '4h': '1d',
+    '6h': '1d',
+    '8h': '1d',
+    '12h': '1d',
+  };
+  return map[tf] ?? null;
 }
 
 export interface SentimentSnapshot {

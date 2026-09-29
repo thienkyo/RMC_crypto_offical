@@ -23,6 +23,8 @@ import type { Candle } from '@/types/market';
 export async function evaluateOrder(
   request: OrderEvaluationRequest,
   candles: Candle[],
+  htfCandles?: Candle[],
+  htfTimeframe?: string,
 ): Promise<OrderEvaluationResult> {
   const provider: EvaluatorProvider = request.provider || 'gemini';
   const candleTimeIso = new Date(request.candleTime).toISOString();
@@ -64,6 +66,8 @@ export async function evaluateOrder(
     stopLossPct: request.stopLossPct,
     takeProfitPct: request.takeProfitPct,
     candles,
+    htfCandles,
+    htfTimeframe,
     customNotes: request.customNotes,
   });
 

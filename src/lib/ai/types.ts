@@ -46,6 +46,8 @@ export interface AnalyzeChartRequest {
   timeframe:      string;
   /** Unix ms of the last closed candle — used as the cache key. */
   lastCandleTime: number;
+  /** When true, bypasses the database cache and forces a fresh inspection. */
+  forceRefresh?:  boolean;
 }
 
 /** API route response (success path). */

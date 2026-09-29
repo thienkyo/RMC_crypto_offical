@@ -9,8 +9,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { evaluateOrder } from '@/lib/ai/evaluator/gateway';
-import type { OrderEvaluationRequest, EvaluatorProvider } from '@/lib/ai/evaluator/types';
+import { type OrderEvaluationRequest, type EvaluatorProvider, getParentTimeframe } from '@/lib/ai/evaluator/types';
 import { fetchLatestCandlesCached } from '@/lib/db/candles';
+import type { Candle } from '@/types/market';
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   let body: Partial<OrderEvaluationRequest>;
@@ -41,10 +42,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ? provider
     : 'gemini';
 
-  // Fetch recent candles for technical analysis
-  let candles = [];
+  const htfTimeframe = getParentTimeframe(timeframe);
+
+  // Fetch recent candles for technical analysis (current TF + HTF in parallel)
+  let candles: Candle[] = [];
+  let htfCandles: Candle[] | undefined = undefined;
   try {
-    candles = await fetchLatestCandlesCached(symbol, timeframe, 300);
+    const promises: [Promise<Candle[]>, Promise<Candle[]>?] = [
+      fetchLatestCandlesCached(symbol, timeframe, 300),
+    ];
+    if (htfTimeframe) {
+      promises.push(fetchLatestCandlesCached(symbol, htfTimeframe, 250));
+    }
+    const results = await Promise.all(promises);
+    candles = results[0] ?? [];
+    if (htfTimeframe && results[1] && results[1].length > 0) {
+      htfCandles = results[1];
+    }
   } catch (err) {
     console.error('[evaluate-order] Failed to fetch candles:', err);
     return NextResponse.json(
@@ -67,6 +81,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         customNotes,
       },
       candles,
+      htfCandles,
+      htfTimeframe ?? undefined,
     );
 
     return NextResponse.json({ success: true, evaluation });

@@ -57,32 +57,37 @@ async function fetchLatestCandlesUncached(
   limit: number,
 ): Promise<Candle[]> {
   // ── 1. DB fetch (history / warm-up window) ───────────────────────────────
-  const { rows } = await db.query<{
-    open_time: Date;
-    open: string;
-    high: string;
-    low: string;
-    close: string;
-    volume: string;
-    close_time: Date;
-  }>(
-    `SELECT open_time, open, high, low, close, volume, close_time
-     FROM candles
-     WHERE symbol = $1 AND timeframe = $2 AND source = $4
-     ORDER BY open_time DESC
-     LIMIT $3`,
-    [symbol, timeframe, limit, isEquitySymbol(symbol) ? 'equities' : 'binance'],
-  );
+  let dbCandles: Candle[] = [];
+  try {
+    const { rows } = await db.query<{
+      open_time: Date;
+      open: string;
+      high: string;
+      low: string;
+      close: string;
+      volume: string;
+      close_time: Date;
+    }>(
+      `SELECT open_time, open, high, low, close, volume, close_time
+       FROM candles
+       WHERE symbol = $1 AND timeframe = $2 AND source = $4
+       ORDER BY open_time DESC
+       LIMIT $3`,
+      [symbol, timeframe, limit, isEquitySymbol(symbol) ? 'equities' : 'binance'],
+    );
 
-  const dbCandles: Candle[] = rows.reverse().map((r) => ({
-    openTime: r.open_time.getTime(),
-    open: parseFloat(r.open),
-    high: parseFloat(r.high),
-    low: parseFloat(r.low),
-    close: parseFloat(r.close),
-    volume: parseFloat(r.volume),
-    closeTime: r.close_time.getTime(),
-  }));
+    dbCandles = rows.reverse().map((r) => ({
+      openTime: r.open_time.getTime(),
+      open: parseFloat(r.open),
+      high: parseFloat(r.high),
+      low: parseFloat(r.low),
+      close: parseFloat(r.close),
+      volume: parseFloat(r.volume),
+      closeTime: r.close_time.getTime(),
+    }));
+  } catch (dbErr) {
+    console.warn(`[candles/cache] DB fetch failed for ${symbol}/${timeframe}, proceeding with fresh exchange fetch:`, dbErr);
+  }
 
   // ── 2. Fresh tail fetch (equities vs crypto) ────────────────────────────
   try {

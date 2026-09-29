@@ -208,9 +208,12 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       captureScreenshot: () => {
         const chart = chartRef.current;
         if (!chart) return null;
+        // Don't capture if candles haven't loaded or rendered yet
+        if (!lastCandlesRef.current || lastCandlesRef.current.length === 0) return null;
         // takeScreenshot() returns the chart canvas element.
         // toDataURL gives a data-URL; we strip the prefix to get raw base64.
         const canvas = chart.takeScreenshot();
+        if (!canvas || canvas.width <= 10 || canvas.height <= 10) return null;
         const dataUrl = canvas.toDataURL('image/png');
         return dataUrl.split(',')[1] ?? null;
       },

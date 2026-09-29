@@ -359,7 +359,13 @@ export async function GET(req: NextRequest) {
 
       return NextResponse.json({ symbol, interval: tf, data, source: 'binance' });
     } catch (err) {
-      console.error('[api/candles] Unhandled error:', err);
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      console.error('[api/candles] DB query failed, falling back to direct exchange fetch:', err);
+      try {
+        const data = await fetchKlines(symbol, tf, limit);
+        return NextResponse.json({ symbol, interval: tf, data, source: 'binance' });
+      } catch (fallbackErr) {
+        console.error('[api/candles] Direct Binance fallback also failed:', fallbackErr);
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      }
     }
   }

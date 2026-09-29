@@ -131,4 +131,59 @@ describe('AI Order Decision Evaluator', () => {
     expect(maxTokensToCost(1000)).toBe(0.01);
     expect(maxTokensToCost(2000)).toBe(0.02);
   });
+
+  it('correctly maps higher timeframes for top-down analysis', async () => {
+    const { getParentTimeframe } = await import('./types');
+    expect(getParentTimeframe('1m')).toBe('15m');
+    expect(getParentTimeframe('5m')).toBe('1h');
+    expect(getParentTimeframe('15m')).toBe('4h');
+    expect(getParentTimeframe('1h')).toBe('4h');
+    expect(getParentTimeframe('4h')).toBe('1d');
+    expect(getParentTimeframe('1d')).toBeNull();
+  });
+
+  it('injects ADX regime, CVD divergence, and HTF confluence into the prompt', () => {
+    const payload: EvaluationPromptPayload = {
+      symbol: 'ETHUSDT',
+      timeframe: '15m',
+      direction: 'long',
+      entryPrice: 3200,
+      stopLossPrice: 3100,
+      takeProfitPrice: 3400,
+      technical: {
+        currentPrice: 3200,
+        trendEma: 'Price > EMA20 > EMA50',
+        rsi14: 55,
+        marketRegime: {
+          adx: 29.4,
+          plusDI: 32.1,
+          minusDI: 15.6,
+          regime: 'Strong Bullish Trend (ADX: 29.4, +DI > -DI)',
+        },
+        cvdDivergence: {
+          status: 'Bullish Absorption (Price lower low while CVD higher low — buyers absorbing)',
+        },
+        htfConfluence: {
+          timeframe: '4h',
+          trendEma: 'Price > EMA20 > EMA50 > EMA200',
+          rsi14: 62.4,
+          summary: 'Macro Bullish Trend (favorable for continuation longs)',
+        },
+        activePatterns: ['Bullish FVG'],
+        recentCandlesSummary: 'Bar -0: GREEN',
+      },
+      sentiment: {
+        averageScore: 0.2,
+        overallLabel: 'bullish',
+        totalArticlesSampled: 4,
+        recentHeadlines: [],
+      },
+    };
+
+    const prompt = buildEvaluationUserPrompt(payload);
+    expect(prompt).toContain('HIGHER TIMEFRAME (HTF) CONFLUENCE [4H]');
+    expect(prompt).toContain('Macro Bullish Trend');
+    expect(prompt).toContain('Market Regime (ADX): Strong Bullish Trend (ADX: 29.4, +DI > -DI)');
+    expect(prompt).toContain('Order Flow (CVD Divergence): Bullish Absorption');
+  });
 });

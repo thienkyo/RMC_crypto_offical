@@ -19,9 +19,10 @@ You MUST choose exactly ONE of these three verdicts:
 
 STRICT GUIDELINES:
 1. Be objective, conservative, and realistic. Most setups in financial markets contain nuances — only assign "PASS" when confluence is truly high.
-2. Explanations must be concise, punchy, and fact-based. Mention specific indicators (e.g. RSI value, EMA position, pattern) and specific news/social context.
-3. NEVER return generic financial disclaimers like "trading involves risk".
-4. You MUST return ONLY valid JSON matching this schema:
+2. Explanations must be concise, punchy, and fact-based. Mention specific indicators (e.g. RSI value, EMA position, pattern, ADX regime, CVD divergence, HTF trend) and specific news/social context.
+3. Check Higher Timeframe (HTF) confluence: penalize counter-trend setups fighting the macro trend. Check Market Regime (ADX): penalize breakout attempts in ranging chop (ADX < 20).
+4. NEVER return generic financial disclaimers like "trading involves risk".
+5. You MUST return ONLY valid JSON matching this schema:
 {
   "status": "PASS" | "CAVEAT" | "REJECT",
   "confidence": "high" | "medium" | "low",
@@ -35,7 +36,8 @@ STRICT GUIDELINES:
     "technicalScore": <integer 0 to 100>,
     "sentimentScore": <integer -100 to +100>
   }
-}`;
+}
+`;
 
 export function buildEvaluationUserPrompt(payload: EvaluationPromptPayload): string {
   const { symbol, timeframe, direction, entryPrice, stopLossPrice, takeProfitPrice, technical, sentiment, customNotes } = payload;
@@ -54,6 +56,15 @@ export function buildEvaluationUserPrompt(payload: EvaluationPromptPayload): str
     ? technical.activePatterns.join(', ')
     : 'None detected';
 
+  const htfSection = technical.htfConfluence
+    ? `
+### HIGHER TIMEFRAME (HTF) CONFLUENCE [${technical.htfConfluence.timeframe.toUpperCase()}]
+- Macro Trend & EMAs: ${technical.htfConfluence.trendEma}
+- Macro RSI(14): ${technical.htfConfluence.rsi14 !== undefined ? technical.htfConfluence.rsi14 : 'N/A'}
+- Higher Timeframe Bias: ${technical.htfConfluence.summary}
+`
+    : '';
+
   return `### PROPOSED ORDER SETUP
 - Asset / Symbol: ${symbol}
 - Chart Timeframe: ${timeframe}
@@ -62,13 +73,15 @@ export function buildEvaluationUserPrompt(payload: EvaluationPromptPayload): str
 - Stop Loss: ${slText}
 - Take Profit: ${tpText}
 ${customNotes ? `- User Notes: "${customNotes}"` : ''}
-
-### TECHNICAL CONTEXT & PRICE ACTION
+${htfSection}
+### TECHNICAL CONTEXT & PRICE ACTION (${timeframe.toUpperCase()})
 - Current Price: $${technical.currentPrice.toLocaleString('en-US')} (${technical.priceChange24hPct ? `${technical.priceChange24hPct > 0 ? '+' : ''}${technical.priceChange24hPct.toFixed(2)}% (24h)` : 'N/A'})
+- Market Regime (ADX): ${technical.marketRegime?.regime ?? 'N/A'}
 - Trend & EMAs: ${technical.trendEma}
 - RSI(14): ${technical.rsi14 !== undefined ? technical.rsi14.toFixed(1) : 'N/A'}${technical.rsiDivergence ? ` (${technical.rsiDivergence})` : ''}
 - MACD: ${technical.macd ? `Hist: ${technical.macd.histogram.toFixed(4)}, Line: ${technical.macd.line.toFixed(4)}, Status: ${technical.macd.status}` : 'N/A'}
 - Bollinger Bands: ${technical.bollinger ? `%B: ${technical.bollinger.percentB.toFixed(2)}, Bandwidth: ${technical.bollinger.bandwidth.toFixed(3)}, Status: ${technical.bollinger.status}` : 'N/A'}
+- Order Flow (CVD Divergence): ${technical.cvdDivergence?.status ?? 'Normal Flow'}
 - Volume Profile: ${technical.volumeProfile ? `POC: $${technical.volumeProfile.pocPrice?.toLocaleString('en-US') ?? 'N/A'} (${technical.volumeProfile.status})` : 'N/A'}
 - Detected Price Patterns: ${patternList}
 - Recent Candles Summary: ${technical.recentCandlesSummary}

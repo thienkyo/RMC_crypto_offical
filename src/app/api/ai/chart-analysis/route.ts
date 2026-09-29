@@ -30,7 +30,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   }
 
-  const { imageBase64, symbol, timeframe, lastCandleTime } = body;
+  const { imageBase64, symbol, timeframe, lastCandleTime, forceRefresh } = body;
 
   if (!imageBase64 || !symbol || !timeframe || !lastCandleTime) {
     return NextResponse.json(
@@ -46,37 +46,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // ── 2. Check cache ──────────────────────────────────────────────────────────
+  // ── 2. Check cache (unless forceRefresh is requested) ───────────────────────
   const candleCloseTs = new Date(lastCandleTime).toISOString();
 
-  try {
-    const cacheResult = await db.query<{
-      analysis:   ChartAnalysis;
-      model:      string;
-      created_at: Date;
-    }>(
-      `SELECT analysis, model, created_at
-       FROM ai_chart_analysis
-       WHERE symbol = $1
-         AND timeframe = $2
-         AND candle_close_time = $3
-       LIMIT 1`,
-      [symbol, timeframe, candleCloseTs],
-    );
+  if (!forceRefresh) {
+    try {
+      const cacheResult = await db.query<{
+        analysis:   ChartAnalysis;
+        model:      string;
+        created_at: Date;
+      }>(
+        `SELECT analysis, model, created_at
+         FROM ai_chart_analysis
+         WHERE symbol = $1
+           AND timeframe = $2
+           AND candle_close_time = $3
+         LIMIT 1`,
+        [symbol, timeframe, candleCloseTs],
+      );
 
-    if (cacheResult.rows.length > 0) {
-      const row = cacheResult.rows[0]!;
-      const response: AnalyzeChartResponse = {
-        analysis:  row.analysis,
-        fromCache: true,
-        cachedAt:  row.created_at.toISOString(),
-        model:     row.model,
-      };
-      return NextResponse.json(response);
+      if (cacheResult.rows.length > 0) {
+        const row = cacheResult.rows[0]!;
+        const response: AnalyzeChartResponse = {
+          analysis:  row.analysis,
+          fromCache: true,
+          cachedAt:  row.created_at.toISOString(),
+          model:     row.model,
+        };
+        return NextResponse.json(response);
+      }
+    } catch (err) {
+      // DB errors on the cache check shouldn't block analysis — log and continue.
+      console.error('[chart-analysis] cache lookup failed:', err);
     }
-  } catch (err) {
-    // DB errors on the cache check shouldn't block analysis — log and continue.
-    console.error('[chart-analysis] cache lookup failed:', err);
   }
 
   // ── 3. Call Gemini ──────────────────────────────────────────────────────────
@@ -95,18 +97,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // ── 4. Persist to cache ─────────────────────────────────────────────────────
-  try {
-    await db.query(
-      `INSERT INTO ai_chart_analysis
-         (symbol, timeframe, candle_close_time, analysis, model)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (symbol, timeframe, candle_close_time) DO NOTHING`,
-      [symbol, timeframe, candleCloseTs, JSON.stringify(analysis), modelUsed],
-    );
-  } catch (err) {
-    // Cache write failure is non-fatal — return the analysis anyway.
-    console.error('[chart-analysis] cache write failed:', err);
+  // ── 4. Persist to cache (reject caching blank/unusable images) ───────────────
+  const isBlankResponse =
+    analysis.trend?.summary?.toLowerCase().includes('blank') ||
+    analysis.key_levels?.some((l) => l.notes?.toLowerCase().includes('blank image'));
+
+  if (!isBlankResponse) {
+    try {
+      await db.query(
+        `INSERT INTO ai_chart_analysis
+           (symbol, timeframe, candle_close_time, analysis, model)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (symbol, timeframe, candle_close_time)
+         DO UPDATE SET analysis = EXCLUDED.analysis, model = EXCLUDED.model, created_at = NOW()`,
+        [symbol, timeframe, candleCloseTs, JSON.stringify(analysis), modelUsed],
+      );
+    } catch (err) {
+      // Cache write failure is non-fatal — return the analysis anyway.
+      console.error('[chart-analysis] cache write failed:', err);
+    }
   }
 
   // ── 5. Return ───────────────────────────────────────────────────────────────

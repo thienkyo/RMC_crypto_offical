@@ -15,6 +15,8 @@ import { rsi } from '@/lib/indicators/rsi';
 import { macd } from '@/lib/indicators/macd';
 import { ema } from '@/lib/indicators/ema';
 import { bollinger } from '@/lib/indicators/bollinger';
+import { adx } from '@/lib/indicators/adx';
+import { cvd_divergence } from '@/lib/indicators/cvd_divergence';
 import * as patterns from '@/lib/patterns';
 import { getArticlesForSymbol } from '@/lib/db/news';
 
@@ -26,11 +28,13 @@ export interface BuildContextParams {
   stopLossPct?: number;
   takeProfitPct?: number;
   candles: Candle[];
+  htfCandles?: Candle[];
+  htfTimeframe?: string;
   customNotes?: string;
 }
 
 export async function buildEvaluationContext(params: BuildContextParams): Promise<EvaluationPromptPayload> {
-  const { symbol, timeframe, direction, entryPrice, stopLossPct, takeProfitPct, candles, customNotes } = params;
+  const { symbol, timeframe, direction, entryPrice, stopLossPct, takeProfitPct, candles, htfCandles, htfTimeframe, customNotes } = params;
 
   // ── 1. Calculate Target Stop Loss & Take Profit Prices ──────────────────────
   let stopLossPrice: number | undefined;
@@ -49,7 +53,7 @@ export async function buildEvaluationContext(params: BuildContextParams): Promis
   }
 
   // ── 2. Build Technical Snapshot ───────────────────────────────────────────
-  const technical = buildTechnicalSnapshot(candles);
+  const technical = buildTechnicalSnapshot(candles, htfCandles, htfTimeframe);
 
   // ── 3. Build Sentiment Snapshot from Database ─────────────────────────────
   const sentiment = await buildSentimentSnapshot(symbol);
@@ -67,7 +71,11 @@ export async function buildEvaluationContext(params: BuildContextParams): Promis
   };
 }
 
-function buildTechnicalSnapshot(candles: Candle[]): TechnicalSnapshot {
+function buildTechnicalSnapshot(
+  candles: Candle[],
+  htfCandles?: Candle[],
+  htfTimeframe?: string,
+): TechnicalSnapshot {
   if (!candles || candles.length === 0) {
     return {
       currentPrice: 0,
@@ -191,6 +199,63 @@ function buildTechnicalSnapshot(candles: Candle[]): TechnicalSnapshot {
     return `Bar -${lastBars.length - 1 - i}: ${isGreen ? 'GREEN' : 'RED'} (${bodyPct}%), H: ${c.high}, L: ${c.low}, C: ${c.close}`;
   }).join(' | ');
 
+  // ── ADX (14) Market Regime ────────────────────────────────────────────────
+  let marketRegime: TechnicalSnapshot['marketRegime'];
+  try {
+    const adxRes = adx.compute(candles, { period: 14 });
+    const lastAdx = adxRes[0]?.data?.slice(-1)[0]?.value;
+    const lastPlus = adxRes[1]?.data?.slice(-1)[0]?.value;
+    const lastMinus = adxRes[2]?.data?.slice(-1)[0]?.value;
+
+    if (lastAdx !== undefined && lastPlus !== undefined && lastMinus !== undefined) {
+      let regime: string;
+      if (lastAdx >= 25) {
+        regime = lastPlus > lastMinus
+          ? `Strong Bullish Trend (ADX: ${lastAdx.toFixed(1)}, +DI: ${lastPlus.toFixed(1)} > -DI: ${lastMinus.toFixed(1)})`
+          : `Strong Bearish Trend (ADX: ${lastAdx.toFixed(1)}, -DI: ${lastMinus.toFixed(1)} > +DI: ${lastPlus.toFixed(1)})`;
+      } else if (lastAdx >= 20) {
+        regime = `Emerging / Moderate Trend (ADX: ${lastAdx.toFixed(1)})`;
+      } else {
+        regime = `Ranging / Consolidation Chop (ADX: ${lastAdx.toFixed(1)} < 20 — breakout setups prone to fakeouts)`;
+      }
+
+      marketRegime = {
+        adx: Number(lastAdx.toFixed(1)),
+        plusDI: Number(lastPlus.toFixed(1)),
+        minusDI: Number(lastMinus.toFixed(1)),
+        regime,
+      };
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // ── CVD Divergence (Volume Absorption / Distribution) ──────────────────────
+  let cvdDivergence: TechnicalSnapshot['cvdDivergence'];
+  try {
+    const cvdRes = cvd_divergence.compute(candles, { lookback: 14, smoothing: 5 });
+    const bullData = cvdRes[0]?.data?.slice(-4) ?? [];
+    const bearData = cvdRes[1]?.data?.slice(-4) ?? [];
+
+    const hasBullDiv = bullData.some((pt) => pt.value && pt.value > 0.5);
+    const hasBearDiv = bearData.some((pt) => pt.value && pt.value > 0.5);
+
+    if (hasBullDiv && hasBearDiv) {
+      cvdDivergence = { status: 'Conflicted CVD Flow (Both Absorption & Distribution in recent bars)' };
+    } else if (hasBullDiv) {
+      cvdDivergence = { status: 'Bullish Absorption (Price lower low while CVD higher low — institutional absorption)' };
+    } else if (hasBearDiv) {
+      cvdDivergence = { status: 'Bearish Distribution (Price higher high while CVD lower high — institutional distribution)' };
+    } else {
+      cvdDivergence = { status: 'Normal Flow (CVD trend confirms price action, no divergence)' };
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // ── Higher Timeframe (HTF) Confluence ─────────────────────────────────────
+  const htfConfluence = buildHtfSnapshot(htfCandles, htfTimeframe);
+
   return {
     currentPrice,
     priceChange24hPct,
@@ -199,8 +264,57 @@ function buildTechnicalSnapshot(candles: Candle[]): TechnicalSnapshot {
     rsiDivergence,
     macd: macdSummary,
     bollinger: bollingerSummary,
+    marketRegime,
+    cvdDivergence,
+    htfConfluence,
     activePatterns,
     recentCandlesSummary,
+  };
+}
+
+function buildHtfSnapshot(
+  htfCandles?: Candle[],
+  htfTimeframe?: string,
+): TechnicalSnapshot['htfConfluence'] {
+  if (!htfCandles || htfCandles.length === 0 || !htfTimeframe) return undefined;
+
+  const latestHtf = htfCandles[htfCandles.length - 1]!;
+  const htfPrice = latestHtf.close;
+
+  const ema20Res = ema.compute(htfCandles, { period: 20 });
+  const ema50Res = ema.compute(htfCandles, { period: 50 });
+  const ema200Res = ema.compute(htfCandles, { period: 200 });
+
+  const e20 = ema20Res[0]?.data?.slice(-1)[0]?.value;
+  const e50 = ema50Res[0]?.data?.slice(-1)[0]?.value;
+  const e200 = ema200Res[0]?.data?.slice(-1)[0]?.value;
+
+  let trendEma = 'EMAs calculating';
+  let summary = 'Consolidating';
+  if (e20 && e50 && e200) {
+    if (htfPrice > e20 && e20 > e50 && e50 > e200) {
+      trendEma = `Strong Bullish Alignment (Price > EMA20 > EMA50 > EMA200)`;
+      summary = `Macro Bullish Trend (favorable for continuation longs)`;
+    } else if (htfPrice < e20 && e20 < e50 && e50 < e200) {
+      trendEma = `Strong Bearish Alignment (Price < EMA20 < EMA50 < EMA200)`;
+      summary = `Macro Bearish Trend (counter-trend long risk, short setups favored)`;
+    } else {
+      trendEma = `Mixed / Neutral (Price: ${htfPrice.toFixed(2)}, EMA20: ${e20.toFixed(2)}, EMA50: ${e50.toFixed(2)}, EMA200: ${e200.toFixed(2)})`;
+      summary = `Macro Range / Consolidation`;
+    }
+  } else if (e20) {
+    trendEma = htfPrice > e20 ? `Above EMA20 (${e20.toFixed(2)})` : `Below EMA20 (${e20.toFixed(2)})`;
+    summary = htfPrice > e20 ? `Above short-term EMA` : `Below short-term EMA`;
+  }
+
+  const rsiRes = rsi.compute(htfCandles, { period: 14, emaPeriod: 10 });
+  const rsi14 = rsiRes[0]?.data?.slice(-1)[0]?.value;
+
+  return {
+    timeframe: htfTimeframe,
+    trendEma,
+    rsi14: rsi14 !== undefined ? Number(rsi14.toFixed(1)) : undefined,
+    summary,
   };
 }
 

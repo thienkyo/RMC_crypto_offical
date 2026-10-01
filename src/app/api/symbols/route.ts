@@ -47,6 +47,16 @@ const AI_HARDWARE_BASKET: MarketSymbol[] = [
   { symbol: 'PLTR', baseAsset: 'PLTR', quoteAsset: 'USD', source: 'equities', displayName: 'Palantir'              },
 ];
 
+// ─── Safe-risk equities (Defensive, Dividend, Healthcare, Consumer Staples, Utilities) ─
+
+const SAFE_RISK_BASKET: MarketSymbol[] = [
+  { symbol: 'BRK.B', baseAsset: 'BRK.B', quoteAsset: 'USD', source: 'equities', displayName: 'Berkshire Hathaway' },
+  { symbol: 'JNJ',   baseAsset: 'JNJ',   quoteAsset: 'USD', source: 'equities', displayName: 'Johnson & Johnson'    },
+  { symbol: 'PG',    baseAsset: 'PG',    quoteAsset: 'USD', source: 'equities', displayName: 'Procter & Gamble'     },
+  { symbol: 'KO',    baseAsset: 'KO',    quoteAsset: 'USD', source: 'equities', displayName: 'Coca-Cola'            },
+  { symbol: 'XLU',   baseAsset: 'XLU',   quoteAsset: 'USD', source: 'equities', displayName: 'Utilities Select ETF' },
+];
+
 // ─── Stablecoin blocklist ─────────────────────────────────────────────────────
 // Base-asset symbols that represent fiat-pegged or commodity-replicating tokens
 // that have no useful price signal for chart analysis.
@@ -190,5 +200,5 @@ export async function GET() {
     stale = true;
   }
 
-  return NextResponse.json({ crypto, mag7: MAG7, ai: AI_HARDWARE_BASKET, equities: MAG7, stale });
+  return NextResponse.json({ crypto, mag7: MAG7, ai: AI_HARDWARE_BASKET, safeRisk: SAFE_RISK_BASKET, equities: MAG7, stale });
 }

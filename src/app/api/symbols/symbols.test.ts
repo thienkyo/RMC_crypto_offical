@@ -5,14 +5,21 @@ import {
   AI_BASKET_SYMBOLS,
   HARDWARE_SYMBOLS,
   AI_HARDWARE_SYMBOLS,
+  SAFE_RISK_SYMBOLS,
   isEquitySymbol,
 } from '@/lib/exchange/equities';
 
 describe('Symbols API and Basket Definitions', () => {
-  it('has locked Mag7 symbols roster', () => {
+  it('has locked Mag7 and safe-risk symbols roster', () => {
     const expectedMag7 = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA'];
     expect([...MAG7_SYMBOLS]).toEqual(expectedMag7);
     for (const sym of expectedMag7) {
+      expect(isEquitySymbol(sym)).toBe(true);
+    }
+
+    const expectedSafeRisk = ['BRK.B', 'JNJ', 'PG', 'KO', 'XLU'];
+    expect([...SAFE_RISK_SYMBOLS]).toEqual(expectedSafeRisk);
+    for (const sym of expectedSafeRisk) {
       expect(isEquitySymbol(sym)).toBe(true);
     }
   });
@@ -61,8 +68,18 @@ describe('Symbols API and Basket Definitions', () => {
       expect(json).toHaveProperty('crypto');
       expect(json).toHaveProperty('mag7');
       expect(json).toHaveProperty('ai');
+      expect(json).toHaveProperty('safeRisk');
       expect(json).toHaveProperty('equities'); // backwards compatibility
       expect(json.stale).toBe(true); // fallback used when fetch fails
+
+      // Verify Safe-Risk
+      expect(json.safeRisk.map((s: { symbol: string }) => s.symbol)).toEqual([
+        'BRK.B', 'JNJ', 'PG', 'KO', 'XLU',
+      ]);
+      for (const item of json.safeRisk) {
+        expect(item.source).toBe('equities');
+        expect(item.quoteAsset).toBe('USD');
+      }
 
       // Verify Mag7
       expect(json.mag7.map((s: { symbol: string }) => s.symbol)).toEqual([

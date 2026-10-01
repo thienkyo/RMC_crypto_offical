@@ -66,4 +66,4 @@ export interface AlertHistoryEntry {
  */
 export type AlertEvalResult =
   | { fired: true;  rule: AlertRule; message: string }
-  | { fired: false; rule: AlertRule; reason: 'condition_false' | 'cooldown' | 'no_candles' | 'error' };
+  | { fired: false; rule: AlertRule; reason: 'condition_false' | 'cooldown' | 'no_candles' | 'error' | 'market_closed' };

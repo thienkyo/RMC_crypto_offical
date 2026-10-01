@@ -14,6 +14,8 @@
 
 import { fetchLatestCandlesCached } from '@/lib/db/candles';
 import { buildIndicatorCache, evaluateCondition } from '@/lib/strategy/evaluate';
+import { isEquitySymbol } from '@/lib/exchange/equities';
+import { getUSEquityMarketStatus } from '@/lib/exchange/marketHours';
 import { formatAlertMessage } from './telegram';
 import type { AlertRule, AlertEvalResult } from '@/types/alert';
 import type { Candle } from '@/types/market';
@@ -26,6 +28,14 @@ const EVAL_CANDLE_WINDOW = 300;
  * Never throws — errors are captured as fired:false / reason:'error'.
  */
 export async function evaluateAlertRule(rule: AlertRule): Promise<AlertEvalResult> {
+  // ── 0. Market session gate for equities ───────────────────────────────────
+  if (isEquitySymbol(rule.symbol)) {
+    const marketStatus = getUSEquityMarketStatus();
+    if (!marketStatus.isOpen) {
+      return { fired: false, rule, reason: 'market_closed' };
+    }
+  }
+
   // ── 1. Cooldown check ─────────────────────────────────────────────────────
   if (rule.lastFiredAt !== null) {
     if (Date.now() - rule.lastFiredAt < rule.cooldownMs) {

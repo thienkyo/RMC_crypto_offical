@@ -32,6 +32,8 @@ import { formatStrategySignalMessage }  from '@/lib/alerts/telegram';
 import { signalScore, shouldRunAiVerdict } from '@/lib/strategy/rating';
 import { conditionLabel }              from '@/lib/alerts/evaluate';
 import { computeEntryPriceLimit }      from '@/lib/strategy/entryPrice';
+import { isEquitySymbol }              from '@/lib/exchange/equities';
+import { getUSEquityMarketStatus }     from '@/lib/exchange/marketHours';
 import type { Strategy, StrategyCondition } from '@/types/strategy';
 import type { Candle, Timeframe }      from '@/types/market';
 import type { ConditionSnapshotGroup } from '@/lib/db/signals';
@@ -40,7 +42,7 @@ const CANDLE_WINDOW = 1_000;
 
 export type StrategyNotifyResult =
   | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; debug?: StrategyNotifyDebug }
-  | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error'; debug?: StrategyNotifyDebug };
+  | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error' | 'market_closed'; debug?: StrategyNotifyDebug };
 
 
 /** Debug context surfaced in the cron Manual response. */
@@ -55,6 +57,14 @@ export async function evaluateStrategySignal(
   strategy: Strategy,
   lastNotifiedTimeMs: number | null,
 ): Promise<StrategyNotifyResult> {
+  // ── 0. Market session gate for equities ───────────────────────────────────
+  if (isEquitySymbol(strategy.symbol)) {
+    const marketStatus = getUSEquityMarketStatus();
+    if (!marketStatus.isOpen) {
+      return { fired: false, strategy, reason: 'market_closed' };
+    }
+  }
+
   // ── 1. Fetch candles (cached & deduplicated) ──────────────────────────────
   let candles: Candle[];
   try {

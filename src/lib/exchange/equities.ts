@@ -23,10 +23,16 @@ export const AI_HARDWARE_SYMBOLS = [
   ...HARDWARE_SYMBOLS,
 ] as const;
 
+/** Safe-risk / defensive equities basket placeholder per docs/equities-plan.md Stage 3 */
+export const SAFE_RISK_SYMBOLS = [
+  'BRK.B', 'JNJ', 'PG', 'KO', 'XLU',
+] as const;
+
 /** Combined set of known first-class equities */
 export const KNOWN_EQUITIES = new Set<string>([
   ...MAG7_SYMBOLS,
   ...AI_HARDWARE_SYMBOLS,
+  ...SAFE_RISK_SYMBOLS,
 ]);
 
 /** Crypto bases and quote suffixes that must never be treated as US equities */

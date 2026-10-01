@@ -21,6 +21,26 @@
       "comment":  "Polymarket prediction market odds snapshots"
     },
     {
+      "path":     "/api/cron/crawl-custom",
+      "schedule": "*/15 * * * *",
+      "comment":  "Custom user-configured RSS/feed sources"
+    },
+    {
+      "path":     "/api/cron/crawl-telegram",
+      "schedule": "*/15 * * * *",
+      "comment":  "Telegram public channels: binance_announcements, whale_alert_io, WatcherGuru"
+    },
+    {
+      "path":     "/api/cron/crawl-youtube",
+      "schedule": "*/30 * * * *",
+      "comment":  "YouTube analyst channels: Coin Bureau, Benjamin Cowen, Bloomberg Tech"
+    },
+    {
+      "path":     "/api/cron/crawl-technews",
+      "schedule": "*/30 * * * *",
+      "comment":  "Tech news: Hacker News top stories + TechCrunch RSS"
+    },
+    {
       "path":     "/api/cron/sentiment-run",
       "schedule": "*/5 * * * *",
       "comment":  "Gemini batch classify + Claude summaries for high-signal articles"

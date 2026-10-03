@@ -93,6 +93,11 @@ interface StrategyState {
    * If `active` is undefined, it flips: if ANY are on → turn all off; if all off → turn all on.
    */
   setGroupActive: (symbol: string, active?: boolean) => void;
+  /**
+   * Set the Telegram topic configuration for all non-template strategies in a symbol group.
+   * Returns the updated strategies so the caller can persist them to DB.
+   */
+  setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }) => Strategy[];
   /** Clone a strategy with a new id and " (copy)" suffix. Returns the copy. */
   duplicateStrategy: (id: string) => Strategy | undefined;
   /**
@@ -229,6 +234,33 @@ export const useStrategyStore = create<StrategyState>()(
             ),
           };
         }),
+
+      setGroupTelegramTopic: (symbol, topic) => {
+        let updatedList: Strategy[] = [];
+        set((s) => {
+          const now = Date.now();
+          const targetIds = new Set(
+            s.strategies
+              .filter((x) => !x.isTemplate && x.symbol === symbol)
+              .map((x) => x.id),
+          );
+          if (targetIds.size === 0) return {};
+
+          const newStrategies = s.strategies.map((x) => {
+            if (!targetIds.has(x.id)) return x;
+            const updated = {
+              ...x,
+              telegramTopic: { ...topic },
+              updatedAt: now,
+            };
+            updatedList.push(updated);
+            return updated;
+          });
+
+          return { strategies: newStrategies };
+        });
+        return updatedList;
+      },
 
       duplicateStrategy: (id) => {
         let result: Strategy | undefined;

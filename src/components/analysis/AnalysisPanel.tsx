@@ -23,6 +23,7 @@ import type {
   ChartAnalysis,
   TrendDirection,
   Bias,
+  TradeSetupRecommendation,
 } from '@/lib/ai/types';
 import type {
   OrderEvaluationResult,
@@ -194,6 +195,99 @@ function DetectedPatterns({ patterns }: { patterns: ChartAnalysis['patterns'] })
   );
 }
 
+function AiTradePlanCard({
+  plan,
+  onApply,
+}: {
+  plan: TradeSetupRecommendation;
+  onApply: () => void;
+}) {
+  const isLong = plan.action === 'long';
+  const isShort = plan.action === 'short';
+
+  const badgeColor = isLong
+    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+    : isShort
+    ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+    : 'bg-amber-500/20 text-amber-400 border-amber-500/40';
+
+  return (
+    <div className="bg-surface p-3 rounded-lg border border-accent/30 shadow-sm flex flex-col gap-2.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm">🎯</span>
+          <span className="text-[10px] font-mono uppercase font-bold text-text-primary tracking-wider">
+            AI Structural Trade Plan
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${badgeColor}`}>
+            {isLong ? '🟢 LONG' : isShort ? '🔴 SHORT' : '⚪ WAIT'}
+          </span>
+          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-accent/15 text-accent border border-accent/30">
+            R:R {plan.risk_reward_ratio}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-surface-2/70 p-2 rounded border border-surface-border">
+          <div className="text-[9px] font-mono text-text-muted uppercase">Suggested Entry</div>
+          <div className="text-xs font-mono font-bold text-text-primary mt-0.5">
+            ${plan.entry_price?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div className="text-[9px] font-mono text-accent capitalize">{plan.entry_type}</div>
+        </div>
+
+        <div className="bg-surface-2/70 p-2 rounded border border-surface-border">
+          <div className="text-[9px] font-mono text-text-muted uppercase">Stop Loss</div>
+          <div className="text-xs font-mono font-bold text-rose-400 mt-0.5">
+            ${plan.stop_loss?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div className="text-[9px] font-mono text-rose-400/80">-{plan.stop_loss_pct?.toFixed(1)}%</div>
+        </div>
+
+        <div className="bg-surface-2/70 p-2 rounded border border-surface-border">
+          <div className="text-[9px] font-mono text-text-muted uppercase">Take Profit</div>
+          <div className="text-xs font-mono font-bold text-emerald-400 mt-0.5">
+            ${plan.take_profit?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div className="text-[9px] font-mono text-emerald-400/80">+{plan.take_profit_pct?.toFixed(1)}%</div>
+        </div>
+      </div>
+
+      {(plan.entry_rationale || plan.stop_loss_rationale || plan.take_profit_rationale) && (
+        <div className="text-[10px] font-mono space-y-1 bg-surface-2/50 p-2 rounded border border-surface-border/50 text-text-secondary leading-relaxed">
+          {plan.entry_rationale && (
+            <div>
+              <span className="text-text-muted uppercase font-semibold">Entry:</span> {plan.entry_rationale}
+            </div>
+          )}
+          {plan.stop_loss_rationale && (
+            <div>
+              <span className="text-rose-400/90 uppercase font-semibold">Invalidation (SL):</span> {plan.stop_loss_rationale}
+            </div>
+          )}
+          {plan.take_profit_rationale && (
+            <div>
+              <span className="text-emerald-400/90 uppercase font-semibold">Target (TP):</span> {plan.take_profit_rationale}
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onApply}
+        className="w-full py-1.5 px-2 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent font-mono text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors"
+      >
+        <span>✏️</span>
+        <span>Apply this Plan to Manual Setup to Edit/Tweak</span>
+      </button>
+    </div>
+  );
+}
+
 // ─── Main Unified Component ──────────────────────────────────────────────────
 
 interface Props {
@@ -210,6 +304,7 @@ export function AnalysisPanel({ getScreenshot }: Props) {
   const currentPrice = latestCandle?.close ?? 0;
 
   // Form states
+  const [setupMode, setSetupMode] = useState<'auto' | 'manual'>('auto');
   const [direction, setDirection] = useState<'long' | 'short'>('long');
   const [provider, setProvider] = useState<EvaluatorProvider>('gemini');
   const [entryPrice, setEntryPrice] = useState<string>('');
@@ -232,6 +327,13 @@ export function AnalysisPanel({ getScreenshot }: Props) {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [activeHistoryItem, setActiveHistoryItem] = useState<AiHistoryItem | null>(null);
   const [historyScope, setHistoryScope] = useState<'current' | 'all'>('current');
+
+  // Telegram dispatch state
+  const [isSendingTelegram, setIsSendingTelegram] = useState(false);
+  const [telegramStatus, setTelegramStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [telegramError, setTelegramError] = useState<string | null>(null);
+  const [telegramDestination, setTelegramDestination] = useState<'topic' | 'general'>('topic');
+  const [customTopicName, setCustomTopicName] = useState<string>('');
 
   const activeEntryPrice = entryPrice ? parseFloat(entryPrice) : currentPrice;
 
@@ -298,7 +400,7 @@ export function AnalysisPanel({ getScreenshot }: Props) {
     fetchHistory('current');
   }, [symbol, timeframe, fetchHistory]);
 
-  // Unified Parallel Analysis Execution
+  // Unified Analysis Execution (Auto-Plan vs Manual)
   const handleAnalyze = useCallback(async () => {
     if (!latestCandle) {
       setError('Market candles are still loading.');
@@ -308,74 +410,103 @@ export function AnalysisPanel({ getScreenshot }: Props) {
     setIsAnalyzing(true);
     setError(null);
     setPartialWarning(null);
+    setTelegramStatus('idle');
+    setTelegramError(null);
     setActiveHistoryItem(null); // Clear historical label for a live run
 
     const imageBase64 = getScreenshot();
 
-    // 1. Order Evaluator (Indicators + News)
-    const evalPromise = fetch('/api/ai/evaluate-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        symbol,
-        timeframe,
-        direction,
-        entryPrice: activeEntryPrice,
-        stopLossPct: stopLossPct ? parseFloat(stopLossPct) : undefined,
-        takeProfitPct: takeProfitPct ? parseFloat(takeProfitPct) : undefined,
-        candleTime: latestCandle.openTime,
-        provider,
-        customNotes: customNotes.trim() || undefined,
-      }),
-    });
-
-    // 2. Chart Vision (Canvas Screenshot Analysis)
-    const visionPromise = imageBase64
-      ? fetch('/api/ai/chart-analysis', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageBase64,
-            symbol,
-            timeframe,
-            lastCandleTime: latestCandle.openTime,
-            forceRefresh: true,
-          }),
-        })
-      : Promise.resolve(null);
-
     try {
-      const [evalRes, visionRes] = await Promise.allSettled([evalPromise, visionPromise]);
-
       let hadSuccess = false;
       const errors: string[] = [];
 
-      // Parse evaluator result
-      if (evalRes.status === 'fulfilled') {
-        const data = await evalRes.value.json();
-        if (evalRes.value.ok && data.success) {
-          setEvalResult(data.evaluation);
-          hadSuccess = true;
-        } else {
-          errors.push(`Order Evaluator: ${data.error || `HTTP ${evalRes.value.status}`}`);
+      let activeDirection: 'long' | 'short' = direction;
+      let activeEntry: number = activeEntryPrice;
+      let activeSl: number | undefined = stopLossPct ? parseFloat(stopLossPct) : undefined;
+      let activeTp: number | undefined = takeProfitPct ? parseFloat(takeProfitPct) : undefined;
+
+      // ── Step 1: Chart Vision ───────────────────────────────────────────────
+      // In Auto mode, Vision runs first to identify the high-probability direction,
+      // structural entry price, invalidation stop loss, and target take profit.
+      if (imageBase64) {
+        try {
+          const visionRes = await fetch('/api/ai/chart-analysis', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64,
+              symbol,
+              timeframe,
+              lastCandleTime: latestCandle.openTime,
+              forceRefresh: true,
+            }),
+          });
+          const vData = (await visionRes.json()) as AnalyzeChartResponse & { error?: string };
+          if (visionRes.ok && vData.analysis) {
+            setVisionResult(vData);
+            hadSuccess = true;
+
+            // In Auto-Plan mode, apply the AI's educated parameters
+            if (setupMode === 'auto' && vData.analysis.trade_setup) {
+              const ts = vData.analysis.trade_setup;
+              if (ts.action === 'long' || ts.action === 'short') {
+                activeDirection = ts.action;
+                setDirection(ts.action);
+              } else if (vData.analysis.bias === 'long' || vData.analysis.bias === 'short') {
+                activeDirection = vData.analysis.bias;
+                setDirection(vData.analysis.bias);
+              }
+
+              if (ts.entry_price > 0) {
+                activeEntry = ts.entry_price;
+                setEntryPrice(ts.entry_price.toString());
+              }
+              if (ts.stop_loss_pct > 0) {
+                activeSl = ts.stop_loss_pct;
+                setStopLossPct(ts.stop_loss_pct.toString());
+              }
+              if (ts.take_profit_pct > 0) {
+                activeTp = ts.take_profit_pct;
+                setTakeProfitPct(ts.take_profit_pct.toString());
+              }
+            }
+          } else {
+            errors.push(`Chart Vision: ${vData.error || `HTTP ${visionRes.status}`}`);
+          }
+        } catch (vErr) {
+          errors.push(`Chart Vision: ${vErr instanceof Error ? vErr.message : 'Request failed'}`);
         }
       } else {
-        errors.push(`Order Evaluator: ${evalRes.reason?.message || 'Request failed'}`);
+        errors.push('Chart Vision: Chart canvas was not ready to capture.');
       }
 
-      // Parse vision result
-      if (visionRes.status === 'fulfilled' && visionRes.value) {
-        const data = await visionRes.value.json() as AnalyzeChartResponse & { error?: string };
-        if (visionRes.value.ok && data.analysis) {
-          setVisionResult(data);
+      // ── Step 2: Order Decision Evaluator ───────────────────────────────────
+      try {
+        const evalRes = await fetch('/api/ai/evaluate-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            symbol,
+            timeframe,
+            direction: activeDirection,
+            entryPrice: activeEntry,
+            stopLossPct: activeSl,
+            takeProfitPct: activeTp,
+            candleTime: latestCandle.openTime,
+            provider,
+            customNotes: customNotes.trim() || undefined,
+          }),
+        });
+
+        const eData = await evalRes.json();
+        if (evalRes.ok && eData.success) {
+          setEvalResult(eData.evaluation);
           hadSuccess = true;
         } else {
-          errors.push(`Chart Vision: ${data.error || `HTTP ${visionRes.value.status}`}`);
+          errors.push(`Order Evaluator: ${eData.error || `HTTP ${evalRes.status}`}`);
         }
-      } else if (visionRes.status === 'rejected') {
-        errors.push(`Chart Vision: ${visionRes.reason?.message || 'Request failed'}`);
-      } else if (!imageBase64) {
-        errors.push('Chart Vision: Chart canvas was not ready to capture.');
+      } catch (eErr) {
+        errors.push(`Order Evaluator: ${eErr instanceof Error ? eErr.message : 'Request failed'}`);
       }
 
       if (!hadSuccess && errors.length > 0) {
@@ -402,6 +533,7 @@ export function AnalysisPanel({ getScreenshot }: Props) {
     takeProfitPct,
     provider,
     customNotes,
+    setupMode,
     fetchHistory,
     historyScope,
   ]);
@@ -410,6 +542,8 @@ export function AnalysisPanel({ getScreenshot }: Props) {
   const loadHistoricalItem = (item: AiHistoryItem) => {
     setActiveHistoryItem(item);
     setEvalResult(item.evaluation);
+    setTelegramStatus('idle');
+    setTelegramError(null);
     if (item.vision?.analysis) {
       setVisionResult({
         analysis: item.vision.analysis,
@@ -421,6 +555,70 @@ export function AnalysisPanel({ getScreenshot }: Props) {
     }
     setIsHistoryOpen(false);
   };
+
+  // Dispatch AI evaluation report to Telegram group
+  const handleSendTelegram = useCallback(async () => {
+    if (!evalResult) return;
+
+    setIsSendingTelegram(true);
+    setTelegramStatus('idle');
+    setTelegramError(null);
+
+    try {
+      const imageBase64 = getScreenshot();
+
+      const payload = {
+        symbol,
+        timeframe,
+        direction: activeHistoryItem?.direction ?? direction,
+        entryPrice: activeEntryPrice,
+        stopLossPct: stopLossPct ? parseFloat(stopLossPct) : undefined,
+        takeProfitPct: takeProfitPct ? parseFloat(takeProfitPct) : undefined,
+        evaluation: evalResult,
+        vision: visionResult?.analysis,
+        imageBase64,
+        channel: 'signal', // routes to telegram_group_chat_id
+        topic: {
+          enabled: telegramDestination === 'topic',
+          name: customTopicName.trim() || symbol,
+        },
+      };
+
+      const res = await fetch('/api/ai/send-telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      setTelegramStatus('success');
+      setTimeout(() => {
+        setTelegramStatus('idle');
+      }, 4000);
+    } catch (err) {
+      setTelegramStatus('error');
+      setTelegramError(err instanceof Error ? err.message : 'Failed to send to Telegram group');
+    } finally {
+      setIsSendingTelegram(false);
+    }
+  }, [
+    evalResult,
+    visionResult,
+    getScreenshot,
+    symbol,
+    timeframe,
+    direction,
+    activeHistoryItem,
+    activeEntryPrice,
+    stopLossPct,
+    takeProfitPct,
+    telegramDestination,
+    customTopicName,
+  ]);
 
   const hasResults = Boolean(evalResult || visionResult);
 
@@ -654,33 +852,146 @@ export function AnalysisPanel({ getScreenshot }: Props) {
 
           {isSetupOpen && (
             <>
-              {/* Direction Selector */}
-              <div className="grid grid-cols-2 gap-1.5">
+              {/* Mode Toggle: Auto-Plan vs Manual */}
+              <div className="flex items-center bg-surface border border-surface-border rounded-md p-0.5">
                 <button
                   type="button"
-                  onClick={() => setDirection('long')}
-                  className={`py-1.5 font-mono font-bold text-xs rounded transition-all flex items-center justify-center gap-1.5 ${
-                    direction === 'long'
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 shadow-sm'
-                      : 'bg-surface border border-surface-border text-text-muted hover:text-text-primary'
+                  onClick={() => setSetupMode('auto')}
+                  className={`flex-1 py-1.5 px-3 rounded text-[11px] font-mono font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    setupMode === 'auto'
+                      ? 'bg-accent text-white shadow-sm'
+                      : 'text-text-muted hover:text-text-primary'
                   }`}
                 >
-                  <span>🟢</span>
-                  <span>LONG SETUP</span>
+                  <span>⚡</span>
+                  <span>AI AUTO-PLAN</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDirection('short')}
-                  className={`py-1.5 font-mono font-bold text-xs rounded transition-all flex items-center justify-center gap-1.5 ${
-                    direction === 'short'
-                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/50 shadow-sm'
-                      : 'bg-surface border border-surface-border text-text-muted hover:text-text-primary'
+                  onClick={() => setSetupMode('manual')}
+                  className={`flex-1 py-1.5 px-3 rounded text-[11px] font-mono font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    setupMode === 'manual'
+                      ? 'bg-accent text-white shadow-sm'
+                      : 'text-text-muted hover:text-text-primary'
                   }`}
                 >
-                  <span>🔴</span>
-                  <span>SHORT SETUP</span>
+                  <span>✏️</span>
+                  <span>MANUAL SETUP</span>
                 </button>
               </div>
+
+              {setupMode === 'auto' ? (
+                <div className="bg-accent/10 border border-accent/25 rounded-md p-2.5 text-[11px] font-mono text-text-secondary flex items-start gap-2">
+                  <span className="text-accent text-sm">💡</span>
+                  <div className="leading-relaxed">
+                    <span className="font-semibold text-text-primary">Auto-Engineered Setup:</span> AI will inspect chart structure, select the high-probability direction (<b className="text-emerald-400">Long</b>, <b className="text-rose-400">Short</b>, or <b className="text-amber-400">Wait</b>), and calculate optimal Entry, Invalidation Stop Loss, and Take Profit targets based on key levels and volatility.
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Direction Selector */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setDirection('long')}
+                      className={`py-1.5 font-mono font-bold text-xs rounded transition-all flex items-center justify-center gap-1.5 ${
+                        direction === 'long'
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 shadow-sm'
+                          : 'bg-surface border border-surface-border text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      <span>🟢</span>
+                      <span>LONG SETUP</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDirection('short')}
+                      className={`py-1.5 font-mono font-bold text-xs rounded transition-all flex items-center justify-center gap-1.5 ${
+                        direction === 'short'
+                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/50 shadow-sm'
+                          : 'bg-surface border border-surface-border text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      <span>🔴</span>
+                      <span>SHORT SETUP</span>
+                    </button>
+                  </div>
+
+                  {visionResult?.analysis.trade_setup && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ts = visionResult.analysis.trade_setup!;
+                        if (ts.action === 'long' || ts.action === 'short') setDirection(ts.action);
+                        if (ts.entry_price > 0) setEntryPrice(ts.entry_price.toString());
+                        if (ts.stop_loss_pct > 0) setStopLossPct(ts.stop_loss_pct.toString());
+                        if (ts.take_profit_pct > 0) setTakeProfitPct(ts.take_profit_pct.toString());
+                      }}
+                      className="w-full py-1.5 px-2 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <span>🪄</span>
+                      <span>Load AI Numbers (Entry: ${visionResult.analysis.trade_setup.entry_price}, SL: {visionResult.analysis.trade_setup.stop_loss_pct}%, TP: {visionResult.analysis.trade_setup.take_profit_pct}%)</span>
+                    </button>
+                  )}
+
+                  {/* Numeric Inputs: Entry, SL, TP */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[9px] font-mono text-text-muted uppercase block mb-0.5">
+                        Entry ($)
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder={currentPrice > 0 ? currentPrice.toString() : 'Current'}
+                        value={entryPrice}
+                        onChange={(e) => setEntryPrice(e.target.value)}
+                        className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-mono text-text-muted uppercase block mb-0.5">
+                        Stop Loss %
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={stopLossPct}
+                        onChange={(e) => setStopLossPct(e.target.value)}
+                        className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-0.5">
+                        <label className="text-[9px] font-mono text-text-muted uppercase block">
+                          Take Profit %
+                        </label>
+                        {rrRatio && (
+                          <span className="text-[8px] font-mono text-accent">
+                            1:{rrRatio}
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={takeProfitPct}
+                        onChange={(e) => setTakeProfitPct(e.target.value)}
+                        className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Optional Custom Notes */}
+                  <input
+                    type="text"
+                    placeholder="Optional setup notes / macro context (e.g. 4h bounce, CPI print)..."
+                    value={customNotes}
+                    onChange={(e) => setCustomNotes(e.target.value)}
+                    className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] text-text-primary focus:outline-none focus:border-accent"
+                  />
+                </>
+              )}
 
               {/* AI Engine Model Picker */}
               <div className="flex items-center justify-between gap-2">
@@ -698,63 +1009,6 @@ export function AnalysisPanel({ getScreenshot }: Props) {
                   <option value="ensemble">Ensemble Consensus (All Configured)</option>
                 </select>
               </div>
-
-              {/* Numeric Inputs: Entry, SL, TP */}
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="text-[9px] font-mono text-text-muted uppercase block mb-0.5">
-                    Entry ($)
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder={currentPrice > 0 ? currentPrice.toString() : 'Current'}
-                    value={entryPrice}
-                    onChange={(e) => setEntryPrice(e.target.value)}
-                    className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent"
-                  />
-                </div>
-                <div>
-                  <label className="text-[9px] font-mono text-text-muted uppercase block mb-0.5">
-                    Stop Loss %
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={stopLossPct}
-                    onChange={(e) => setStopLossPct(e.target.value)}
-                    className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent"
-                  />
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-0.5">
-                    <label className="text-[9px] font-mono text-text-muted uppercase block">
-                      Take Profit %
-                    </label>
-                    {rrRatio && (
-                      <span className="text-[8px] font-mono text-accent">
-                        1:{rrRatio}
-                      </span>
-                    )}
-                  </div>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={takeProfitPct}
-                    onChange={(e) => setTakeProfitPct(e.target.value)}
-                    className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent"
-                  />
-                </div>
-              </div>
-
-              {/* Optional Custom Notes */}
-              <input
-                type="text"
-                placeholder="Optional setup notes / macro context (e.g. 4h bounce, CPI print)..."
-                value={customNotes}
-                onChange={(e) => setCustomNotes(e.target.value)}
-                className="w-full bg-surface border border-surface-border rounded px-2 py-1 text-[11px] text-text-primary focus:outline-none focus:border-accent"
-              />
             </>
           )}
 
@@ -768,17 +1022,24 @@ export function AnalysisPanel({ getScreenshot }: Props) {
             {isAnalyzing ? (
               <>
                 <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                <span>Evaluating Order & Chart Vision…</span>
+                <span>
+                  {setupMode === 'auto' ? 'Generating AI Trade Plan & Evaluating…' : 'Evaluating Order & Chart Vision…'}
+                </span>
+              </>
+            ) : setupMode === 'auto' ? (
+              <>
+                <span>⚡</span>
+                <span>{hasResults ? 'Re-Generate AI Trade Plan & Evaluate' : 'Generate AI Trade Plan & Evaluate'}</span>
               </>
             ) : hasResults ? (
               <>
                 <span>↺</span>
-                <span>Re-Analyze Order & Chart Vision</span>
+                <span>Re-Analyze Manual Setup & Chart Vision</span>
               </>
             ) : (
               <>
                 <span>⚡</span>
-                <span>Run AI Decision & Chart Vision</span>
+                <span>Run Manual Evaluation & Chart Vision</span>
               </>
             )}
           </button>
@@ -853,12 +1114,95 @@ export function AnalysisPanel({ getScreenshot }: Props) {
                 <div className="p-2 bg-surface/80 rounded border border-surface-border text-[11px] leading-relaxed text-text-primary">
                   {evalResult.summary}
                 </div>
+
+                {/* Send to Telegram Group CTA */}
+                <div className="flex flex-col gap-1.5 pt-0.5">
+                  {/* Destination / Topic Selector */}
+                  <div className="flex items-center justify-between text-[10px] font-mono text-text-muted px-0.5">
+                    <span className="flex items-center gap-1">
+                      <span>Target:</span>
+                      <span className="text-text-secondary font-semibold">
+                        {telegramDestination === 'topic' ? `#${customTopicName.trim() || symbol}` : 'General Chat'}
+                      </span>
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setTelegramDestination('topic')}
+                        className={`px-1.5 py-0.5 rounded text-[9px] transition-colors border ${
+                          telegramDestination === 'topic'
+                            ? 'bg-accent/20 border-accent/40 text-accent font-semibold'
+                            : 'bg-surface border-surface-border text-text-muted hover:text-text-primary'
+                        }`}
+                        title={`Send to topic #${customTopicName.trim() || symbol}`}
+                      >
+                        #{symbol}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTelegramDestination('general')}
+                        className={`px-1.5 py-0.5 rounded text-[9px] transition-colors border ${
+                          telegramDestination === 'general'
+                            ? 'bg-accent/20 border-accent/40 text-accent font-semibold'
+                            : 'bg-surface border-surface-border text-text-muted hover:text-text-primary'
+                        }`}
+                        title="Send directly to main General chat without topic thread"
+                      >
+                        General
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isSendingTelegram}
+                    onClick={handleSendTelegram}
+                    className={`w-full py-2 px-3 rounded-md font-mono font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-sm ${
+                      telegramStatus === 'success'
+                        ? 'bg-emerald-500/20 border border-emerald-500/50 text-emerald-300'
+                        : telegramStatus === 'error'
+                        ? 'bg-rose-500/15 border border-rose-500/40 text-rose-300'
+                        : 'bg-[#229ED9]/15 hover:bg-[#229ED9]/25 border border-[#229ED9]/40 text-[#229ED9] hover:text-white active:scale-[0.99]'
+                    }`}
+                    title="Send this evaluation and chart analysis to the Telegram group"
+                  >
+                    <svg className="w-4 h-4 fill-current flex-shrink-0" viewBox="0 0 24 24">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                    </svg>
+                    <span>
+                      {isSendingTelegram
+                        ? 'Sending to Telegram Group…'
+                        : telegramStatus === 'success'
+                        ? '✓ Sent to Telegram Group!'
+                        : 'Send AI Evaluation to Telegram Group'}
+                    </span>
+                  </button>
+                  {telegramError && (
+                    <div className="p-2 bg-rose-500/10 border border-rose-500/30 rounded text-[10px] font-mono text-rose-300">
+                      {telegramError}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
             {/* 2. Visual Chart Analysis & Levels (Vision) */}
             {visionResult && (
               <>
+                {visionResult.analysis.trade_setup && (
+                  <AiTradePlanCard
+                    plan={visionResult.analysis.trade_setup}
+                    onApply={() => {
+                      const ts = visionResult.analysis.trade_setup!;
+                      if (ts.action === 'long' || ts.action === 'short') setDirection(ts.action);
+                      if (ts.entry_price > 0) setEntryPrice(ts.entry_price.toString());
+                      if (ts.stop_loss_pct > 0) setStopLossPct(ts.stop_loss_pct.toString());
+                      if (ts.take_profit_pct > 0) setTakeProfitPct(ts.take_profit_pct.toString());
+                      setSetupMode('manual');
+                      setIsSetupOpen(true);
+                    }}
+                  />
+                )}
                 <VisualTrendCard analysis={visionResult.analysis} />
                 <KeyLevelsTable levels={visionResult.analysis.key_levels} />
                 <DetectedPatterns patterns={visionResult.analysis.patterns} />

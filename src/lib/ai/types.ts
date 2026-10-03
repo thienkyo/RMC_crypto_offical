@@ -24,6 +24,20 @@ export interface ChartPattern {
   description: string;
 }
 
+export interface TradeSetupRecommendation {
+  action: 'long' | 'short' | 'wait';
+  entry_price: number;
+  entry_type: 'market' | 'pullback' | 'breakout';
+  entry_rationale: string;
+  stop_loss: number;
+  stop_loss_pct: number;
+  stop_loss_rationale: string;
+  take_profit: number;
+  take_profit_pct: number;
+  take_profit_rationale: string;
+  risk_reward_ratio: string;
+}
+
 export interface ChartAnalysis {
   trend: {
     direction: TrendDirection;
@@ -34,6 +48,7 @@ export interface ChartAnalysis {
   patterns:    ChartPattern[];
   risk_notes:  string[];
   bias:        Bias;
+  trade_setup?: TradeSetupRecommendation;
   /** Always injected by the server — never trust model to include it. */
   disclaimer:  string;
 }

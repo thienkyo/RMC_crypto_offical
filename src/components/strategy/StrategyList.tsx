@@ -188,6 +188,144 @@ function CloneGroupPopover({ fromSymbol, allSymbols, count, onClone, onClose }: 
   );
 }
 
+// ── Group Telegram topic popover ─────────────────────────────────────────────
+
+interface GroupTopicPopoverProps {
+  symbol: string;
+  count: number;
+  initialTopic?: { enabled: boolean; name: string };
+  onApply: (topic: { enabled: boolean; name: string }) => void;
+  onClose: () => void;
+}
+
+function GroupTopicPopover({ symbol, count, initialTopic, onApply, onClose }: GroupTopicPopoverProps) {
+  const [enabled, setEnabled] = useState(initialTopic?.enabled ?? true);
+  const [name, setName]       = useState(initialTopic?.name || symbol);
+  const [toast, setToast]     = useState<string | null>(null);
+  const inputRef              = useRef<HTMLInputElement>(null);
+  const containerRef          = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (enabled) {
+      inputRef.current?.focus();
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [onClose]);
+
+  function commit() {
+    const finalTopic = {
+      enabled,
+      name: (name.trim() || symbol).substring(0, 128),
+    };
+    onApply(finalTopic);
+    setToast(
+      enabled
+        ? `Topic #${finalTopic.name} set for all ${count} strategies`
+        : `Topic routing disabled for all ${count} strategies`,
+    );
+    setTimeout(onClose, 1100);
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute left-0 top-full mt-1 z-[200] w-64
+                 bg-[#0a0e1a] border border-surface-border rounded-md
+                 shadow-[0_4px_24px_rgba(0,0,0,0.8)] p-3 flex flex-col gap-2.5"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {toast ? (
+        <p className="text-[11px] font-mono text-emerald-400 text-center py-2">{toast}</p>
+      ) : (
+        <>
+          <div className="flex items-center gap-1.5 text-text-primary">
+            <svg className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+            </svg>
+            <span className="text-[11px] font-mono font-semibold">Group Telegram Topic</span>
+          </div>
+
+          <p className="text-[10px] text-text-muted leading-tight">
+            Apply Telegram topic routing to all <span className="text-text-primary font-mono font-semibold">{count}</span> {symbol} strategies.
+          </p>
+
+          <label className="flex items-center gap-2 cursor-pointer select-none py-0.5">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              onClick={() => setEnabled((v) => !v)}
+              className={`w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
+                enabled ? 'bg-sky-500' : 'bg-surface-border'
+              }`}
+            >
+              <span
+                className={`block w-3 h-3 rounded-full bg-white shadow transition-transform mx-0.5 ${
+                  enabled ? 'translate-x-4' : 'translate-x-0'
+                }`}
+              />
+            </button>
+            <span className="text-[11px] font-mono text-text-secondary">
+              {enabled ? 'Send to Telegram Topic' : 'General Chat (No topic)'}
+            </span>
+          </label>
+
+          {enabled && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-mono text-text-muted">Topic Name</span>
+              <input
+                ref={inputRef}
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value.substring(0, 128))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commit();
+                  if (e.key === 'Escape') onClose();
+                }}
+                placeholder={symbol}
+                className="bg-surface-2 border border-surface-border rounded px-2 py-1
+                           text-xs font-mono text-text-primary placeholder:text-text-muted
+                           focus:outline-none focus:border-sky-500/70"
+              />
+              <span className="text-[9px] text-text-muted font-mono">
+                Will route to topic #{name.trim() || symbol}
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-1 border-t border-surface-border">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-2 py-1 text-[11px] font-mono text-text-muted hover:text-text-primary transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={commit}
+              className="px-2.5 py-1 rounded border border-sky-500/50 bg-sky-500/15
+                         text-sky-400 text-[11px] font-mono font-semibold
+                         hover:bg-sky-500/25 transition-colors"
+            >
+              Apply to all {count}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Options popover (⋯ menu on each strategy row) ────────────────────────────
 
 type PopoverView = 'main' | 'clone' | 'merge';
@@ -574,6 +712,7 @@ export function StrategyList() {
   const copyGroupToSymbol      = useStrategyStore((s) => s.copyGroupToSymbol);
   const cloneStrategyToSymbol  = useStrategyStore((s) => s.cloneStrategyToSymbol);
   const setGroupActive         = useStrategyStore((s) => s.setGroupActive);
+  const setGroupTelegramTopic  = useStrategyStore((s) => s.setGroupTelegramTopic);
   const cloneFromTemplate     = useStrategyStore((s) => s.cloneFromTemplate);
   const loadStarterTemplates  = useStrategyStore((s) => s.loadStarterTemplates);
   const mergeStrategy         = useStrategyStore((s) => s.mergeStrategy);
@@ -611,6 +750,8 @@ export function StrategyList() {
   const [collapsedTplDir, setCollapsedTplDir] = useState<Set<'long' | 'short'>>(new Set(['long', 'short']));
   // Which symbol group's clone popover is open (null = none)
   const [clonePopoverSymbol, setClonePopoverSymbol]   = useState<string | null>(null);
+  // Which symbol group's telegram topic popover is open (null = none)
+  const [topicPopoverSymbol, setTopicPopoverSymbol]   = useState<string | null>(null);
   // Import feedback banner — null = hidden (auto-clears after 3 s)
   const [importFeedback, setImportFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   // True while import is pushing strategies to DB
@@ -1038,6 +1179,8 @@ export function StrategyList() {
             toggleGroup={toggleGroup}
             clonePopoverSymbol={clonePopoverSymbol}
             setClonePopoverSymbol={setClonePopoverSymbol}
+            topicPopoverSymbol={topicPopoverSymbol}
+            setTopicPopoverSymbol={setTopicPopoverSymbol}
             activeId={activeId}
             setActiveStrategy={setActiveStrategy}
             handleToggle={handleToggle}
@@ -1046,6 +1189,7 @@ export function StrategyList() {
             cloneStrategyToSymbol={cloneStrategyToSymbol}
             mergeStrategy={mergeStrategy}
             setGroupActive={setGroupActive}
+            setGroupTelegramTopic={setGroupTelegramTopic}
             copyGroupToSymbol={copyGroupToSymbol}
             setStrategiesCollapsed={setMtfCollapsed}
             allSymbols={allSymbols}
@@ -1073,6 +1217,8 @@ export function StrategyList() {
             toggleGroup={toggleGroup}
             clonePopoverSymbol={clonePopoverSymbol}
             setClonePopoverSymbol={setClonePopoverSymbol}
+            topicPopoverSymbol={topicPopoverSymbol}
+            setTopicPopoverSymbol={setTopicPopoverSymbol}
             activeId={activeId}
             setActiveStrategy={setActiveStrategy}
             handleToggle={handleToggle}
@@ -1081,6 +1227,7 @@ export function StrategyList() {
             cloneStrategyToSymbol={cloneStrategyToSymbol}
             mergeStrategy={mergeStrategy}
             setGroupActive={setGroupActive}
+            setGroupTelegramTopic={setGroupTelegramTopic}
             copyGroupToSymbol={copyGroupToSymbol}
             setStrategiesCollapsed={setStrategiesCollapsed}
             allSymbols={allSymbols}
@@ -1100,6 +1247,8 @@ interface SymbolGroupListProps {
   toggleGroup: (symbol: string) => void;
   clonePopoverSymbol: string | null;
   setClonePopoverSymbol: (sym: string | null) => void;
+  topicPopoverSymbol: string | null;
+  setTopicPopoverSymbol: (sym: string | null) => void;
   activeId: string | null;
   setActiveStrategy: (id: string) => void;
   handleToggle: (s: Strategy) => void;
@@ -1108,6 +1257,7 @@ interface SymbolGroupListProps {
   cloneStrategyToSymbol: (id: string, target: string) => Strategy | undefined;
   mergeStrategy: (sources: string[], dest: string) => Strategy | undefined;
   setGroupActive: (symbol: string) => void;
+  setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }) => Strategy[];
   copyGroupToSymbol: (symbol: string, target: string) => Strategy[];
   setStrategiesCollapsed: (b: boolean) => void;
   allSymbols: string[];
@@ -1115,8 +1265,9 @@ interface SymbolGroupListProps {
 
 function SymbolGroupList({
   strategies, allStrategies, expandedGroups, toggleGroup, clonePopoverSymbol, setClonePopoverSymbol,
-  activeId, setActiveStrategy, handleToggle, handleDelete, duplicateStrategy, cloneStrategyToSymbol, mergeStrategy,
-  setGroupActive, copyGroupToSymbol, setStrategiesCollapsed, allSymbols
+  topicPopoverSymbol, setTopicPopoverSymbol, activeId, setActiveStrategy, handleToggle, handleDelete,
+  duplicateStrategy, cloneStrategyToSymbol, mergeStrategy, setGroupActive, setGroupTelegramTopic,
+  copyGroupToSymbol, setStrategiesCollapsed, allSymbols
 }: SymbolGroupListProps) {
   const groups = useMemo(() => {
     const map = new Map<string, Strategy[]>();
@@ -1134,11 +1285,15 @@ function SymbolGroupList({
   return (
     <>
       {Array.from(groups.entries()).map(([symbol, list]) => {
-        const isCollapsed   = !expandedGroups.has(symbol);
-        const activeLongs   = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_long').length;
-        const activeShorts  = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_short').length;
-        const anyActive     = activeLongs + activeShorts > 0;
-        const popoverOpen   = clonePopoverSymbol === symbol;
+        const isCollapsed       = !expandedGroups.has(symbol);
+        const activeLongs       = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_long').length;
+        const activeShorts      = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_short').length;
+        const anyActive         = activeLongs + activeShorts > 0;
+        const popoverOpen       = clonePopoverSymbol === symbol;
+        const topicPopoverOpen  = topicPopoverSymbol === symbol;
+        const enabledTopics     = list.filter((s) => s.telegramTopic?.enabled);
+        const hasTopicEnabled   = enabledTopics.length > 0;
+        const firstTopicName    = enabledTopics.find((s) => s.telegramTopic?.name)?.telegramTopic?.name || symbol;
 
         const sorted = [...list].sort((a, b) => {
           const aLong = a.action.type === 'enter_long' ? 0 : 1;
@@ -1186,7 +1341,34 @@ function SymbolGroupList({
               </button>
               <button
                 type="button"
-                onClick={() => setClonePopoverSymbol(popoverOpen ? null : symbol)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTopicPopoverSymbol(topicPopoverOpen ? null : symbol);
+                  if (clonePopoverSymbol) setClonePopoverSymbol(null);
+                }}
+                title={
+                  hasTopicEnabled
+                    ? `Telegram topic: #${firstTopicName} (${enabledTopics.length}/${list.length} on)`
+                    : `Set Telegram topic for ${symbol} group (${list.length} strategies)`
+                }
+                className={`btn-icon-xs flex-shrink-0 transition-colors ${
+                  hasTopicEnabled
+                    ? 'text-sky-400 hover:text-sky-300 opacity-90 hover:opacity-100'
+                    : topicPopoverOpen
+                    ? 'text-sky-400 opacity-100'
+                    : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-sky-400'
+                }`}
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setClonePopoverSymbol(popoverOpen ? null : symbol);
+                  if (topicPopoverSymbol) setTopicPopoverSymbol(null);
+                }}
                 title={`Clone all ${list.length} to another symbol`}
                 className={`btn-icon-xs flex-shrink-0 transition-colors
                   ${popoverOpen ? 'text-accent opacity-100' : 'opacity-0 group-hover/group:opacity-100 text-text-muted hover:text-accent'}`}
@@ -1209,6 +1391,27 @@ function SymbolGroupList({
                   }
                 }}
                 onClose={() => setClonePopoverSymbol(null)}
+              />
+            )}
+            {topicPopoverOpen && (
+              <GroupTopicPopover
+                symbol={symbol}
+                count={list.length}
+                initialTopic={{
+                  enabled: hasTopicEnabled || true,
+                  name: firstTopicName,
+                }}
+                onApply={(topic) => {
+                  const updated = setGroupTelegramTopic(symbol, topic);
+                  if (updated.length > 0) {
+                    import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
+                      pushManyStrategiesToDb(updated).catch((err) =>
+                        console.warn('[group-topic] sync failed:', err),
+                      );
+                    });
+                  }
+                }}
+                onClose={() => setTopicPopoverSymbol(null)}
               />
             )}
             {!isCollapsed && sorted.map((s) => (

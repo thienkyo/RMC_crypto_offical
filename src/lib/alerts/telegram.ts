@@ -16,6 +16,8 @@
 
 import { db } from '@/lib/db/client';
 import { parseChatIds, isTestTarget } from '@/lib/telegram';
+import type { OrderEvaluationResult } from '@/lib/ai/evaluator/types';
+import type { ChartAnalysis } from '@/lib/ai/types';
 export { strategyRating } from '@/lib/strategy/rating';
 
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -528,4 +530,259 @@ export async function verifyTelegramConfig(): Promise<{ ok: boolean; botName?: s
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ─── AI Evaluation Message Formatter & Delivery ──────────────────────────────
+
+export interface SendAiEvaluationOptions {
+  symbol: string;
+  timeframe: string;
+  direction: 'long' | 'short';
+  entryPrice: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  evaluation: OrderEvaluationResult;
+  vision?: ChartAnalysis;
+  imageBase64?: string;
+  channel?: 'signal' | 'personal' | 'alert';
+  topic?: { enabled: boolean; name?: string };
+}
+
+/**
+ * Formats a comprehensive, professional AI Copilot evaluation report
+ * ready for delivery via Telegram HTML mode.
+ */
+export function formatAiEvaluationMessage(opts: {
+  symbol: string;
+  timeframe: string;
+  direction: 'long' | 'short';
+  entryPrice: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  evaluation: OrderEvaluationResult;
+  vision?: ChartAnalysis;
+}): string {
+  const { symbol, timeframe, direction, entryPrice, stopLossPct, takeProfitPct, evaluation, vision } = opts;
+  const isLong = direction === 'long';
+  const statusIcon = evaluation.status === 'PASS' ? '🟢' : evaluation.status === 'CAVEAT' ? '🟡' : '🔴';
+  const statusText =
+    evaluation.status === 'PASS'
+      ? 'PASS — HIGH CONFLUENCE'
+      : evaluation.status === 'CAVEAT'
+      ? 'CAVEAT — PROCEED WITH CAUTION'
+      : 'REJECT — UNFAVORABLE SETUP';
+
+  const slPrice = stopLossPct != null && stopLossPct > 0
+    ? isLong ? entryPrice * (1 - stopLossPct / 100) : entryPrice * (1 + stopLossPct / 100)
+    : null;
+  const tpPrice = takeProfitPct != null && takeProfitPct > 0
+    ? isLong ? entryPrice * (1 + takeProfitPct / 100) : entryPrice * (1 - takeProfitPct / 100)
+    : null;
+
+  const lines: string[] = [
+    `🤖 <b>AI Order Evaluation — ${esc(symbol)} (${esc(timeframe.toUpperCase())})</b>`,
+    '',
+    `📡 <b>Setup:</b> ${isLong ? '🟢 LONG' : '🔴 SHORT'} @ <b>${fmtPrice(entryPrice)}</b>`,
+  ];
+
+  if (slPrice !== null && stopLossPct != null) {
+    lines.push(`🛡 <b>SL:</b> ${fmtPrice(slPrice)} (${isLong ? '-' : '+'}${stopLossPct.toFixed(1)}%)`);
+  }
+  if (tpPrice !== null && takeProfitPct != null) {
+    lines.push(`🏆 <b>TP:</b> ${fmtPrice(tpPrice)} (${isLong ? '+' : '-'}${takeProfitPct.toFixed(1)}%)`);
+  }
+
+  lines.push(
+    `🚦 <b>Verdict:</b> ${statusIcon} <b>${statusText}</b>`,
+    `🎯 <b>Confidence:</b> <code>${esc(evaluation.confidence.toUpperCase())}</code>`,
+    `🧠 <b>Engine:</b> <code>${esc(evaluation.model.modelName)}</code>`,
+    '',
+    `📋 <b>Executive Summary:</b>`,
+    `<i>${esc(evaluation.summary)}</i>`
+  );
+
+  // Vision trend & bias
+  if (vision) {
+    lines.push('');
+    lines.push(`📈 <b>Visual Trend & Bias:</b>`);
+    lines.push(`• Bias: <b>${esc(vision.bias.toUpperCase())}</b> · Trend: <b>${esc(vision.trend.direction.toUpperCase())}</b> (${esc(vision.trend.strength)})`);
+    if (vision.trend.summary) {
+      lines.push(`<i>${esc(vision.trend.summary)}</i>`);
+    }
+
+    if (vision.key_levels && vision.key_levels.length > 0) {
+      lines.push('');
+      lines.push(`🎯 <b>Key Levels (Vision):</b>`);
+      for (const lvl of vision.key_levels.slice(0, 4)) {
+        const badge = lvl.type === 'support' ? '🟢 SUP' : '🔴 RES';
+        const noteText = lvl.notes ? `: ${esc(lvl.notes)}` : '';
+        lines.push(`• <b>${badge}</b> <code>${fmtPrice(lvl.price)}</code>${noteText}`);
+      }
+    }
+
+    if (vision.trade_setup) {
+      const ts = vision.trade_setup;
+      const actionBadge = ts.action === 'long' ? '🟢 LONG' : ts.action === 'short' ? '🔴 SHORT' : '⚪ WAIT';
+      lines.push('');
+      lines.push(`💡 <b>AI Suggested Trade Plan:</b>`);
+      lines.push(`• Setup: <b>${actionBadge}</b> @ <code>${fmtPrice(ts.entry_price)}</code> (${esc(ts.entry_type)})`);
+      lines.push(`• Stop Loss: <code>${fmtPrice(ts.stop_loss)}</code> (${ts.stop_loss_pct.toFixed(1)}%)`);
+      lines.push(`• Take Profit: <code>${fmtPrice(ts.take_profit)}</code> (${ts.take_profit_pct.toFixed(1)}%) · R:R: <b>${esc(ts.risk_reward_ratio)}</b>`);
+      if (ts.entry_rationale) lines.push(`• Entry rationale: <i>${esc(ts.entry_rationale)}</i>`);
+      if (ts.stop_loss_rationale) lines.push(`• Invalidation: <i>${esc(ts.stop_loss_rationale)}</i>`);
+    }
+  }
+
+  // Confluence & Alignment
+  lines.push('');
+  lines.push(`📊 <b>Confluence Analysis:</b>`);
+  lines.push(`• <b>Technical Alignment (${evaluation.metrics.technicalScore}/100):</b>`);
+  lines.push(`  ${esc(evaluation.reasons.technical)}`);
+
+  const sentSign = evaluation.metrics.sentimentScore > 0 ? '+' : '';
+  lines.push(`• <b>Sentiment (${sentSign}${evaluation.metrics.sentimentScore}):</b>`);
+  lines.push(`  ${esc(evaluation.reasons.sentiment)}`);
+
+  // Risk & Invalidation
+  if (evaluation.reasons.primaryRisk) {
+    lines.push('');
+    lines.push(`⚠️ <b>Key Risk & Invalidation:</b>`);
+    lines.push(`<i>${esc(evaluation.reasons.primaryRisk)}</i>`);
+  }
+
+  lines.push('');
+  lines.push(`🕒 <code>${fmtLocal(Date.now())}</code> • <i>RMC AI Copilot</i>`);
+
+  return lines.join('\n');
+}
+
+/**
+ * Sends the AI evaluation report (and optional canvas screenshot) to the Telegram group.
+ */
+export async function sendAiEvaluationToTelegram(
+  opts: SendAiEvaluationOptions
+): Promise<TelegramSendResult> {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    return { ok: false, error: 'TELEGRAM_BOT_TOKEN is not set in .env.local' };
+  }
+
+  // Load chat IDs from settings table in DB
+  const { rows } = await db.query<{ key: string; value: string | null }>(
+    `SELECT key, value FROM settings
+     WHERE key IN ('telegram_personal_chat_id', 'telegram_group_chat_id', 'telegram_alert_chat_id')`,
+  );
+  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+
+  const channel = opts.channel ?? 'signal';
+  const chatIds =
+    channel === 'personal'
+      ? parseChatIds(map['telegram_personal_chat_id'])
+      : channel === 'alert'
+      ? parseChatIds(map['telegram_alert_chat_id'])
+      : parseChatIds(map['telegram_group_chat_id']);
+
+  if (chatIds.length === 0) {
+    const channelName = channel === 'signal' ? 'group' : channel;
+    return {
+      ok: false,
+      error: `No Telegram ${channelName} chat IDs configured. Please set them in Settings.`,
+    };
+  }
+
+  const messageText = formatAiEvaluationMessage(opts);
+  let delivered = 0;
+  let firstError: string | undefined;
+
+  await Promise.all(
+    chatIds.map(async (chatId) => {
+      try {
+        let threadId: number | undefined;
+        try {
+          const isTopicEnabled = opts.topic ? opts.topic.enabled : true;
+          const topicName = opts.topic?.name?.trim() || opts.symbol;
+          if (isTopicEnabled && topicName) {
+            threadId = await resolveTopicThreadId(chatId, topicName);
+          }
+        } catch {
+          // ignore topic error, fallback to general chat
+        }
+
+        // If screenshot is present, send chart photo first
+        if (opts.imageBase64) {
+          try {
+            const base64Data = opts.imageBase64.replace(/^data:image\/\w+;base64,/, '');
+            const buffer = Buffer.from(base64Data, 'base64');
+            const formData = new FormData();
+            formData.append('chat_id', chatId);
+            if (threadId) formData.append('message_thread_id', String(threadId));
+            formData.append('photo', new Blob([buffer], { type: 'image/png' }), 'chart.png');
+            formData.append(
+              'caption',
+              `📊 <b>${esc(opts.symbol)} (${esc(opts.timeframe.toUpperCase())})</b> • AI Vision Chart`,
+            );
+            formData.append('parse_mode', 'HTML');
+
+            let photoRes = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
+              method: 'POST',
+              body: formData,
+            });
+
+            if (!photoRes.ok && threadId) {
+              // Retry without threadId if topic wasn't found
+              formData.delete('message_thread_id');
+              await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
+                method: 'POST',
+                body: formData,
+              });
+            }
+          } catch (photoErr) {
+            console.warn('[telegram] Photo send exception:', photoErr);
+          }
+        }
+
+        // Send formatted HTML evaluation message
+        const body: Record<string, unknown> = {
+          chat_id: chatId,
+          text: messageText,
+          parse_mode: 'HTML',
+        };
+        if (threadId) body.message_thread_id = threadId;
+
+        let res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          if (threadId) {
+            delete body.message_thread_id;
+            res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+          }
+
+          if (!res.ok) {
+            const errPayload = await res.json().catch(() => ({})) as Record<string, unknown>;
+            const errMsg = (errPayload['description'] as string) || `HTTP ${res.status}`;
+            firstError ??= errMsg;
+          } else {
+            delivered++;
+          }
+        } else {
+          delivered++;
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        firstError ??= errMsg;
+      }
+    }),
+  );
+
+  return delivered > 0
+    ? { ok: true, delivered }
+    : { ok: false, error: firstError ?? 'Failed to send message to Telegram' };
 }

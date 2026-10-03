@@ -15,7 +15,7 @@ import { useState } from 'react';
 import { ConditionGroupEditor } from './ConditionGroupEditor';
 import { ActionEditor }         from './ActionEditor';
 import { useStrategyStore }     from '@/store/strategy';
-import { pushStrategyToDb }     from '@/lib/strategy/api';
+import { pushStrategyToDb, pushManyStrategiesToDb } from '@/lib/strategy/api';
 import { useBacktest }          from '@/hooks/useBacktest';
 import { TIMEFRAMES }           from '@/types/market';
 import { TF_TO_MS }             from '@/lib/exchange/binance';
@@ -41,15 +41,22 @@ interface Props {
 }
 
 export function StrategyForm({ strategy: initial }: Props) {
-  const [draft, setDraft]     = useState<Strategy>(initial);
-  const [error, setError]     = useState<string | null>(null);
-  const [saving, setSaving]   = useState(false);
+  const [draft, setDraft]               = useState<Strategy>(initial);
+  const [error, setError]               = useState<string | null>(null);
+  const [saving, setSaving]             = useState(false);
+  const [groupTopicToast, setGroupTopicToast] = useState<string | null>(null);
 
+  const strategies           = useStrategyStore((s) => s.strategies);
   const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
   const duplicateStrategy    = useStrategyStore((s) => s.duplicateStrategy);
   const cloneFromTemplate    = useStrategyStore((s) => s.cloneFromTemplate);
+  const setGroupTelegramTopic = useStrategyStore((s) => s.setGroupTelegramTopic);
   const isBacktesting        = useStrategyStore((s) => s.isBacktesting);
   const { runBacktestForStrategy } = useBacktest();
+
+  const siblingStrategies = strategies.filter(
+    (s) => !s.isTemplate && s.symbol === draft.symbol && s.id !== draft.id
+  );
 
   // Re-sync draft if a different strategy is selected
   // (parent re-mounts this component with a new key when activeStrategyId changes)
@@ -244,113 +251,131 @@ export function StrategyForm({ strategy: initial }: Props) {
         </section>
 
         {/* ── Entry conditions ──────────────────────────────────────────── */}
-        <section className="space-y-2">
-          <h3 className="section-heading">
-            Entry Conditions
-            <span className="text-text-muted font-normal text-xs ml-2">
-              (OR groups: any fires · AND groups: all must fire)
-            </span>
-          </h3>
+        <section className="space-y-2.5">
+          <div>
+            <h3 className="section-heading flex items-center gap-2 flex-wrap">
+              <span>Entry Conditions</span>
+              <span className="text-text-muted font-normal text-xs lowercase">
+                (any OR group fires · all AND groups must fire)
+              </span>
+            </h3>
+          </div>
 
-          {draft.entryConditions.length === 0 && (
-            <p className="text-xs text-text-muted italic">No entry conditions — add a group.</p>
-          )}
-          {draft.entryConditions.map((group, i) => (
-            <div key={group.id}>
-              {/* Inter-group connector pill */}
-              {i > 0 && (
-                <div className="flex items-center gap-2 py-1 pl-1">
-                  <div className="h-px flex-1 bg-surface-border" />
-                  <span className={`text-[10px] font-mono font-semibold px-2 py-px rounded border ${
-                    (group.operator ?? 'or') === 'or'
-                      ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-                      : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-                  }`}>
-                    {(group.operator ?? 'or') === 'or' ? 'OR' : 'AND'}
-                  </span>
-                  <div className="h-px flex-1 bg-surface-border" />
-                </div>
-              )}
-              <ConditionGroupEditor
-                group={group}
-                groupIndex={i}
-                totalGroups={draft.entryConditions.length}
-                onChange={(updated) => updateEntryGroup(i, updated)}
-                onRemoveGroup={() => removeEntryGroup(i)}
-                isMultiTf={draft.isMtf === true}
-                baseTimeframe={draft.timeframe}
-              />
+          <div className="pl-3 sm:pl-4 border-l-2 border-surface-border/70 ml-1 sm:ml-1.5 space-y-3 pt-0.5">
+            {draft.entryConditions.length === 0 && (
+              <p className="text-xs text-text-muted italic py-1">No entry conditions — add a group below.</p>
+            )}
+
+            {draft.entryConditions.map((group, i) => (
+              <div key={group.id} className="relative">
+                {/* Inter-group connector pill */}
+                {i > 0 && (
+                  <div className="flex items-center gap-2 py-2 -ml-3 sm:-ml-4 pl-3 sm:pl-4">
+                    <div className="w-3 sm:w-4 h-px bg-surface-border" />
+                    <span className={`text-[10px] font-mono font-bold tracking-wide px-2.5 py-0.5 rounded-full border shadow-xs flex items-center gap-1.5 ${
+                      (group.operator ?? 'or') === 'or'
+                        ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                        : 'text-amber-400 border-amber-500/40 bg-amber-500/10'
+                    }`}>
+                      <span>{(group.operator ?? 'or') === 'or' ? 'OR' : 'AND'}</span>
+                      <span className="text-[9px] font-normal opacity-80">
+                        {(group.operator ?? 'or') === 'or' ? '(alternative setup)' : '(required filter)'}
+                      </span>
+                    </span>
+                    <div className="h-px flex-1 bg-surface-border/50" />
+                  </div>
+                )}
+                <ConditionGroupEditor
+                  group={group}
+                  groupIndex={i}
+                  totalGroups={draft.entryConditions.length}
+                  onChange={(updated) => updateEntryGroup(i, updated)}
+                  onRemoveGroup={() => removeEntryGroup(i)}
+                  isMultiTf={draft.isMtf === true}
+                  baseTimeframe={draft.timeframe}
+                />
+              </div>
+            ))}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup('or')])}
+                className="btn-xs border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50"
+              >
+                + Add OR group
+              </button>
+              <button
+                type="button"
+                onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup('and')])}
+                className="btn-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:border-amber-500/50"
+              >
+                + Add AND group
+              </button>
             </div>
-          ))}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup('or')])}
-              className="btn-xs"
-            >
-              + Add OR group
-            </button>
-            <button
-              type="button"
-              onClick={() => patch('entryConditions', [...draft.entryConditions, makeGroup('and')])}
-              className="btn-xs"
-            >
-              + Add AND group
-            </button>
           </div>
         </section>
 
         {/* ── Exit conditions ───────────────────────────────────────────── */}
-        <section className="space-y-2">
-          <h3 className="section-heading">
-            Exit Conditions
-            <span className="text-text-muted font-normal text-xs ml-2">(leave empty to rely on SL / TP)</span>
-          </h3>
+        <section className="space-y-2.5">
+          <div>
+            <h3 className="section-heading flex items-center gap-2 flex-wrap">
+              <span>Exit Conditions</span>
+              <span className="text-text-muted font-normal text-xs lowercase">(leave empty to rely on SL / TP)</span>
+            </h3>
+          </div>
 
-          {draft.exitConditions.length === 0 && (
-            <p className="text-xs text-text-muted italic">No exit signal — SL / TP only.</p>
-          )}
-          {draft.exitConditions.map((group, i) => (
-            <div key={group.id}>
-              {i > 0 && (
-                <div className="flex items-center gap-2 py-1 pl-1">
-                  <div className="h-px flex-1 bg-surface-border" />
-                  <span className={`text-[10px] font-mono font-semibold px-2 py-px rounded border ${
-                    (group.operator ?? 'or') === 'or'
-                      ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-                      : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-                  }`}>
-                    {(group.operator ?? 'or') === 'or' ? 'OR' : 'AND'}
-                  </span>
-                  <div className="h-px flex-1 bg-surface-border" />
-                </div>
-              )}
-              <ConditionGroupEditor
-                group={group}
-                groupIndex={i}
-                totalGroups={draft.exitConditions.length}
-                onChange={(updated) => updateExitGroup(i, updated)}
-                onRemoveGroup={() => removeExitGroup(i)}
-                isMultiTf={draft.isMtf === true}
-                baseTimeframe={draft.timeframe}
-              />
+          <div className="pl-3 sm:pl-4 border-l-2 border-surface-border/70 ml-1 sm:ml-1.5 space-y-3 pt-0.5">
+            {draft.exitConditions.length === 0 && (
+              <p className="text-xs text-text-muted italic py-1">No exit signal — SL / TP only.</p>
+            )}
+
+            {draft.exitConditions.map((group, i) => (
+              <div key={group.id} className="relative">
+                {i > 0 && (
+                  <div className="flex items-center gap-2 py-2 -ml-3 sm:-ml-4 pl-3 sm:pl-4">
+                    <div className="w-3 sm:w-4 h-px bg-surface-border" />
+                    <span className={`text-[10px] font-mono font-bold tracking-wide px-2.5 py-0.5 rounded-full border shadow-xs flex items-center gap-1.5 ${
+                      (group.operator ?? 'or') === 'or'
+                        ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                        : 'text-amber-400 border-amber-500/40 bg-amber-500/10'
+                    }`}>
+                      <span>{(group.operator ?? 'or') === 'or' ? 'OR' : 'AND'}</span>
+                      <span className="text-[9px] font-normal opacity-80">
+                        {(group.operator ?? 'or') === 'or' ? '(alternative setup)' : '(required filter)'}
+                      </span>
+                    </span>
+                    <div className="h-px flex-1 bg-surface-border/50" />
+                  </div>
+                )}
+                <ConditionGroupEditor
+                  group={group}
+                  groupIndex={i}
+                  totalGroups={draft.exitConditions.length}
+                  onChange={(updated) => updateExitGroup(i, updated)}
+                  onRemoveGroup={() => removeExitGroup(i)}
+                  isMultiTf={draft.isMtf === true}
+                  baseTimeframe={draft.timeframe}
+                />
+              </div>
+            ))}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup('or')])}
+                className="btn-xs border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50"
+              >
+                + Add OR group
+              </button>
+              <button
+                type="button"
+                onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup('and')])}
+                className="btn-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:border-amber-500/50"
+              >
+                + Add AND group
+              </button>
             </div>
-          ))}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup('or')])}
-              className="btn-xs"
-            >
-              + Add OR group
-            </button>
-            <button
-              type="button"
-              onClick={() => patch('exitConditions', [...draft.exitConditions, makeGroup('and')])}
-              className="btn-xs"
-            >
-              + Add AND group
-            </button>
           </div>
         </section>
 
@@ -434,6 +459,40 @@ export function StrategyForm({ strategy: initial }: Props) {
                         }}
                         className="w-full bg-surface-elevated text-text-primary text-xs px-2 py-1.5 border border-surface-border rounded outline-none focus:border-indigo-500 transition-colors"
                       />
+                    </div>
+                  )}
+                  {siblingStrategies.length > 0 && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const enabled = draft.telegramTopic?.enabled ?? false;
+                          const name = (draft.telegramTopic?.name || draft.symbol).trim();
+                          const topic = { enabled, name };
+                          patch('telegramTopic', topic);
+                          const updated = setGroupTelegramTopic(draft.symbol, topic);
+                          if (updated.length > 0) {
+                            pushManyStrategiesToDb(updated).catch((err) =>
+                              console.warn('[group-topic-apply] sync failed:', err)
+                            );
+                          }
+                          setGroupTopicToast(
+                            enabled
+                              ? `Applied topic #${name} to all ${updated.length} ${draft.symbol} strategies!`
+                              : `Disabled topic routing for all ${updated.length} ${draft.symbol} strategies!`
+                          );
+                          setTimeout(() => setGroupTopicToast(null), 3500);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-sky-500/30 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 text-xs font-mono transition-colors"
+                      >
+                        <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                        </svg>
+                        <span>Apply topic to all {siblingStrategies.length + 1} {draft.symbol} strategies</span>
+                      </button>
+                      {groupTopicToast && (
+                        <p className="text-[11px] font-mono text-emerald-400 mt-1">{groupTopicToast}</p>
+                      )}
                     </div>
                   )}
                 </div>

@@ -36,6 +36,19 @@ The JSON must exactly match this TypeScript shape:
   ],
   "risk_notes": string[],      // exactly 2–3 specific risk factors visible on this chart
   "bias":       "long" | "short" | "neutral",
+  "trade_setup": {             // high-probability, well-educated trade setup derived from chart structure
+    "action": "long" | "short" | "wait",
+    "entry_price": number,         // optimal entry price (current market or pullback to level)
+    "entry_type": "market" | "pullback" | "breakout",
+    "entry_rationale": string,     // specific rationale e.g. "retest of broken 86,000 resistance shelf"
+    "stop_loss": number,           // structural invalidation price (beyond swing low/high or EMA)
+    "stop_loss_pct": number,       // positive percentage distance from entry e.g. 2.4
+    "stop_loss_rationale": string, // why this SL e.g. "placed 1.5x ATR below 20 EMA and recent swing low"
+    "take_profit": number,         // realistic profit target price
+    "take_profit_pct": number,     // positive percentage distance from entry e.g. 5.8
+    "take_profit_rationale": string,// why this TP e.g. "front-running prior major swing high resistance"
+    "risk_reward_ratio": string    // formatted ratio e.g. "1:2.4"
+  },
   "disclaimer": "⚠️ Not financial advice. For paper trading and educational use only."
 }
 
@@ -44,6 +57,12 @@ Rules:
 - key_levels: prefer levels with multiple touches or significant wick rejection.
 - patterns: only call out patterns you can clearly see; do not guess.
 - risk_notes: be specific (e.g. "RSI divergence at recent high", "volume declining on rally").
+- trade_setup:
+  - If bias is bullish and setup is favorable, action="long". SL must be below entry (under structural support), TP above entry.
+  - If bias is bearish and setup is favorable, action="short". SL must be above entry (above structural resistance), TP below entry.
+  - If market is choppy/unclear, action="wait" with breakout threshold levels.
+  - Ensure stop_loss_pct and take_profit_pct are positive numbers.
+  - Target a realistic Risk-to-Reward ratio of at least 1:1.5 to 1:3.
 - Return ONLY the JSON — no other text.
 `.trim();
 

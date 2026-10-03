@@ -96,15 +96,27 @@ export function ConditionGroupEditor({
   }
 
   return (
-    <div className={`rounded border bg-surface-2 p-3 space-y-1 ${
-      isOrGroup ? 'border-surface-border' : 'border-amber-500/30'
+    <div className={`rounded-lg border bg-surface-2/90 p-3 space-y-1 shadow-sm transition-all ${
+      isOrGroup ? 'border-surface-border border-l-4 border-l-emerald-500/70' : 'border-amber-500/30 border-l-4 border-l-amber-500/70'
     }`}>
       {/* ── Group header ────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-2 gap-2">
-        <div className="flex items-center gap-2 flex-wrap min-w-0">
+      <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+          {/* Group number indicator */}
+          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-surface-3 text-text-secondary border border-surface-border flex-shrink-0">
+            Group {groupIndex + 1}
+          </span>
 
-          {/* Group-type badge — hidden for the first group (always OR, role is implicit) */}
-          {groupIndex > 0 && (
+          {/* Group-type badge / toggle */}
+          {groupIndex === 0 ? (
+            <span
+              className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border
+                         bg-emerald-500/10 text-emerald-400 border-emerald-500/30 flex-shrink-0 select-none"
+              title="Primary setup (OR group: triggers strategy entry independently)"
+            >
+              OR setup
+            </span>
+          ) : (
             <button
               type="button"
               onClick={toggleGroupOperator}
@@ -126,12 +138,15 @@ export function ConditionGroupEditor({
           <button
             type="button"
             onClick={toggleConditionOperator}
-            title={`Conditions inside combined with ${condOp.toUpperCase()}. Click to flip.`}
-            className="text-[10px] font-mono px-1.5 py-0.5 rounded border
-                       border-surface-border text-text-muted hover:text-text-primary
-                       hover:border-text-muted transition-colors flex-shrink-0"
+            title={`Conditions inside combined with ${condOp.toUpperCase()}. Click to switch to ${condOp === 'and' ? 'OR (any condition matches)' : 'AND (all conditions must match)'}.`}
+            className="text-[10px] font-mono px-2 py-0.5 rounded border
+                       border-surface-border bg-surface-1/70 text-text-muted hover:text-text-primary
+                       hover:border-text-muted/60 transition-colors flex items-center gap-1.5 flex-shrink-0"
           >
-            inside: <span className="font-semibold text-text-secondary">{condOp.toUpperCase()}</span>
+            <span className="text-[9px] uppercase tracking-wider text-text-muted">Match:</span>
+            <span className={`font-semibold ${condOp === 'and' ? 'text-blue-400' : 'text-violet-400'}`}>
+              {condOp === 'and' ? 'ALL (AND)' : 'ANY (OR)'}
+            </span>
           </button>
 
           {/* Optional label input */}
@@ -139,28 +154,28 @@ export function ConditionGroupEditor({
             type="text"
             value={group.label}
             onChange={(e) => onChange({ ...group, label: e.target.value })}
-            placeholder={`Group ${groupIndex + 1}`}
-            className="input-xs w-48 text-text-muted min-w-0"
+            placeholder={`Group ${groupIndex + 1} name (optional)`}
+            className="input-xs w-48 text-text-primary placeholder:text-text-muted/50 min-w-0"
           />
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Condition count badge — visible when collapsed */}
-          {collapsed && (
-            <span className="text-[10px] font-mono text-text-muted">
-              {group.conditions.filter(c => c.enabled !== false).length} condition{group.conditions.filter(c => c.enabled !== false).length !== 1 ? 's' : ''}
-            </span>
-          )}
+        <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+          {/* Condition count badge */}
+          <span className="text-[10px] font-mono text-text-muted">
+            {group.conditions.filter(c => c.enabled !== false).length} cond{group.conditions.filter(c => c.enabled !== false).length !== 1 ? 's' : ''}
+          </span>
+
           {totalGroups > 1 && (
             <button
               type="button"
               onClick={onRemoveGroup}
-              className="btn-icon-xs text-red-400 hover:text-red-300 text-xs"
+              className="btn-icon-xs text-red-400 hover:text-red-300 text-xs px-1"
               title="Remove group"
             >
               Remove
             </button>
           )}
+
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
@@ -172,46 +187,52 @@ export function ConditionGroupEditor({
         </div>
       </div>
 
-      {/* ── Conditions (hidden when collapsed) ──────────────────────── */}
+      {/* ── Conditions (indented child area) ──────────────────────── */}
       {!collapsed && (
-        <>
+        <div className="mt-2.5 pt-2.5 border-t border-surface-border/50 pl-3.5 ml-2.5 sm:ml-3 border-l-2 border-surface-border/60 space-y-2">
           {group.conditions.length === 0 && (
-            <p className="text-xs text-text-muted italic pl-1">No conditions — add one below.</p>
+            <p className="text-xs text-text-muted italic py-1">No conditions in this group — click below to add one.</p>
           )}
 
           {group.conditions.map((condition, i) => (
-            <div key={condition.id}>
+            <div key={condition.id} className="relative">
               {i > 0 && (
-                <div className="flex items-center gap-1 py-0.5 pl-1">
-                  <span className={`text-[10px] font-mono font-semibold px-1.5 py-px rounded ${
+                <div className="flex items-center gap-2 py-1 -ml-3.5 pl-3.5">
+                  <div className="w-2.5 h-px bg-surface-border" />
+                  <span className={`text-[9px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded border shadow-xs ${
                     condition.enabled === false
-                      ? 'text-text-muted opacity-30'
+                      ? 'text-text-muted opacity-40 border-surface-border bg-surface'
                       : condOp === 'and'
-                        ? 'text-blue-400 bg-blue-500/10'
-                        : 'text-violet-400 bg-violet-500/10'
+                        ? 'text-blue-400 bg-blue-500/10 border-blue-500/30'
+                        : 'text-violet-400 bg-violet-500/10 border-violet-500/30'
                   }`}>
                     {condOp.toUpperCase()}
                   </span>
+                  <div className="h-px flex-1 bg-surface-border/40" />
                 </div>
               )}
-              <ConditionRow
-                condition={condition}
-                onChange={(updated) => updateCondition(i, updated)}
-                onRemove={() => removeCondition(i)}
-                isMultiTf={isMultiTf}
-                baseTimeframe={baseTimeframe}
-              />
+              <div className="rounded-md border border-surface-border/60 bg-surface-1/60 px-2.5 py-1.5 hover:border-surface-border transition-colors">
+                <ConditionRow
+                  condition={condition}
+                  onChange={(updated) => updateCondition(i, updated)}
+                  onRemove={() => removeCondition(i)}
+                  isMultiTf={isMultiTf}
+                  baseTimeframe={baseTimeframe}
+                />
+              </div>
             </div>
           ))}
 
-          <button
-            type="button"
-            onClick={addCondition}
-            className="btn-xs mt-1"
-          >
-            + Add condition
-          </button>
-        </>
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={addCondition}
+              className="btn-xs flex items-center gap-1.5 text-text-secondary hover:text-text-primary"
+            >
+              <span>+</span> Add condition
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

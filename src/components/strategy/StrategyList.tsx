@@ -607,7 +607,19 @@ function StrategyRow({
               </span>
             )}
           </div>
-          <div className="text-xs text-text-muted font-mono">{s.timeframe}</div>
+          <div className="flex items-center gap-1.5 text-xs text-text-muted font-mono">
+            <span>{s.timeframe}</span>
+            {s.aiGatekeeperEnabled && (
+              <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 font-semibold select-none" title="AI Gatekeeper Enabled for this strategy">
+                AI
+              </span>
+            )}
+            {s.notifyOnSignal && (
+              <span className="text-[9px] text-emerald-400/80 select-none" title="Telegram Notifications Active">
+                🔔
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-0.5 ml-1">
@@ -722,29 +734,9 @@ export function StrategyList() {
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
   const [strategiesCollapsed,      setStrategiesCollapsed]      = useState(false);
-  // Symbol groups: auto-expand groups that have active strategies or the selected strategy
-  const [expandedGroups,           setExpandedGroups]           = useState<Set<string>>(new Set());
-  const hasAutoExpanded = useRef(false);
-
-  useEffect(() => {
-    if (strategies.length > 0 && !hasAutoExpanded.current) {
-      hasAutoExpanded.current = true;
-      setExpandedGroups((prev) => {
-        if (prev.size > 0) return prev;
-        const initial = new Set<string>();
-        const active = strategies.find((s) => s.id === activeId);
-        if (active && !active.isTemplate) initial.add(active.symbol);
-        for (const s of strategies) {
-          if (s.isActive && !s.isTemplate) initial.add(s.symbol);
-        }
-        if (initial.size === 0) {
-          const first = strategies.find((s) => !s.isTemplate);
-          if (first) initial.add(first.symbol);
-        }
-        return initial;
-      });
-    }
-  }, [strategies, activeId]);
+  // Symbol groups: hidden/collapsed by default, separated between regular and MTF
+  const [expandedRegularGroups, setExpandedRegularGroups] = useState<Set<string>>(new Set());
+  const [expandedMtfGroups, setExpandedMtfGroups]         = useState<Set<string>>(new Set());
 
   // Template direction sub-groups start collapsed
   const [collapsedTplDir, setCollapsedTplDir] = useState<Set<'long' | 'short'>>(new Set(['long', 'short']));
@@ -824,8 +816,16 @@ export function StrategyList() {
     }
   }
 
-  function toggleGroup(symbol: string) {
-    setExpandedGroups((prev) => {
+  function toggleRegularGroup(symbol: string) {
+    setExpandedRegularGroups((prev) => {
+      const next = new Set(prev);
+      next.has(symbol) ? next.delete(symbol) : next.add(symbol);
+      return next;
+    });
+  }
+
+  function toggleMtfGroup(symbol: string) {
+    setExpandedMtfGroups((prev) => {
       const next = new Set(prev);
       next.has(symbol) ? next.delete(symbol) : next.add(symbol);
       return next;
@@ -1171,12 +1171,12 @@ export function StrategyList() {
         accent="cyan"
       />
       {!mtfCollapsed && (
-        <div className="flex-1 overflow-y-auto py-1 border-b border-surface-border">
+        <div className="py-1 border-b border-surface-border max-h-56 overflow-y-auto">
           <SymbolGroupList
             strategies={mtfStrategies}
             allStrategies={strategies}
-            expandedGroups={expandedGroups}
-            toggleGroup={toggleGroup}
+            expandedGroups={expandedMtfGroups}
+            toggleGroup={toggleMtfGroup}
             clonePopoverSymbol={clonePopoverSymbol}
             setClonePopoverSymbol={setClonePopoverSymbol}
             topicPopoverSymbol={topicPopoverSymbol}
@@ -1213,8 +1213,8 @@ export function StrategyList() {
           <SymbolGroupList
             strategies={regularStrategies}
             allStrategies={strategies}
-            expandedGroups={expandedGroups}
-            toggleGroup={toggleGroup}
+            expandedGroups={expandedRegularGroups}
+            toggleGroup={toggleRegularGroup}
             clonePopoverSymbol={clonePopoverSymbol}
             setClonePopoverSymbol={setClonePopoverSymbol}
             topicPopoverSymbol={topicPopoverSymbol}

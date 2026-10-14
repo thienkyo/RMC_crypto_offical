@@ -339,3 +339,33 @@ describe('resolveStrategyTelegramTopic', () => {
     expect(resolveStrategyTelegramTopic({ enabled: false, name: '' }, 'BTCUSDT')).toEqual({ enabled: false, name: '' });
   });
 });
+
+describe('formatMarketFlushMessage (Option E)', () => {
+  it('formats a consolidated digest for multiple simultaneous signals with macro verdict', async () => {
+    const { formatMarketFlushMessage } = await import('./telegram');
+    const msg = formatMarketFlushMessage({
+      signals: [
+        { strategyName: 'L_BTC', symbol: 'BTCUSDT', timeframe: '4h', direction: 'long', entryPrice: 62000, rating: 5 },
+        { strategyName: 'L_ETH', symbol: 'ETHUSDT', timeframe: '4h', direction: 'long', entryPrice: 2400, rating: 4 },
+        { strategyName: 'S_PAXG', symbol: 'PAXGUSDT', timeframe: '4h', direction: 'short', entryPrice: 2650, rating: 4 },
+      ],
+      macroEvaluation: {
+        verdict: 'CAVEAT',
+        confidence: 'high',
+        summary: 'Market-wide correlation flush following Bitcoin drop.',
+        correlationContext: 'Altcoins showing high selling pressure.',
+        keyRisks: ['Knife-catch hazard', 'Volatility expansion'],
+        recommendedAction: 'Wait for 4h candle close before entering long.',
+      },
+      timestamp: 1770000000000,
+    });
+
+    expect(msg).toContain('MARKET FLUSH DETECTED (3 Signals Fired)');
+    expect(msg).toContain('BTCUSDT');
+    expect(msg).toContain('ETHUSDT');
+    expect(msg).toContain('PAXGUSDT');
+    expect(msg).toContain('CAVEAT');
+    expect(msg).toContain('Wait for 4h candle close');
+  });
+});
+

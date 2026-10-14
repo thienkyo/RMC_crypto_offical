@@ -41,7 +41,7 @@ import type { ConditionSnapshotGroup } from '@/lib/db/signals';
 const CANDLE_WINDOW = 1_000;
 
 export type StrategyNotifyResult =
-  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; debug?: StrategyNotifyDebug }
+  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; closedCandles?: Candle[]; debug?: StrategyNotifyDebug }
   | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error' | 'market_closed'; debug?: StrategyNotifyDebug };
 
 
@@ -56,6 +56,7 @@ export interface StrategyNotifyDebug {
 export async function evaluateStrategySignal(
   strategy: Strategy,
   lastNotifiedTimeMs: number | null,
+  opts?: { skipAi?: boolean },
 ): Promise<StrategyNotifyResult> {
   // ── 0. Market session gate for equities ───────────────────────────────────
   if (isEquitySymbol(strategy.symbol)) {
@@ -192,38 +193,17 @@ export async function evaluateStrategySignal(
   );
 
   // ── 8b. Optional AI Order Evaluation ───────────────────────────────────────
+  // Option C: Strategy must explicitly enable AI Gatekeeper, not skipped by batch runner, and rating >= 4
   let aiEvaluation: import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined;
-  if (shouldRunAiVerdict(rating)) {
-    try {
-      const { isAiSignalGatekeeperEnabled, getAiKey } = await import('@/lib/db/aiSettings');
-      const gatekeeperActive = await isAiSignalGatekeeperEnabled();
-
-      if (gatekeeperActive) {
-        const [geminiKey, claudeKey, openaiKey] = await Promise.all([
-          getAiKey('gemini'),
-          getAiKey('claude'),
-          getAiKey('chatgpt'),
-        ]);
-
-        if (geminiKey || claudeKey || openaiKey) {
-          const { evaluateOrder } = await import('@/lib/ai/evaluator/gateway');
-          aiEvaluation = await evaluateOrder(
-            {
-              symbol: strategy.symbol,
-              timeframe: strategy.timeframe,
-              direction,
-              entryPrice: entryPriceLimit ?? lastClosed.close,
-              stopLossPct: strategy.risk.stopLossPct,
-              takeProfitPct: strategy.risk.takeProfitPct,
-              candleTime: lastClosed.openTime,
-            },
-            closed,
-          );
-        }
-      }
-    } catch (err) {
-      console.warn(`[strategy/notify] AI evaluation failed for ${strategy.id}:`, err);
-    }
+  const isAiEligible = !opts?.skipAi && strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(rating);
+  if (isAiEligible) {
+    aiEvaluation = await runOrderEvaluationForSignal(
+      strategy,
+      direction,
+      entryPriceLimit ?? lastClosed.close,
+      lastClosed.openTime,
+      closed,
+    );
   }
 
   // ── 9. Build Telegram message ──────────────────────────────────────────────
@@ -253,8 +233,52 @@ export async function evaluateStrategySignal(
     candleTime: lastClosed.openTime,
     conditionGroups,
     aiEvaluation,
+    closedCandles: closed,
     debug: fullDebug,
   };
+}
+
+/**
+ * Evaluates a single signal using the multi-LLM gatekeeper.
+ */
+export async function runOrderEvaluationForSignal(
+  strategy: Strategy,
+  direction: 'long' | 'short',
+  entryPrice: number,
+  candleTime: number,
+  closedCandles: Candle[],
+): Promise<import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined> {
+  try {
+    const { isAiSignalGatekeeperEnabled, getAiKey } = await import('@/lib/db/aiSettings');
+    const gatekeeperActive = await isAiSignalGatekeeperEnabled();
+
+    if (gatekeeperActive) {
+      const [geminiKey, claudeKey, openaiKey] = await Promise.all([
+        getAiKey('gemini'),
+        getAiKey('claude'),
+        getAiKey('chatgpt'),
+      ]);
+
+      if (geminiKey || claudeKey || openaiKey) {
+        const { evaluateOrder } = await import('@/lib/ai/evaluator/gateway');
+        return await evaluateOrder(
+          {
+            symbol: strategy.symbol,
+            timeframe: strategy.timeframe,
+            direction,
+            entryPrice,
+            stopLossPct: strategy.risk.stopLossPct,
+            takeProfitPct: strategy.risk.takeProfitPct,
+            candleTime,
+          },
+          closedCandles,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(`[strategy/notify] AI evaluation failed for ${strategy.id}:`, err);
+  }
+  return undefined;
 }
 
 

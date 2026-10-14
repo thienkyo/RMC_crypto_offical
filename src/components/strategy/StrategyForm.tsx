@@ -495,6 +495,37 @@ export function StrategyForm({ strategy: initial }: Props) {
                       )}
                     </div>
                   )}
+
+                  {/* AI Gatekeeper Opt-in */}
+                  <div className="pt-2 border-t border-surface-border/40">
+                    <label className="flex items-start gap-3 cursor-pointer select-none">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={draft.aiGatekeeperEnabled ?? false}
+                        onClick={() => patch('aiGatekeeperEnabled', !(draft.aiGatekeeperEnabled ?? false))}
+                        className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5 ${
+                          draft.aiGatekeeperEnabled ? 'bg-indigo-500' : 'bg-surface-border'
+                        }`}
+                      >
+                        <span className={`block w-3.5 h-3.5 rounded-full bg-white shadow transition-transform mx-0.5 ${
+                          draft.aiGatekeeperEnabled ? 'translate-x-4' : 'translate-x-0'
+                        }`} />
+                      </button>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-xs text-text-primary flex items-center gap-1.5">
+                          <span>🧠</span>
+                          <span>Enable AI Gatekeeper Review</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                            LLM Verdict
+                          </span>
+                        </span>
+                        <span className="text-[11px] text-text-muted leading-relaxed">
+                          When checked, 4★+ signals trigger an AI order evaluation with technical confluence and whale sentiment verdict. Uncheck to keep standard alerts without AI costs.
+                        </span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
               </>
             )}

@@ -188,6 +188,12 @@ export interface Strategy {
    * Telegram topic configuration for grouping signals.
    */
   telegramTopic?: { enabled: boolean; name: string };
+  /**
+   * When true, this strategy is eligible for AI Gatekeeper evaluation on signals.
+   * If false, signal alerts are sent as standard alerts without LLM evaluation.
+   * Defaults to false (opt-in).
+   */
+  aiGatekeeperEnabled?: boolean;
   /** Created via the MTF section's + button; drives left-rail grouping + per-condition TF UI. */
   isMtf?: boolean;
 }

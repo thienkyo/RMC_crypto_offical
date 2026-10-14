@@ -786,3 +786,64 @@ export async function sendAiEvaluationToTelegram(
     ? { ok: true, delivered }
     : { ok: false, error: firstError ?? 'Failed to send message to Telegram' };
 }
+
+/**
+ * Format Option E Market Flush consolidated digest.
+ */
+export function formatMarketFlushMessage(opts: {
+  signals: Array<{
+    strategyName: string;
+    symbol: string;
+    timeframe: string;
+    direction: 'long' | 'short';
+    entryPrice: number;
+    rating: number;
+  }>;
+  macroEvaluation: import('@/lib/ai/evaluator/macro').MacroMarketEvaluation;
+  timestamp: number;
+}): string {
+  const { signals, macroEvaluation, timestamp } = opts;
+  const longCount = signals.filter((s) => s.direction === 'long').length;
+  const shortCount = signals.filter((s) => s.direction === 'short').length;
+
+  const verdictEmoji =
+    macroEvaluation.verdict === 'PASS'
+      ? '🟢 PASS'
+      : macroEvaluation.verdict === 'CAVEAT'
+      ? '🟡 CAVEAT'
+      : '🔴 REJECT';
+
+  const lines: string[] = [
+    `🚨 <b>MARKET FLUSH DETECTED (${signals.length} Signals Fired)</b>`,
+    `🕯 <b>Time:</b> ${fmtLocal(timestamp)} | <b>Breakdown:</b> ${longCount} Long / ${shortCount} Short`,
+    '',
+    `📋 <b>Triggered Strategies:</b>`,
+  ];
+
+  for (const s of signals) {
+    const isLong = s.direction === 'long';
+    const stars = '⭐'.repeat(Math.min(7, Math.max(1, s.rating)));
+    lines.push(
+      `• <b>${s.symbol}</b> (${s.timeframe}): ${isLong ? '🟢 LONG' : '🔴 SHORT'} @ $${s.entryPrice.toLocaleString('en-US')} | ${stars} ("${s.strategyName}")`
+    );
+  }
+
+  lines.push('');
+  lines.push(`🧠 <b>AI Macro Assessment:</b> ${verdictEmoji} (${macroEvaluation.confidence.toUpperCase()})`);
+  lines.push(`💡 <i>${macroEvaluation.summary}</i>`);
+
+  if (macroEvaluation.correlationContext) {
+    lines.push(`📊 <b>Correlation:</b> ${macroEvaluation.correlationContext}`);
+  }
+
+  if (macroEvaluation.keyRisks && macroEvaluation.keyRisks.length > 0) {
+    lines.push(`⚠️ <b>Key Risks:</b> ${macroEvaluation.keyRisks.join(' • ')}`);
+  }
+
+  if (macroEvaluation.recommendedAction) {
+    lines.push(`🎯 <b>Action:</b> ${macroEvaluation.recommendedAction}`);
+  }
+
+  return lines.join('\n');
+}
+

@@ -48,6 +48,8 @@ function useAllSignals() {
 interface StrategyBreakdown {
   strategyId:   string;
   strategyName: string;
+  symbol:       string;
+  timeframe:    string;
   total:   number;
   taken:   number;
   wins:    number;
@@ -101,6 +103,8 @@ function buildBreakdown(signals: StrategySignalRow[]): StrategyBreakdown[] {
     return {
       strategyId:   rows[0]!.strategy_id,
       strategyName: rows[0]!.strategy_name,
+      symbol:       rows[0]!.symbol,
+      timeframe:    rows[0]!.timeframe,
       total:    m.total,
       taken,
       wins:     m.wins,
@@ -504,7 +508,8 @@ export function PortfolioOverview() {
             <table className="w-full text-[11px] font-mono border-collapse">
               <thead>
                 <tr className="text-[9px] text-text-muted uppercase tracking-wider border-b border-surface-border">
-                  <th className="text-left pb-1 pr-4 font-normal">Name</th>
+                  <th className="text-left pb-1 pr-3 font-normal">Name</th>
+                  <th className="text-left pb-1 pr-4 font-normal w-24">Symbol</th>
                   <th className="text-right pb-1 pr-4 font-normal w-12">Sigs</th>
                   <th className="text-right pb-1 pr-4 font-normal w-14">WR%</th>
                   <th className="text-right pb-1 font-normal w-16">P&amp;L</th>
@@ -513,8 +518,11 @@ export function PortfolioOverview() {
               <tbody>
                 {breakdown.map((row) => (
                   <tr key={row.strategyId} className="border-b border-surface-border/40 hover:bg-surface-2">
-                    <td className="py-1.5 pr-4 text-text-secondary truncate max-w-[200px]">
+                    <td className="py-1.5 pr-3 text-text-secondary truncate max-w-[170px]" title={row.strategyName}>
                       {row.strategyName}
+                    </td>
+                    <td className="py-1.5 pr-4 text-text-muted text-[10px] whitespace-nowrap">
+                      {row.symbol} <span className="opacity-60">· {row.timeframe}</span>
                     </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums text-text-muted">
                       {row.total}

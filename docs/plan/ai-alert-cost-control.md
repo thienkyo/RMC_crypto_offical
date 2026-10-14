@@ -1,8 +1,8 @@
-# Plan: AI Signal Alert Cost & Flood Control
+# Plan: AI Signal Alert Cost & Flood Control (Options E + A + C)
 
-> Status: PROPOSED — Under Review
-> Date: 2026-10-03
-> Author: Antigravity & Kyo
+> Status: APPROVED ARCHITECTURE — Ready for Implementation  
+> Date: 2026-10-03  
+> Author: Antigravity & Kyo  
 
 ## 1. Problem Statement & Context
 
@@ -19,18 +19,16 @@ In the current architecture:
 
 ## 2. Objectives & Principles
 
-1. **Hard Cost Ceiling**: Prevent mass market flushes from draining API budgets in a single candle.
-2. **Prioritize Conviction**: Ensure the highest quality setups (e.g. 5★ / 6★ or core assets like BTC/ETH) get AI reviews first.
-3. **No Lost Signals**: Strategies that do not receive an AI evaluation must still send standard Telegram alerts (without the AI comment block) so the user never misses an entry signal.
-4. **User Granular Control**: Allow the user to decide which strategies are eligible for AI reviews, and configure limits directly from the Settings UI.
+1. **Market Flush Protection (Option E)**: When ≥ 3 strategies fire in the same cycle, collapse the flood into **1 Consolidated Market Digest** with **1 Macro AI Evaluation**, saving 80–95% of API tokens and stopping Telegram spam.
+2. **Per-Cycle Rate Limit (Option A)**: For normal isolated cycles (< 3 signals), cap individual AI reviews to **Max N (default 2)** per cycle, ranked by conviction (stars/score).
+3. **Per-Strategy Precision (Option C)**: Allow the user to toggle which strategies are allowed to invoke AI Gatekeeper via an explicit checkbox.
+4. **No Lost Signals**: All triggered strategies are either listed in the consolidated digest or sent as standard signals.
 
 ---
 
-## 3. Architecture & Design
+## 3. Architecture & Unified Pipeline
 
-### Phase 1: Core Controls (High Impact & Immediate Value)
-
-#### 3.1 Per-Strategy AI Gatekeeper Opt-In
+### 3.1 Option C: Per-Strategy AI Gatekeeper Opt-In
 Add an explicit toggle to each strategy definition:
 ```ts
 // src/types/strategy.ts
@@ -39,69 +37,82 @@ export interface Strategy {
   /**
    * When true, this strategy is eligible for AI Gatekeeper evaluation on signals.
    * If false, signal alerts are sent as standard alerts without LLM evaluation.
-   * Defaults to false (or opt-in).
+   * Defaults to false (opt-in).
    */
   aiGatekeeperEnabled?: boolean;
 }
 ```
-* **UI**: In the strategy editor (`StrategyForm.tsx`), under the Telegram alert settings, add a checkbox:
-  `[ ] Run AI Gatekeeper Analysis (LLM review & verdict on 4+ star signals)`.
-* **Benefit**: The user can reserve AI evaluations for high-conviction swing strategies or major pairs (BTC, ETH), leaving secondary or experimental altcoin strategies on standard notifications.
+* **UI**: In the strategy editor (`StrategyForm.tsx`) under Telegram topic & notification settings, add a checkbox:  
+  `[ ] Enable AI Gatekeeper Review (LLM evaluation & verdict on signal trigger)`.
+* **Benefit**: Experimental, scalping, or minor altcoin strategies won't trigger expensive AI calls unless explicitly enabled.
 
-#### 3.2 Per-Cron Cycle Evaluation Cap & Priority Queue
-In `src/app/api/cron/check-alerts/route.ts`, throttle how many AI evaluations can occur per cron cycle (default: **Max 2 per candle/minute**):
-1. Evaluate strategy signal conditions for all strategies first.
-2. Identify all strategies that fired and are eligible for AI review (`aiGatekeeperEnabled && rating >= minStars`).
-3. **Sort/Rank by Priority**:
-   - Primary: Highest signal star rating (`rating` descending: 6★ > 5★ > 4★).
-   - Secondary: Score / Major asset priority (e.g. BTCUSDT first).
-4. **Partition**:
-   - **Top N (e.g. 2)**: Execute `evaluateOrder(...)` and attach full AI comments.
-   - **Remaining**: Send standard Telegram signal message without AI evaluation, with an optional tag: `[AI Evaluation: Skipped (Cycle cap reached)]`.
+### 3.2 The Unified Cron Decision Engine (`check-alerts`)
 
-#### 3.3 Configurable Settings UI
-In `src/app/settings/page.tsx` & `SettingsForm.tsx`, add controls to the AI Gatekeeper section:
-* **Max AI Evaluations per Cron Run**: Default `2` (Dropdown: 1, 2, 3, 5, Unlimited).
-* **Minimum Star Rating for AI**: Default `4★` (Dropdown: 4★, 5★, 6★).
-* Store in the existing `settings` key-value table:
-  - `ai_gatekeeper_max_per_cycle`
-  - `ai_gatekeeper_min_stars`
+In `src/app/api/cron/check-alerts/route.ts`, signal processing runs through a two-branch router:
+
+```
+cron checks all strategies -> M signals fired:
+
+IF M >= 3 (Market Flush):
+  -> BRANCH 1: Option E (Consolidated Market Digest)
+  -> Make 1 Macro AI Evaluation call (evaluating the broader market move)
+  -> Dispatch 1 single formatted Telegram message containing:
+       - Header: 🚨 MARKET FLUSH: M Strategies Triggered Simultaneously
+       - Breakdown table: [BTC | Long | 5★], [ETH | Long | 4★], [PAXG | Short | 4★]
+       - Unified AI Market Analysis & Risk Verdict
+
+IF M < 3 (Isolated Signals):
+  -> BRANCH 2: Option A + C (Individual Signal Handling)
+  -> Filter strategies having (aiGatekeeperEnabled === true && rating >= 4)
+  -> If candidates > MaxCycleCap (default 2):
+       - Top candidates get full individual AI evaluation
+       - Remaining candidates get standard Telegram alert without AI comment
+  -> Dispatch individual Telegram messages as today
+```
+
+### 3.3 Option E: Market Flush Digest Message Format
+
+```text
+🚨 MARKET FLUSH DETECTED (5 Signals Fired)
+Time: 2026-10-03 04:00 UTC | Timeframe: 4h
+
+📋 Triggered Strategies:
+• BTCUSDT: RSI Oversold (🟢 LONG | Limit $62,100 | 5★)
+• ETHUSDT: EMA Cross (🟢 LONG | Market $2,420 | 4★)
+• SOLUSDT: Support Bounce (🟢 LONG | Market $135 | 4★)
+• PAXGUSDT: Safe Haven (🔴 SHORT | Market $2,650 | 4★)
+• AVAXUSDT: Oversold (🟢 LONG | Market $24.50 | 4★)
+
+🧠 AI Macro Market Assessment:
+Verdict: 🟡 CAVEAT — Correlation Flush
+Summary: Bitcoin breakdown triggered cascaded liquidations across altcoins.
+High volatility spike (ATR +40%). Long setups carry knife-catch risk.
+Wait for 4h candle close confirmation before entering altcoin longs.
+```
 
 ---
 
-### Phase 2: Enhanced Circuit Breaker (Optional / Follow-up)
+## 4. Implementation Steps
 
-#### 3.4 Hourly Velocity Circuit Breaker
-* Track the count of AI evaluations conducted in the rolling hour.
-* If AI evaluations exceed an hourly cap (e.g. `10 evaluations / hour`), automatically pause further AI calls until the next hour, sending standard alerts in the interim.
-
-#### 3.5 Market Flush Aggregation (Batch Digest)
-* When ≥ 3 strategies fire in the same minute:
-  - Send 1 consolidated Telegram digest:
-    `🚨 Market Flush Alert: 5 strategies fired simultaneously (BTC, ETH, SOL, AVAX, DOGE)`
-  - Run **1** Macro market evaluation instead of 5 individual ones, saving 80% of tokens while delivering better macro context.
-
----
-
-## 4. Implementation Breakdown
-
-| Component | Changes Required |
-| :--- | :--- |
-| `src/types/strategy.ts` | Add `aiGatekeeperEnabled?: boolean` to `Strategy` interface. |
-| `src/components/strategy/StrategyForm.tsx` | Add `Run AI Gatekeeper Analysis` toggle in Strategy notify section. |
-| `src/lib/strategy/rating.ts` | Update `shouldRunAiVerdict` to accept dynamic `minRating` parameter. |
-| `src/lib/db/aiSettings.ts` | Add getters for `ai_gatekeeper_max_per_cycle` and `ai_gatekeeper_min_stars`. |
-| `src/components/settings/SettingsForm.tsx` | Add inputs for Max AI evals per cycle and Min Star threshold. |
-| `src/app/api/settings/route.ts` | Expose and persist the two new settings keys. |
-| `src/app/api/cron/check-alerts/route.ts` | Reorder signal processing: evaluate conditions -> rank candidates -> execute top N AI evaluations -> dispatch Telegram messages. |
+1. **Data Model (`src/types/strategy.ts`)**:
+   - Add `aiGatekeeperEnabled?: boolean` to `Strategy`.
+2. **Strategy Form UI (`src/components/strategy/StrategyForm.tsx`)**:
+   - Add toggle for `aiGatekeeperEnabled` next to Telegram notification settings.
+3. **Macro Evaluator Service (`src/lib/ai/evaluator/macro.ts`)**:
+   - Lightweight gateway function `evaluateMarketFlush(signals, btcCandles)` that prompts LLM for a high-level correlation analysis.
+4. **Telegram Formatter (`src/lib/alerts/telegram.ts`)**:
+   - Add `formatMarketFlushMessage(...)` for Option E digest layout.
+5. **Cron Orchestrator (`src/app/api/cron/check-alerts/route.ts`)**:
+   - Implement the threshold router (M ≥ 3 -> Digest vs M < 3 -> Individual with Cap).
+6. **Verification & Tests**:
+   - Test single signal execution (Option C + A).
+   - Test simulated 5-signal market flush (Option E).
 
 ---
 
 ## 5. Acceptance Criteria
 
-1. **Per-Strategy Control**: Strategies with `aiGatekeeperEnabled = false` NEVER invoke LLM evaluation, regardless of star rating.
-2. **Cycle Cap Enforcement**: When 10 strategies with `aiGatekeeperEnabled = true` fire at once, only the top `N` (configured max, e.g. 2) trigger LLM evaluation calls.
-3. **No Lost Alerts**: All 10 strategies still deliver their Telegram alerts; the lower-ranked 8 deliver standard signal messages without failing or being skipped.
-4. **Dynamic Threshold**: Changing the Min Star Rating to 5★ in Settings immediately prevents 4★ signals from invoking LLM calls without requiring code changes or server restarts.
-5. **Zero Breaking Changes**: Existing strategies without `aiGatekeeperEnabled` field gracefully default to existing behavior or safe default.
-6. **Typecheck & Tests**: `npm run typecheck` and test suites pass cleanly.
+1. **Option C**: A strategy with `aiGatekeeperEnabled = false` never triggers an individual LLM call.
+2. **Option E**: When 5 strategies fire at the same candle, only **1 Telegram message** is sent and only **1 Macro AI call** is made.
+3. **Option A**: When 2 strategies fire in an isolated move, individual AI evaluations run up to the cycle cap without creating a digest.
+4. **Zero Lost Signals**: Every fired strategy is recorded in the DB and communicated to Telegram (either in the Digest or as individual alert).

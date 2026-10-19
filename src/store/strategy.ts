@@ -92,12 +92,12 @@ interface StrategyState {
    * Set all non-template strategies in a symbol group to the given active state.
    * If `active` is undefined, it flips: if ANY are on → turn all off; if all off → turn all on.
    */
-  setGroupActive: (symbol: string, active?: boolean) => void;
+  setGroupActive: (symbol: string, active?: boolean, isMtf?: boolean) => void;
   /**
    * Set the Telegram topic configuration for all non-template strategies in a symbol group.
    * Returns the updated strategies so the caller can persist them to DB.
    */
-  setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }) => Strategy[];
+  setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }, isMtf?: boolean) => Strategy[];
   /** Clone a strategy with a new id and " (copy)" suffix. Returns the copy. */
   duplicateStrategy: (id: string) => Strategy | undefined;
   /**
@@ -107,7 +107,7 @@ interface StrategyState {
    * (the symbol change is visible from the group it lands in).
    * Returns the cloned strategies (empty array if nothing was cloned).
    */
-  copyGroupToSymbol: (fromSymbol: string, targetSymbol: string) => Strategy[];
+  copyGroupToSymbol: (fromSymbol: string, targetSymbol: string, isMtf?: boolean) => Strategy[];
   /**
    * Clone a single strategy to a different symbol.
    * Copies all conditions, risk params, and action verbatim; assigns a new id,
@@ -223,25 +223,30 @@ export const useStrategyStore = create<StrategyState>()(
           ),
         })),
 
-      setGroupActive: (symbol, active) =>
+      setGroupActive: (symbol, active, isMtf) =>
         set((s) => {
-          const group = s.strategies.filter((x) => !x.isTemplate && x.symbol === symbol);
+          const group = s.strategies.filter(
+            (x) => !x.isTemplate && x.symbol === symbol && (isMtf === undefined || (isMtf ? !!x.isMtf : !x.isMtf)),
+          );
           // If active is unspecified, flip: any on → all off; all off → all on
           const target = active ?? !group.some((x) => x.isActive ?? false);
+          const targetIds = new Set(group.map((x) => x.id));
           return {
             strategies: s.strategies.map((x) =>
-              !x.isTemplate && x.symbol === symbol ? { ...x, isActive: target } : x,
+              targetIds.has(x.id) ? { ...x, isActive: target } : x,
             ),
           };
         }),
 
-      setGroupTelegramTopic: (symbol, topic) => {
+      setGroupTelegramTopic: (symbol, topic, isMtf) => {
         let updatedList: Strategy[] = [];
         set((s) => {
           const now = Date.now();
           const targetIds = new Set(
             s.strategies
-              .filter((x) => !x.isTemplate && x.symbol === symbol)
+              .filter(
+                (x) => !x.isTemplate && x.symbol === symbol && (isMtf === undefined || (isMtf ? !!x.isMtf : !x.isMtf)),
+              )
               .map((x) => x.id),
           );
           if (targetIds.size === 0) return {};
@@ -286,12 +291,12 @@ export const useStrategyStore = create<StrategyState>()(
         return result;
       },
 
-      copyGroupToSymbol: (fromSymbol, targetSymbol) => {
+      copyGroupToSymbol: (fromSymbol, targetSymbol, isMtf) => {
         const sym = targetSymbol.toUpperCase().trim();
         let clones: Strategy[] = [];
         set((s) => {
           const sources = s.strategies.filter(
-            (x) => !x.isTemplate && x.symbol === fromSymbol,
+            (x) => !x.isTemplate && x.symbol === fromSymbol && (isMtf === undefined || (isMtf ? !!x.isMtf : !x.isMtf)),
           );
           if (!sym || sym === fromSymbol || sources.length === 0) return {};
           const copies: Strategy[] = sources.map((original) => ({

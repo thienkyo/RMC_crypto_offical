@@ -740,10 +740,10 @@ export function StrategyList() {
 
   // Template direction sub-groups start collapsed
   const [collapsedTplDir, setCollapsedTplDir] = useState<Set<'long' | 'short'>>(new Set(['long', 'short']));
-  // Which symbol group's clone popover is open (null = none)
-  const [clonePopoverSymbol, setClonePopoverSymbol]   = useState<string | null>(null);
-  // Which symbol group's telegram topic popover is open (null = none)
-  const [topicPopoverSymbol, setTopicPopoverSymbol]   = useState<string | null>(null);
+  // Which symbol group's clone popover is open (null = none, format: "mtf:SYMBOL" or "reg:SYMBOL")
+  const [clonePopoverKey, setClonePopoverKey]         = useState<string | null>(null);
+  // Which symbol group's telegram topic popover is open (null = none, format: "mtf:SYMBOL" or "reg:SYMBOL")
+  const [topicPopoverKey, setTopicPopoverKey]         = useState<string | null>(null);
   // Import feedback banner — null = hidden (auto-clears after 3 s)
   const [importFeedback, setImportFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   // True while import is pushing strategies to DB
@@ -1173,14 +1173,15 @@ export function StrategyList() {
       {!mtfCollapsed && (
         <div className="py-1 border-b border-surface-border max-h-56 overflow-y-auto">
           <SymbolGroupList
+            isMtf={true}
             strategies={mtfStrategies}
             allStrategies={strategies}
             expandedGroups={expandedMtfGroups}
             toggleGroup={toggleMtfGroup}
-            clonePopoverSymbol={clonePopoverSymbol}
-            setClonePopoverSymbol={setClonePopoverSymbol}
-            topicPopoverSymbol={topicPopoverSymbol}
-            setTopicPopoverSymbol={setTopicPopoverSymbol}
+            clonePopoverKey={clonePopoverKey}
+            setClonePopoverKey={setClonePopoverKey}
+            topicPopoverKey={topicPopoverKey}
+            setTopicPopoverKey={setTopicPopoverKey}
             activeId={activeId}
             setActiveStrategy={setActiveStrategy}
             handleToggle={handleToggle}
@@ -1211,14 +1212,15 @@ export function StrategyList() {
       {!strategiesCollapsed && (
         <div className="flex-1 overflow-y-auto py-1">
           <SymbolGroupList
+            isMtf={false}
             strategies={regularStrategies}
             allStrategies={strategies}
             expandedGroups={expandedRegularGroups}
             toggleGroup={toggleRegularGroup}
-            clonePopoverSymbol={clonePopoverSymbol}
-            setClonePopoverSymbol={setClonePopoverSymbol}
-            topicPopoverSymbol={topicPopoverSymbol}
-            setTopicPopoverSymbol={setTopicPopoverSymbol}
+            clonePopoverKey={clonePopoverKey}
+            setClonePopoverKey={setClonePopoverKey}
+            topicPopoverKey={topicPopoverKey}
+            setTopicPopoverKey={setTopicPopoverKey}
             activeId={activeId}
             setActiveStrategy={setActiveStrategy}
             handleToggle={handleToggle}
@@ -1241,14 +1243,15 @@ export function StrategyList() {
 // ── Symbol group component ───────────────────────────────────────────────────
 
 interface SymbolGroupListProps {
+  isMtf: boolean;
   strategies: Strategy[];
   allStrategies: Strategy[];
   expandedGroups: Set<string>;
   toggleGroup: (symbol: string) => void;
-  clonePopoverSymbol: string | null;
-  setClonePopoverSymbol: (sym: string | null) => void;
-  topicPopoverSymbol: string | null;
-  setTopicPopoverSymbol: (sym: string | null) => void;
+  clonePopoverKey: string | null;
+  setClonePopoverKey: (key: string | null) => void;
+  topicPopoverKey: string | null;
+  setTopicPopoverKey: (key: string | null) => void;
   activeId: string | null;
   setActiveStrategy: (id: string) => void;
   handleToggle: (s: Strategy) => void;
@@ -1256,16 +1259,16 @@ interface SymbolGroupListProps {
   duplicateStrategy: (id: string) => Strategy | undefined;
   cloneStrategyToSymbol: (id: string, target: string) => Strategy | undefined;
   mergeStrategy: (sources: string[], dest: string) => Strategy | undefined;
-  setGroupActive: (symbol: string) => void;
-  setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }) => Strategy[];
-  copyGroupToSymbol: (symbol: string, target: string) => Strategy[];
+  setGroupActive: (symbol: string, active?: boolean, isMtf?: boolean) => void;
+  setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }, isMtf?: boolean) => Strategy[];
+  copyGroupToSymbol: (symbol: string, target: string, isMtf?: boolean) => Strategy[];
   setStrategiesCollapsed: (b: boolean) => void;
   allSymbols: string[];
 }
 
 function SymbolGroupList({
-  strategies, allStrategies, expandedGroups, toggleGroup, clonePopoverSymbol, setClonePopoverSymbol,
-  topicPopoverSymbol, setTopicPopoverSymbol, activeId, setActiveStrategy, handleToggle, handleDelete,
+  isMtf, strategies, allStrategies, expandedGroups, toggleGroup, clonePopoverKey, setClonePopoverKey,
+  topicPopoverKey, setTopicPopoverKey, activeId, setActiveStrategy, handleToggle, handleDelete,
   duplicateStrategy, cloneStrategyToSymbol, mergeStrategy, setGroupActive, setGroupTelegramTopic,
   copyGroupToSymbol, setStrategiesCollapsed, allSymbols
 }: SymbolGroupListProps) {
@@ -1285,15 +1288,17 @@ function SymbolGroupList({
   return (
     <>
       {Array.from(groups.entries()).map(([symbol, list]) => {
+        const groupKey          = `${isMtf ? 'mtf' : 'reg'}:${symbol}`;
         const isCollapsed       = !expandedGroups.has(symbol);
         const activeLongs       = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_long').length;
         const activeShorts      = list.filter((s) => (s.isActive ?? false) && s.action.type === 'enter_short').length;
         const anyActive         = activeLongs + activeShorts > 0;
-        const popoverOpen       = clonePopoverSymbol === symbol;
-        const topicPopoverOpen  = topicPopoverSymbol === symbol;
+        const popoverOpen       = clonePopoverKey === groupKey;
+        const topicPopoverOpen  = topicPopoverKey === groupKey;
         const enabledTopics     = list.filter((s) => s.telegramTopic?.enabled);
         const hasTopicEnabled   = enabledTopics.length > 0;
-        const firstTopicName    = enabledTopics.find((s) => s.telegramTopic?.name)?.telegramTopic?.name || symbol;
+        const firstTopicName    = enabledTopics.find((s) => s.telegramTopic?.name)?.telegramTopic?.name ||
+                                  list.find((s) => s.telegramTopic?.name)?.telegramTopic?.name || symbol;
 
         const sorted = [...list].sort((a, b) => {
           const aLong = a.action.type === 'enter_long' ? 0 : 1;
@@ -1328,7 +1333,7 @@ function SymbolGroupList({
                   e.stopPropagation();
                   const nextActive = !anyActive;
                   const updated = list.map((s) => ({ ...s, isActive: nextActive }));
-                  setGroupActive(symbol);
+                  setGroupActive(symbol, nextActive, isMtf);
                   import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
                     pushManyStrategiesToDb(updated).catch(err => console.warn('[group-toggle] sync failed:', err));
                   });
@@ -1343,8 +1348,8 @@ function SymbolGroupList({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setTopicPopoverSymbol(topicPopoverOpen ? null : symbol);
-                  if (clonePopoverSymbol) setClonePopoverSymbol(null);
+                  setTopicPopoverKey(topicPopoverOpen ? null : groupKey);
+                  if (clonePopoverKey) setClonePopoverKey(null);
                 }}
                 title={
                   hasTopicEnabled
@@ -1366,8 +1371,8 @@ function SymbolGroupList({
               <button
                 type="button"
                 onClick={() => {
-                  setClonePopoverSymbol(popoverOpen ? null : symbol);
-                  if (topicPopoverSymbol) setTopicPopoverSymbol(null);
+                  setClonePopoverKey(popoverOpen ? null : groupKey);
+                  if (topicPopoverKey) setTopicPopoverKey(null);
                 }}
                 title={`Clone all ${list.length} to another symbol`}
                 className={`btn-icon-xs flex-shrink-0 transition-colors
@@ -1382,7 +1387,7 @@ function SymbolGroupList({
                 allSymbols={allSymbols}
                 count={list.length}
                 onClone={(target) => {
-                  const copies = copyGroupToSymbol(symbol, target);
+                  const copies = copyGroupToSymbol(symbol, target, isMtf);
                   setStrategiesCollapsed(false);
                   if (copies.length > 0) {
                     import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
@@ -1390,7 +1395,7 @@ function SymbolGroupList({
                     });
                   }
                 }}
-                onClose={() => setClonePopoverSymbol(null)}
+                onClose={() => setClonePopoverKey(null)}
               />
             )}
             {topicPopoverOpen && (
@@ -1402,7 +1407,7 @@ function SymbolGroupList({
                   name: firstTopicName,
                 }}
                 onApply={(topic) => {
-                  const updated = setGroupTelegramTopic(symbol, topic);
+                  const updated = setGroupTelegramTopic(symbol, topic, isMtf);
                   if (updated.length > 0) {
                     import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
                       pushManyStrategiesToDb(updated).catch((err) =>
@@ -1411,7 +1416,7 @@ function SymbolGroupList({
                     });
                   }
                 }}
-                onClose={() => setTopicPopoverSymbol(null)}
+                onClose={() => setTopicPopoverKey(null)}
               />
             )}
             {!isCollapsed && sorted.map((s) => (

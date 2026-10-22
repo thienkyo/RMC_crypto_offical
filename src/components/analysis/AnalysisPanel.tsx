@@ -31,6 +31,7 @@ import type {
   EvaluationStatus,
 } from '@/lib/ai/evaluator/types';
 import type { AiHistoryItem } from '@/app/api/ai/history/route';
+import type { TradeScreenshotOverlay } from '@/components/chart/PriceChart';
 
 // ─── Theme & Styling Config ──────────────────────────────────────────────────
 
@@ -100,6 +101,33 @@ function formatTimeAgo(dateString: string): string {
 
 function isWithin3Days(dateString: string): boolean {
   return Date.now() - new Date(dateString).getTime() <= THREE_DAYS_MS;
+}
+
+function buildTradeOverlay(
+  direction: 'long' | 'short',
+  entryPrice: number,
+  stopLossPctStr: string,
+  takeProfitPctStr: string,
+): TradeScreenshotOverlay | undefined {
+  if (!entryPrice || entryPrice <= 0) return undefined;
+  const slPct = stopLossPctStr ? parseFloat(stopLossPctStr) : 0;
+  const tpPct = takeProfitPctStr ? parseFloat(takeProfitPctStr) : 0;
+  return {
+    entryPrice,
+    stopLossPrice:
+      slPct > 0
+        ? direction === 'long'
+          ? entryPrice * (1 - slPct / 100)
+          : entryPrice * (1 + slPct / 100)
+        : undefined,
+    takeProfitPrice:
+      tpPct > 0
+        ? direction === 'long'
+          ? entryPrice * (1 + tpPct / 100)
+          : entryPrice * (1 - tpPct / 100)
+        : undefined,
+    direction,
+  };
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -291,8 +319,8 @@ function AiTradePlanCard({
 // ─── Main Unified Component ──────────────────────────────────────────────────
 
 interface Props {
-  /** Returns a base64 PNG of the current chart canvas, or null if not ready. */
-  getScreenshot: () => string | null;
+  /** Returns a base64 PNG of the current chart canvas (with optional Entry/SL/TP overlay), or null if not ready. */
+  getScreenshot: (overlay?: TradeScreenshotOverlay) => string | null;
 }
 
 export function AnalysisPanel({ getScreenshot }: Props) {
@@ -414,7 +442,12 @@ export function AnalysisPanel({ getScreenshot }: Props) {
     setTelegramError(null);
     setActiveHistoryItem(null); // Clear historical label for a live run
 
-    const imageBase64 = getScreenshot();
+    const manualOverlay =
+      setupMode === 'manual'
+        ? buildTradeOverlay(direction, activeEntryPrice, stopLossPct, takeProfitPct)
+        : undefined;
+
+    const imageBase64 = getScreenshot(manualOverlay);
 
     try {
       let hadSuccess = false;
@@ -565,7 +598,10 @@ export function AnalysisPanel({ getScreenshot }: Props) {
     setTelegramError(null);
 
     try {
-      const imageBase64 = getScreenshot();
+      const activeDir = activeHistoryItem?.direction ?? direction;
+      const imageBase64 = getScreenshot(
+        buildTradeOverlay(activeDir, activeEntryPrice, stopLossPct, takeProfitPct),
+      );
 
       const payload = {
         symbol,
@@ -1212,6 +1248,35 @@ export function AnalysisPanel({ getScreenshot }: Props) {
             {/* 3. Confluence Breakdown: Technical & Sentiment (Evaluator) */}
             {evalResult && (
               <div className="flex flex-col gap-2">
+                {/* Chain-of-Thought Reasoning Steps (if present) */}
+                {evalResult.analysisSteps && (
+                  <div className="p-2.5 bg-surface rounded-lg border border-surface-border flex flex-col gap-1.5">
+                    <span className="text-[10px] font-mono uppercase font-bold text-text-muted tracking-wider">
+                      🧠 Step-by-Step Quantitative Reasoning
+                    </span>
+                    <div className="text-[10px] font-mono space-y-1.5 text-text-secondary leading-relaxed">
+                      {evalResult.analysisSteps.trendAndHtfConfluence && (
+                        <div className="p-1.5 rounded bg-surface-2/60 border border-surface-border/40">
+                          <span className="text-accent font-semibold uppercase">1. Trend & HTF: </span>
+                          {evalResult.analysisSteps.trendAndHtfConfluence}
+                        </div>
+                      )}
+                      {evalResult.analysisSteps.indicatorAndVolumeFlow && (
+                        <div className="p-1.5 rounded bg-surface-2/60 border border-surface-border/40">
+                          <span className="text-accent font-semibold uppercase">2. Flow & Derivatives: </span>
+                          {evalResult.analysisSteps.indicatorAndVolumeFlow}
+                        </div>
+                      )}
+                      {evalResult.analysisSteps.riskRewardAndVolatility && (
+                        <div className="p-1.5 rounded bg-surface-2/60 border border-surface-border/40">
+                          <span className="text-accent font-semibold uppercase">3. ATR & Sizing: </span>
+                          {evalResult.analysisSteps.riskRewardAndVolatility}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Technical Alignment */}
                 <div className="p-2.5 bg-surface rounded-lg border border-surface-border">
                   <div className="flex items-center justify-between mb-1.5">

@@ -4,9 +4,9 @@ import { useRef, useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { Watchlist } from '@/components/watchlist/Watchlist';
 import { AnalysisPanel } from '@/components/analysis/AnalysisPanel';
+import type { TradeScreenshotOverlay } from '@/components/chart/PriceChart';
 import { NewsFeed } from '@/components/news/NewsFeed';
 import { AlertManager } from '@/components/alerts/AlertManager';
-import { useAlertPoller } from '@/hooks/useAlertPoller';
 import { useLayoutStore } from '@/store/layout';
 
 /**
@@ -35,12 +35,10 @@ type RailTab = 'analysis' | 'news' | 'alerts';
  * Keyboard shortcuts: [ = toggle left rail, ] = toggle right rail.
  */
 export default function Page() {
-  const captureRef = useRef<(() => string | null) | null>(null);
+  const captureRef = useRef<((overlay?: TradeScreenshotOverlay) => string | null) | null>(null);
   const [railTab, setRailTab] = useState<RailTab>('analysis');
 
   const { leftRailVisible, rightRailVisible, toggleLeft, toggleRight } = useLayoutStore();
-
-  useAlertPoller();
 
   // Keyboard shortcuts: [ / ] — ignored while typing in inputs.
   useEffect(() => {
@@ -103,7 +101,7 @@ export default function Page() {
 
         {/* Panel content — all stay mounted to avoid re-fetch on tab switch */}
         <div className={`flex-1 overflow-y-auto overflow-x-hidden ${railTab === 'analysis' ? 'block' : 'hidden'}`}>
-          <AnalysisPanel getScreenshot={() => captureRef.current?.() ?? null} />
+          <AnalysisPanel getScreenshot={(overlay) => captureRef.current?.(overlay) ?? null} />
         </div>
         <div className={`flex-1 overflow-hidden ${railTab === 'news' ? 'block' : 'hidden'}`}>
           <NewsFeed />

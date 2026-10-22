@@ -57,6 +57,7 @@ Rules:
 - key_levels: prefer levels with multiple touches or significant wick rejection.
 - patterns: only call out patterns you can clearly see; do not guess.
 - risk_notes: be specific (e.g. "RSI divergence at recent high", "volume declining on rally").
+- If visual trade overlay lines are drawn on the chart (cyan dashed ENTRY line, red dashed SL line with shaded risk zone, green dashed TP line with shaded reward zone), explicitly evaluate whether the Stop Loss is safely beyond structural support/resistance or vulnerable to a stop-hunt wick, and whether the Take Profit sits before or behind major opposing supply/demand.
 - trade_setup:
   - If bias is bullish and setup is favorable, action="long". SL must be below entry (under structural support), TP above entry.
   - If bias is bearish and setup is favorable, action="short". SL must be above entry (above structural resistance), TP below entry.

@@ -16,6 +16,7 @@ const ALLOWED_KEYS = [
   'ai_evaluator_max_cost_usd',
   'ai_evaluator_monthly_budget_usd',
   'enable_ai_signal_gatekeeper',
+  'telegram_send_signal_chart',
 ] as const;
 
 export type SettingKey = (typeof ALLOWED_KEYS)[number];
@@ -35,6 +36,7 @@ export interface AppSettings {
   ai_evaluator_max_cost_usd: string | null;
   ai_evaluator_monthly_budget_usd: string | null;
   enable_ai_signal_gatekeeper: string | null;
+  telegram_send_signal_chart: string | null;
 }
 
 // ── GET /api/settings ─────────────────────────────────────────────────────────
@@ -63,6 +65,7 @@ export async function GET() {
       ai_evaluator_max_cost_usd: map['ai_evaluator_max_cost_usd'] ?? null,
       ai_evaluator_monthly_budget_usd: map['ai_evaluator_monthly_budget_usd'] ?? null,
       enable_ai_signal_gatekeeper: map['enable_ai_signal_gatekeeper'] ?? null,
+      telegram_send_signal_chart: map['telegram_send_signal_chart'] ?? 'true',
     };
 
 

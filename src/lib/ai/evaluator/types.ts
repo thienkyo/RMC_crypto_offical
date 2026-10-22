@@ -76,11 +76,19 @@ export interface EnsembleVote {
   reason: string;
 }
 
+export interface EvaluationAnalysisSteps {
+  trendAndHtfConfluence: string;
+  indicatorAndVolumeFlow: string;
+  riskRewardAndVolatility: string;
+}
+
 export interface OrderEvaluationResult {
   status: EvaluationStatus;
   confidence: 'high' | 'medium' | 'low';
   /** Exactly 1-2 sentence high-level summary. */
   summary: string;
+  /** Structured chain-of-thought reasoning performed prior to verdict selection. */
+  analysisSteps?: EvaluationAnalysisSteps;
   reasons: EvaluationReasons;
   metrics: EvaluationMetrics;
   model: {
@@ -127,6 +135,19 @@ export interface TechnicalSnapshot {
     trendEma: string;
     rsi14?: number;
     summary: string;
+  };
+  volatilityMetrics?: {
+    atr14: number;
+    slAtrMultiple?: number;
+    tpAtrMultiple?: number;
+    noiseAssessment: string;
+  };
+  derivatives?: {
+    fundingRatePct: number;
+    fundingBias: string;
+    openInterestChangePct?: number;
+    openInterestUsd?: number;
+    oiSummary: string;
   };
   activePatterns: string[];
   recentCandlesSummary: string;

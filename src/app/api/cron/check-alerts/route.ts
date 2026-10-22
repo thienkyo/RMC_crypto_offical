@@ -19,8 +19,9 @@ import { isCronAuthorized, cronUnauthorized } from '@/lib/crawlers/cron-auth';
 import { getEnabledAlertRules, logAlertFired, markAlertDelivered } from '@/lib/db/alerts';
 import { evaluateAlertRule } from '@/lib/alerts/evaluate';
 import { getNotifiableStrategies, evaluateStrategySignal, runOrderEvaluationForSignal, type StrategyNotifyResult } from '@/lib/strategy/notify';
-import { sendTelegramAlert, resolveStrategyTelegramTopic, formatStrategySignalMessage, formatMarketFlushMessage } from '@/lib/alerts/telegram';
-import { logStrategySignal } from '@/lib/db/signals';
+import { sendTelegramAlert, resolveStrategyTelegramTopic, formatStrategySignalMessage, formatMarketFlushMessage, isSignalChartEnabled, type TelegramAlertImage } from '@/lib/alerts/telegram';
+import { generateSignalChartPng } from '@/lib/alerts/signalChart';
+import { logStrategySignal, markSignalDelivered } from '@/lib/db/signals';
 import { shouldRunAiVerdict } from '@/lib/strategy/rating';
 import { evaluateMarketFlush, type FiredSignalSummary } from '@/lib/ai/evaluator/macro';
 
@@ -112,16 +113,47 @@ async function runCheckAlerts(): Promise<Response> {
     firedResults.push(evalResult);
   }
 
-  firedCount += firedResults.length;
+  // ── 2b. Intra-cycle deduplication by symbol ───────────────────────────────
+  // When multiple strategies fire on the same symbol in the same cron tick
+  // (including opposing LONG and SHORT signals), keep only the single
+  // highest-rated signal to prevent stacking or contradictory alerts.
+  const bestBySymbol = new Map<string, Extract<StrategyNotifyResult, { fired: true }>>();
+  for (const f of firedResults) {
+    const key = f.strategy.symbol;
+    const existing = bestBySymbol.get(key);
+    if (!existing || f.rating > existing.rating) {
+      if (existing) {
+        strategyDebug.push({
+          name:      existing.strategy.name,
+          symbol:    existing.strategy.symbol,
+          timeframe: existing.strategy.timeframe,
+          result:    `dedup_same_symbol (superseded by ${f.strategy.name} ${f.rating}★)`,
+          debug:     existing.debug as Record<string, unknown> | undefined,
+        });
+      }
+      bestBySymbol.set(key, f);
+    } else {
+      strategyDebug.push({
+        name:      f.strategy.name,
+        symbol:    f.strategy.symbol,
+        timeframe: f.strategy.timeframe,
+        result:    `dedup_same_symbol (superseded by ${existing.strategy.name} ${existing.rating}★)`,
+        debug:     f.debug as Record<string, unknown> | undefined,
+      });
+    }
+  }
+
+  const dedupedFiredResults = Array.from(bestBySymbol.values());
+  firedCount += dedupedFiredResults.length;
 
   // ── 3. Branch: Option E (Market Flush >= 3) vs Option A + C (Isolated < 3) ──
   const FLUSH_THRESHOLD = 3;
 
-  if (firedResults.length >= FLUSH_THRESHOLD) {
+  if (dedupedFiredResults.length >= FLUSH_THRESHOLD) {
     // ── Option E: Market Flush Consolidated Digest ───────────────────────────
-    console.log(`[cron:check-alerts] MARKET FLUSH: ${firedResults.length} strategies fired simultaneously!`);
+    console.log(`[cron:check-alerts] MARKET FLUSH: ${dedupedFiredResults.length} strategies fired simultaneously!`);
 
-    const signalSummaries: FiredSignalSummary[] = firedResults.map((f) => ({
+    const signalSummaries: FiredSignalSummary[] = dedupedFiredResults.map((f) => ({
       strategyName: f.strategy.name,
       symbol: f.strategy.symbol,
       timeframe: f.strategy.timeframe,
@@ -133,44 +165,73 @@ async function runCheckAlerts(): Promise<Response> {
     // 1 single Macro AI call for the entire cluster
     const macroEvaluation = await evaluateMarketFlush(
       signalSummaries,
-      firedResults[0]?.candleTime ?? Date.now(),
+      dedupedFiredResults[0]?.candleTime ?? Date.now(),
     );
 
-    // 1 consolidated Telegram message
+    // Log all signals to DB first so we can include their DB signalId in the Telegram digest
+    const loggedSignalIds = new Map<string, number>();
+    await Promise.all(
+      dedupedFiredResults.map(async (f) => {
+        try {
+          const sigId = await logStrategySignal({
+            strategyId:          f.strategy.id,
+            strategyName:        f.strategy.name,
+            symbol:              f.strategy.symbol,
+            timeframe:           f.strategy.timeframe,
+            direction:           f.strategy.action.type === 'enter_long' ? 'long' : 'short',
+            entryPrice:          f.entryPrice,
+            stopLossPct:         f.strategy.risk.stopLossPct,
+            takeProfitPct:       f.strategy.risk.takeProfitPct,
+            candleTime:          f.candleTime,
+            telegramDelivered:   false,
+            conditionsSnapshot:  f.conditionGroups,
+            rating:              f.rating,
+            entryPriceLimit:     f.entryPriceLimit,
+          });
+          loggedSignalIds.set(f.strategy.id, sigId);
+        } catch (err) {
+          console.error('[cron:check-alerts] logStrategySignal failed:', err);
+        }
+      }),
+    );
+
+    // 1 consolidated Telegram message (with signalId and strategyId per row)
     const digestMessage = formatMarketFlushMessage({
-      signals: signalSummaries,
+      signals: dedupedFiredResults.map((f) => ({
+        strategyName: f.strategy.name,
+        symbol:       f.strategy.symbol,
+        timeframe:    f.strategy.timeframe,
+        direction:    f.strategy.action.type === 'enter_long' ? 'long' : 'short',
+        entryPrice:   f.entryPrice,
+        rating:       f.rating,
+        signalId:     loggedSignalIds.get(f.strategy.id),
+        strategyId:   f.strategy.id,
+      })),
       macroEvaluation,
-      timestamp: firedResults[0]?.candleTime ?? Date.now(),
+      timestamp: dedupedFiredResults[0]?.candleTime ?? Date.now(),
     });
 
     const telegramResult = await sendTelegramAlert(
       digestMessage,
-      `Market Flush (${firedResults.length})`,
+      `Market Flush (${dedupedFiredResults.length})`,
       'signal',
     );
+
+    if (telegramResult.ok) {
+      await Promise.all(
+        Array.from(loggedSignalIds.values()).map((sigId) =>
+          markSignalDelivered(sigId).catch((err) =>
+            console.error('[cron:check-alerts] markSignalDelivered failed:', err),
+          ),
+        ),
+      );
+    }
 
     const telegramStatus = telegramResult.ok
       ? `Digest sent to ${telegramResult.delivered} chat(s)`
       : `failed: ${telegramResult.error}`;
 
-    // Log all signals to DB with macro verdict snapshot
-    for (const f of firedResults) {
-      logStrategySignal({
-        strategyId:          f.strategy.id,
-        strategyName:        f.strategy.name,
-        symbol:              f.strategy.symbol,
-        timeframe:           f.strategy.timeframe,
-        direction:           f.strategy.action.type === 'enter_long' ? 'long' : 'short',
-        entryPrice:          f.entryPrice,
-        stopLossPct:         f.strategy.risk.stopLossPct,
-        takeProfitPct:       f.strategy.risk.takeProfitPct,
-        candleTime:          f.candleTime,
-        telegramDelivered:   telegramResult.ok,
-        conditionsSnapshot:  f.conditionGroups,
-        rating:              f.rating,
-        entryPriceLimit:     f.entryPriceLimit,
-      }).catch((err) => console.error('[cron:check-alerts] logStrategySignal failed:', err));
-
+    for (const f of dedupedFiredResults) {
       strategyDebug.push({
         name:      f.strategy.name,
         symbol:    f.strategy.symbol,
@@ -180,12 +241,12 @@ async function runCheckAlerts(): Promise<Response> {
         debug:     f.debug as Record<string, unknown> | undefined,
       });
     }
-  } else if (firedResults.length > 0) {
+  } else if (dedupedFiredResults.length > 0) {
     // ── Option A + C: Individual Signal Processing with Cycle Cap ────────────
     const MAX_AI_PER_CYCLE = 2;
 
     // Filter AI candidates (Option C: strategy.aiGatekeeperEnabled === true && rating >= 4)
-    const aiCandidates = firedResults.filter(
+    const aiCandidates = dedupedFiredResults.filter(
       (f) => f.strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(f.rating),
     );
 
@@ -193,7 +254,7 @@ async function runCheckAlerts(): Promise<Response> {
     aiCandidates.sort((a, b) => b.rating - a.rating);
     const eligibleForAi = new Set(aiCandidates.slice(0, MAX_AI_PER_CYCLE).map((f) => f.strategy.id));
 
-    for (const f of firedResults) {
+    for (const f of dedupedFiredResults) {
       const direction = f.strategy.action.type === 'enter_long' ? 'long' : 'short';
       let aiEvaluation: import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined;
       let finalMessage = f.message;
@@ -207,6 +268,18 @@ async function runCheckAlerts(): Promise<Response> {
             f.candleTime,
             f.closedCandles || [],
           );
+
+          if (aiEvaluation?.status === 'REJECT') {
+            console.log(`[cron:check-alerts] Strategy rejected by AI Gatekeeper: ${f.strategy.name}`);
+            strategyDebug.push({
+              name:      f.strategy.name,
+              symbol:    f.strategy.symbol,
+              timeframe: f.strategy.timeframe,
+              result:    'rejected_by_ai',
+              debug:     f.debug as Record<string, unknown> | undefined,
+            });
+            continue;
+          }
 
           if (aiEvaluation) {
             finalMessage = formatStrategySignalMessage({
@@ -232,13 +305,105 @@ async function runCheckAlerts(): Promise<Response> {
 
       console.log(`[cron:check-alerts] STRATEGY FIRED: ${f.strategy.name} (${f.strategy.symbol})`);
 
+      // Log signal to DB first so we can embed its DB row ID (sig#N) in the Telegram message
+      let signalId: number | undefined;
+      try {
+        signalId = await logStrategySignal({
+          strategyId:          f.strategy.id,
+          strategyName:        f.strategy.name,
+          symbol:              f.strategy.symbol,
+          timeframe:           f.strategy.timeframe,
+          direction,
+          entryPrice:          f.entryPrice,
+          stopLossPct:         f.strategy.risk.stopLossPct,
+          takeProfitPct:       f.strategy.risk.takeProfitPct,
+          candleTime:          f.candleTime,
+          telegramDelivered:   false,
+          conditionsSnapshot:  f.conditionGroups,
+          rating:              f.rating,
+          entryPriceLimit:     f.entryPriceLimit,
+          aiEvaluation,
+        });
+      } catch (err) {
+        console.error('[cron:check-alerts] logStrategySignal failed:', err);
+      }
+
+      finalMessage = formatStrategySignalMessage({
+        strategyName:    f.strategy.name,
+        longName:        f.strategy.longName,
+        rating:          f.rating,
+        symbol:          f.strategy.symbol,
+        timeframe:       f.strategy.timeframe,
+        direction,
+        entryPrice:      f.entryPrice,
+        entryPriceLimit: f.entryPriceLimit,
+        stopLossPct:     f.strategy.risk.stopLossPct,
+        takeProfitPct:   f.strategy.risk.takeProfitPct,
+        conditionGroups: f.conditionGroups,
+        timestamp:       f.candleTime,
+        aiEvaluation,
+        signalId,
+        strategyId:      f.strategy.id,
+        strategyVersion: f.strategy.version,
+      });
+
+      // Render chart image attachment if enabled (default: true)
+      let alertImage: TelegramAlertImage | undefined;
+      const chartEnabled = await isSignalChartEnabled();
+      if (chartEnabled && f.closedCandles && f.closedCandles.length > 0) {
+        try {
+          const slPrice = f.strategy.risk.stopLossPct
+            ? (direction === 'long'
+                ? f.entryPrice * (1 - f.strategy.risk.stopLossPct / 100)
+                : f.entryPrice * (1 + f.strategy.risk.stopLossPct / 100))
+            : undefined;
+          const tpPrice = f.strategy.risk.takeProfitPct
+            ? (direction === 'long'
+                ? f.entryPrice * (1 + f.strategy.risk.takeProfitPct / 100)
+                : f.entryPrice * (1 - f.strategy.risk.takeProfitPct / 100))
+            : undefined;
+
+          const chartBuffer = await generateSignalChartPng({
+            symbol:          f.strategy.symbol,
+            timeframe:       f.strategy.timeframe,
+            strategyName:    f.strategy.name,
+            direction,
+            rating:          f.rating,
+            entryPrice:      f.entryPrice,
+            entryPriceLimit: f.entryPriceLimit,
+            stopLossPrice:   slPrice,
+            takeProfitPrice: tpPrice,
+            stopLossPct:     f.strategy.risk.stopLossPct,
+            takeProfitPct:   f.strategy.risk.takeProfitPct,
+            candles:         f.closedCandles,
+            signalId,
+          });
+
+          const dirBadge = direction === 'long' ? 'LONG ▲' : 'SHORT ▼';
+          const sigTag = signalId ? ` • sig#${signalId}` : '';
+          alertImage = {
+            buffer: chartBuffer,
+            caption: `📊 <b>${f.strategy.symbol} (${f.strategy.timeframe.toUpperCase()})</b> • ${dirBadge}${sigTag}`,
+          };
+        } catch (chartErr) {
+          console.warn(`[cron:check-alerts] Failed to generate signal chart for ${f.strategy.name}:`, chartErr);
+        }
+      }
+
       const resolvedTopic = resolveStrategyTelegramTopic(f.strategy.telegramTopic, f.strategy.symbol);
       const telegramResult = await sendTelegramAlert(
         finalMessage,
         f.strategy.name,
         'signal',
         resolvedTopic,
+        alertImage,
       );
+
+      if (telegramResult.ok && signalId !== undefined) {
+        await markSignalDelivered(signalId).catch((err) =>
+          console.error('[cron:check-alerts] markSignalDelivered failed:', err),
+        );
+      }
 
       const telegramStatus = telegramResult.ok
         ? `sent to ${telegramResult.delivered} chat(s)`
@@ -247,24 +412,6 @@ async function runCheckAlerts(): Promise<Response> {
       if (!telegramResult.ok) {
         console.error(`[cron:check-alerts] Telegram failed: ${telegramResult.error}`);
       }
-
-      // Log signal to DB
-      logStrategySignal({
-        strategyId:          f.strategy.id,
-        strategyName:        f.strategy.name,
-        symbol:              f.strategy.symbol,
-        timeframe:           f.strategy.timeframe,
-        direction,
-        entryPrice:          f.entryPrice,
-        stopLossPct:         f.strategy.risk.stopLossPct,
-        takeProfitPct:       f.strategy.risk.takeProfitPct,
-        candleTime:          f.candleTime,
-        telegramDelivered:   telegramResult.ok,
-        conditionsSnapshot:  f.conditionGroups,
-        rating:              f.rating,
-        entryPriceLimit:     f.entryPriceLimit,
-        aiEvaluation,
-      }).catch((err) => console.error('[cron:check-alerts] logStrategySignal failed:', err));
 
       strategyDebug.push({
         name:      f.strategy.name,

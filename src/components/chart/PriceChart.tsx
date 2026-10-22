@@ -23,6 +23,13 @@ import type { IndicatorSeries } from '@/lib/indicators';
 import type { VolumeProfileConfig } from '@/store/chart';
 import { VolumeProfileRenderer } from './VolumeProfileRenderer';
 
+export interface TradeScreenshotOverlay {
+  entryPrice?: number;
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
+  direction?: 'long' | 'short';
+}
+
 export interface PriceChartHandle {
   getChart:    () => IChartApi | null;
   /** Direct series.update() — bypasses React, zero jank on live ticks. */
@@ -31,10 +38,11 @@ export interface PriceChartHandle {
   scrollToNow: () => void;
   /**
    * Capture the chart canvas as a base64 PNG string (no data-URL prefix).
+   * Optionally draws visual Entry / Stop Loss / Take Profit lines and shaded
+   * risk/reward zones onto the offscreen screenshot canvas for AI Vision grounding.
    * Returns null if the chart is not yet mounted.
-   * Used by the Phase 3 AI analysis flow.
    */
-  captureScreenshot: () => string | null;
+  captureScreenshot: (overlay?: TradeScreenshotOverlay) => string | null;
   /**
    * Convert a price value to its Y pixel coordinate within the chart container.
    * Returns null if the chart is not mounted or the price is off-screen.
@@ -205,15 +213,122 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       scrollToNow: () => {
         chartRef.current?.timeScale().scrollToRealTime();
       },
-      captureScreenshot: () => {
+      captureScreenshot: (overlay?: TradeScreenshotOverlay) => {
         const chart = chartRef.current;
         if (!chart) return null;
         // Don't capture if candles haven't loaded or rendered yet
         if (!lastCandlesRef.current || lastCandlesRef.current.length === 0) return null;
-        // takeScreenshot() returns the chart canvas element.
-        // toDataURL gives a data-URL; we strip the prefix to get raw base64.
+        // takeScreenshot() returns a fresh offscreen chart canvas element.
         const canvas = chart.takeScreenshot();
         if (!canvas || canvas.width <= 10 || canvas.height <= 10) return null;
+
+        // Draw visual Trade Setup Overlay (Entry / Stop Loss / Take Profit) if provided
+        if (overlay && candleRef.current) {
+          const ctx = canvas.getContext('2d');
+          const container = containerRef.current;
+          if (ctx) {
+            const scaleX = container && container.clientWidth > 0 ? canvas.width / container.clientWidth : 1;
+            const scaleY = container && container.clientHeight > 0 ? canvas.height / container.clientHeight : 1;
+            const paneSize = chart.paneSize();
+            const plotW = (paneSize.width > 0 ? paneSize.width : (container?.clientWidth ?? canvas.width)) * scaleX;
+            const plotH = (paneSize.height > 0 ? paneSize.height : (container?.clientHeight ?? canvas.height)) * scaleY;
+
+            const toCanvasY = (price?: number): number | null => {
+              if (!price || price <= 0 || !candleRef.current) return null;
+              const coord = candleRef.current.priceToCoordinate(price);
+              if (coord === null || coord === undefined) return null;
+              return coord * scaleY;
+            };
+
+            const entryY = toCanvasY(overlay.entryPrice);
+            const slY = toCanvasY(overlay.stopLossPrice);
+            const tpY = toCanvasY(overlay.takeProfitPrice);
+
+            const clampPlotY = (y: number) => Math.max(0, Math.min(plotH, y));
+
+            // 1. Shaded Risk & Reward Zones (drawn on the rightmost 35% of the plot area)
+            const zoneX = Math.floor(plotW * 0.65);
+            const zoneW = Math.max(40, plotW - zoneX);
+
+            if (entryY !== null && tpY !== null) {
+              const top = clampPlotY(Math.min(entryY, tpY));
+              const bottom = clampPlotY(Math.max(entryY, tpY));
+              if (bottom > top) {
+                ctx.fillStyle = 'rgba(16, 185, 129, 0.14)';
+                ctx.fillRect(zoneX, top, zoneW, bottom - top);
+              }
+            }
+
+            if (entryY !== null && slY !== null) {
+              const top = clampPlotY(Math.min(entryY, slY));
+              const bottom = clampPlotY(Math.max(entryY, slY));
+              if (bottom > top) {
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.14)';
+                ctx.fillRect(zoneX, top, zoneW, bottom - top);
+              }
+            }
+
+            // 2. Horizontal Dashed Level Lines + Pill Badges
+            const drawLevelLine = (
+              y: number | null,
+              color: string,
+              bgColor: string,
+              label: string,
+            ) => {
+              if (y === null || y < 0 || y > plotH) return;
+              ctx.save();
+              ctx.beginPath();
+              ctx.setLineDash([6 * scaleX, 4 * scaleX]);
+              ctx.lineWidth = Math.max(1.5, 1.5 * scaleY);
+              ctx.strokeStyle = color;
+              ctx.moveTo(0, y);
+              ctx.lineTo(plotW, y);
+              ctx.stroke();
+
+              // Draw pill label near right side of plot area
+              const fontSize = Math.round(10 * scaleY);
+              ctx.font = `bold ${fontSize}px monospace`;
+              const padX = 6 * scaleX;
+              const padY = 3 * scaleY;
+              const textW = ctx.measureText(label).width;
+              const boxW = textW + padX * 2;
+              const boxH = fontSize + padY * 2;
+              const boxX = Math.max(8 * scaleX, plotW - boxW - 8 * scaleX);
+              const boxY = Math.max(2, Math.min(plotH - boxH - 2, y - boxH / 2));
+
+              ctx.setLineDash([]);
+              ctx.fillStyle = bgColor;
+              ctx.fillRect(boxX, boxY, boxW, boxH);
+              ctx.strokeStyle = color;
+              ctx.lineWidth = Math.max(1, 1 * scaleY);
+              ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+              ctx.fillStyle = '#ffffff';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(label, boxX + padX, boxY + boxH / 2);
+              ctx.restore();
+            };
+
+            const fmt = (p: number) =>
+              p.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: p < 1 ? 6 : 2,
+              });
+
+            if (overlay.takeProfitPrice) {
+              drawLevelLine(tpY, '#10b981', 'rgba(6, 78, 59, 0.9)', `TP $${fmt(overlay.takeProfitPrice)}`);
+            }
+            if (overlay.entryPrice) {
+              const dirTag = overlay.direction ? `${overlay.direction.toUpperCase()} ` : '';
+              drawLevelLine(entryY, '#38bdf8', 'rgba(12, 74, 110, 0.9)', `${dirTag}ENTRY $${fmt(overlay.entryPrice)}`);
+            }
+            if (overlay.stopLossPrice) {
+              drawLevelLine(slY, '#ef4444', 'rgba(127, 29, 29, 0.9)', `SL $${fmt(overlay.stopLossPrice)}`);
+            }
+          }
+        }
+
+        // toDataURL gives a data-URL; we strip the prefix to get raw base64.
         const dataUrl = canvas.toDataURL('image/png');
         return dataUrl.split(',')[1] ?? null;
       },

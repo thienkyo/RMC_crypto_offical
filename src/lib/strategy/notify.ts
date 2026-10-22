@@ -23,6 +23,7 @@
 
 import { db }                         from '@/lib/db/client';
 import { fetchLatestCandlesCached }    from '@/lib/db/candles';
+import { TF_TO_MS }                    from '@/lib/exchange/binance';
 import { buildIndicatorCache,
          conditionCacheKey,
          evaluateConditionChecked,
@@ -39,10 +40,25 @@ import type { Candle, Timeframe }      from '@/types/market';
 import type { ConditionSnapshotGroup } from '@/lib/db/signals';
 
 const CANDLE_WINDOW = 1_000;
+/** Default minimum star rating required to fire a live signal (3 = Grade C+). */
+export const DEFAULT_MIN_SIGNAL_RATING = 3;
+/** Number of bars to block duplicate signals on the same symbol + direction. */
+const SYMBOL_COOLDOWN_BARS = 2;
+
+export type StrategyNotifySkipReason =
+  | 'first_run'
+  | 'dedup_blocked'
+  | 'conditions_not_met'
+  | 'low_rating'
+  | 'symbol_cooldown'
+  | 'ai_rejected'
+  | 'no_candles'
+  | 'error'
+  | 'market_closed';
 
 export type StrategyNotifyResult =
   | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; closedCandles?: Candle[]; debug?: StrategyNotifyDebug }
-  | { fired: false; strategy: Strategy; reason: 'first_run' | 'dedup_blocked' | 'conditions_not_met' | 'no_candles' | 'error' | 'market_closed'; debug?: StrategyNotifyDebug };
+  | { fired: false; strategy: Strategy; reason: StrategyNotifySkipReason; debug?: StrategyNotifyDebug };
 
 
 /** Debug context surfaced in the cron Manual response. */
@@ -50,6 +66,8 @@ export interface StrategyNotifyDebug {
   lastClosedOpenTime: string;    // ISO — the candle we evaluated
   lastNotifiedTimeMs: string;    // ISO — what was stamped in DB (or 'null')
   candleCount: number;
+  rating?: number;
+  minRating?: number;
   conditionResults?: Array<{ label: string; passed: boolean }>;
 }
 
@@ -75,30 +93,31 @@ export async function evaluateStrategySignal(
     return { fired: false, strategy, reason: 'error' };
   }
 
-  // Only evaluate fully closed candles. We filter explicitly by closeTime to ensure
-  // we don't accidentally drop closed candles if Binance API is delayed.
-  const now = Date.now();
-  const closed = candles.filter((c) => c.closeTime < now);
-  if (closed.length < 2) return { fired: false, strategy, reason: 'no_candles' };
+  // Evaluate up to and including the current live (forming) candle so signals
+  // fire intra-bar on the 5m/10m/15m check interval instead of waiting up to 4h
+  // for the bar to close. Dedup is still stamped by the bar's openTime so a
+  // strategy fires at most once per timeframe bar.
+  const evalCandles = candles;
+  if (evalCandles.length < 2) return { fired: false, strategy, reason: 'no_candles' };
 
-  const lastClosed = closed[closed.length - 1]!;
+  const targetBar = evalCandles[evalCandles.length - 1]!;
 
   const baseDebug = {
-    lastClosedOpenTime: new Date(lastClosed.openTime).toISOString(),
+    lastClosedOpenTime: new Date(targetBar.openTime).toISOString(),
     lastNotifiedTimeMs: lastNotifiedTimeMs !== null
       ? new Date(lastNotifiedTimeMs).toISOString()
       : 'null',
-    candleCount: closed.length,
+    candleCount: evalCandles.length,
   };
 
   // ── 2. First-run guard ─────────────────────────────────────────────────────
   if (lastNotifiedTimeMs === null) {
-    await tryStampNotifiedTime(strategy.id, lastClosed.openTime);
+    await tryStampNotifiedTime(strategy.id, targetBar.openTime);
     return { fired: false, strategy, reason: 'first_run', debug: baseDebug };
   }
 
   // ── 3. Dedup gate — same candle period already notified ───────────────────
-  if (lastClosed.openTime <= lastNotifiedTimeMs) {
+  if (targetBar.openTime <= lastNotifiedTimeMs) {
     return { fired: false, strategy, reason: 'dedup_blocked', debug: baseDebug };
   }
 
@@ -117,21 +136,23 @@ export async function evaluateStrategySignal(
 
     const allConditions = strategy.entryConditions.flatMap((g) => g.conditions);
     cache = htfTfs.length > 0 
-      ? buildMtfIndicatorCache(strategy, closed, htfCandles)
-      : buildIndicatorCache(allConditions, closed);
+      ? buildMtfIndicatorCache(strategy, evalCandles, htfCandles)
+      : buildIndicatorCache(allConditions, evalCandles);
   } catch (err) {
     console.error(`[strategy/notify] buildIndicatorCache failed for ${strategy.id}:`, err);
     return { fired: false, strategy, reason: 'error', debug: baseDebug };
   }
 
   // ── 5. Evaluate condition groups ───────────────────────────────────────────
-  // Use the canonical evaluation functions to ensure notify logic exactly
-  // matches backtester and chart markers.
+  // Use the canonical evaluation functions to ensure notify logic matches
+  // backtester and chart markers. Honour regime-aware gating for pure level groups.
+  const direction = strategy.action.type === 'enter_long' ? 'long' : 'short';
   const fired = evaluateConditionGroupsChecked(
     strategy.entryConditions,
-    closed,
-    closed.length - 1,
+    evalCandles,
+    evalCandles.length - 1,
     cache,
+    direction,
   );
 
   // Collect per-condition pass/fail for debug output (only for enabled conditions).
@@ -140,27 +161,14 @@ export async function evaluateStrategySignal(
     .filter((c) => c.enabled !== false)
     .map((c) => ({
       label:  conditionLabel(c),
-      passed: conditionPassesCheck(c, closed, cache),
+      passed: conditionPassesCheck(c, evalCandles, cache),
     }));
 
   const fullDebug = { ...baseDebug, conditionResults };
 
   if (!fired) return { fired: false, strategy, reason: 'conditions_not_met', debug: fullDebug };
 
-  // ── 6. Atomic stamp — race-condition guard ────────────────────────────────
-  // Stamp BEFORE building/sending the message. The UPDATE only succeeds if no
-  // other cron process has already stamped this candle (conditional WHERE).
-  // If rowCount === 0, we lost the race — bail out silently.
-  const stamped = await tryStampNotifiedTime(strategy.id, lastClosed.openTime);
-  if (!stamped) {
-    console.log(
-      `[strategy/notify] dedup (concurrent): ${strategy.name} already stamped for ` +
-      new Date(lastClosed.openTime).toISOString(),
-    );
-    return { fired: false, strategy, reason: 'dedup_blocked', debug: fullDebug };
-  }
-
-  // ── 7. Build condition snapshot ────────────────────────────────────────────
+  // ── 6. Build condition snapshot & compute rating ───────────────────────────
   // Include checkCandles + checkMode in the snapshot so signalScore() can
   // compute the confirmation bonus from stored data in future reads.
   const conditionGroups = strategy.entryConditions
@@ -174,10 +182,10 @@ export async function evaluateStrategySignal(
         .map((c) => {
           const key     = conditionCacheKey(c);
           const timeMap = cache.get(key);
-          const value   = timeMap?.get(lastClosed.openTime);
+          const value   = timeMap?.get(targetBar.openTime);
           return {
             label:        conditionLabel(c),
-            passed:       conditionPassesCheck(c, closed, cache),
+            passed:       conditionPassesCheck(c, evalCandles, cache),
             value,
             checkCandles: c.checkCandles ?? 1,
             checkMode:    c.checkMode    ?? 'confirmation',
@@ -185,11 +193,48 @@ export async function evaluateStrategySignal(
         }),
     }));
 
-  // ── 8. Compute per-signal rating + limit entry price ──────────────────────
-  const rating     = signalScore(conditionGroups);
-  const direction  = strategy.action.type === 'enter_long' ? 'long' : 'short';
+  const rating    = signalScore(conditionGroups);
+  const minRating = strategy.minSignalRating ?? DEFAULT_MIN_SIGNAL_RATING;
+  const ratedDebug: StrategyNotifyDebug = { ...fullDebug, rating, minRating };
+
+  // ── 6b. Minimum Signal Rating Gate ─────────────────────────────────────────
+  if (rating < minRating) {
+    console.log(
+      `[strategy/notify] skip (low_rating): ${strategy.name} scored ${rating}★ < min ${minRating}★`,
+    );
+    return { fired: false, strategy, reason: 'low_rating', debug: ratedDebug };
+  }
+
+  // ── 6c. Per-Symbol Cooldown Gate ───────────────────────────────────────────
+  const onSymbolCooldown = await hasRecentSymbolSignal(
+    strategy.symbol,
+    direction,
+    targetBar.openTime,
+    strategy.timeframe,
+  );
+  if (onSymbolCooldown) {
+    console.log(
+      `[strategy/notify] skip (symbol_cooldown): ${strategy.name} (${strategy.symbol} ${direction}) already signaled recently`,
+    );
+    return { fired: false, strategy, reason: 'symbol_cooldown', debug: ratedDebug };
+  }
+
+  // ── 7. Atomic stamp — race-condition guard ────────────────────────────────
+  // Stamp BEFORE building/sending the message. The UPDATE only succeeds if no
+  // other cron process has already stamped this candle (conditional WHERE).
+  // If rowCount === 0, we lost the race — bail out silently.
+  const stamped = await tryStampNotifiedTime(strategy.id, targetBar.openTime);
+  if (!stamped) {
+    console.log(
+      `[strategy/notify] dedup (concurrent): ${strategy.name} already stamped for ` +
+      new Date(targetBar.openTime).toISOString(),
+    );
+    return { fired: false, strategy, reason: 'dedup_blocked', debug: ratedDebug };
+  }
+
+  // ── 8. Compute limit entry price ──────────────────────────────────────────
   const entryPriceLimit = parseFloat(
-    computeEntryPriceLimit(lastClosed.close, strategy.action.entryPriceOffset, direction).toFixed(8),
+    computeEntryPriceLimit(targetBar.close, strategy.action.entryPriceOffset, direction).toFixed(8),
   );
 
   // ── 8b. Optional AI Order Evaluation ───────────────────────────────────────
@@ -200,10 +245,16 @@ export async function evaluateStrategySignal(
     aiEvaluation = await runOrderEvaluationForSignal(
       strategy,
       direction,
-      entryPriceLimit ?? lastClosed.close,
-      lastClosed.openTime,
-      closed,
+      entryPriceLimit ?? targetBar.close,
+      targetBar.openTime,
+      evalCandles,
     );
+    if (aiEvaluation?.status === 'REJECT') {
+      console.log(
+        `[strategy/notify] skip (ai_rejected): ${strategy.name} rejected by AI Gatekeeper`,
+      );
+      return { fired: false, strategy, reason: 'ai_rejected', debug: ratedDebug };
+    }
   }
 
   // ── 9. Build Telegram message ──────────────────────────────────────────────
@@ -214,27 +265,29 @@ export async function evaluateStrategySignal(
     symbol:          strategy.symbol,
     timeframe:       strategy.timeframe,
     direction,
-    entryPrice:      lastClosed.close,
+    entryPrice:      targetBar.close,
     entryPriceLimit,
     stopLossPct:     strategy.risk.stopLossPct,
     takeProfitPct:   strategy.risk.takeProfitPct,
     conditionGroups,
-    timestamp:       lastClosed.closeTime + 1,
+    timestamp:       targetBar.openTime,
     aiEvaluation,
+    strategyId:      strategy.id,
+    strategyVersion: strategy.version,
   });
 
   return {
     fired: true,
     strategy,
     message,
-    entryPrice: lastClosed.close,
+    entryPrice: targetBar.close,
     entryPriceLimit,
     rating,
-    candleTime: lastClosed.openTime,
+    candleTime: targetBar.openTime,
     conditionGroups,
     aiEvaluation,
-    closedCandles: closed,
-    debug: fullDebug,
+    closedCandles: evalCandles,
+    debug: ratedDebug,
   };
 }
 
@@ -292,6 +345,38 @@ function conditionPassesCheck(
   cache:     Map<string, Map<number, number>>,
 ): boolean {
   return evaluateConditionChecked(condition, closed, closed.length - 1, cache);
+}
+
+/**
+ * Checks whether any strategy already logged a signal on the same symbol
+ * (same direction within SYMBOL_COOLDOWN_BARS, or opposing direction on the
+ * exact same candle) to prevent duplicate or contradictory Long/Short alerts.
+ */
+async function hasRecentSymbolSignal(
+  symbol: string,
+  direction: 'long' | 'short',
+  candleTimeMs: number,
+  timeframe: Timeframe,
+): Promise<boolean> {
+  try {
+    const barMs = TF_TO_MS[timeframe] ?? 3600_000;
+    const minCandleTimeMs = candleTimeMs - SYMBOL_COOLDOWN_BARS * barMs;
+    const { rowCount } = await db.query(
+      `SELECT 1
+       FROM strategy_signals
+       WHERE symbol = $1
+         AND (
+           (direction = $2 AND candle_time > to_timestamp($3::bigint / 1000.0))
+           OR candle_time = to_timestamp($4::bigint / 1000.0)
+         )
+       LIMIT 1`,
+      [symbol, direction, minCandleTimeMs, candleTimeMs],
+    );
+    return (rowCount ?? 0) > 0;
+  } catch (err) {
+    console.warn(`[strategy/notify] hasRecentSymbolSignal check failed for ${symbol}:`, err);
+    return false;
+  }
 }
 
 

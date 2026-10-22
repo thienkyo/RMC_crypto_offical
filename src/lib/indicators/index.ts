@@ -15,6 +15,7 @@ export { bollinger }    from './bollinger';
 export { bbpct }        from './bbpct';
 export { bb_width }     from './bb_width';
 export { adx }          from './adx';
+export { atr }          from './atr';
 export { stochrsi }     from './stochrsi';
 export { stochastic }   from './stochastic';
 export { volume_ratio } from './volume_ratio';
@@ -66,6 +67,7 @@ import { bollinger }    from './bollinger';
 import { bbpct }        from './bbpct';
 import { bb_width }     from './bb_width';
 import { adx }          from './adx';
+import { atr }          from './atr';
 import { stochrsi }     from './stochrsi';
 import { stochastic }   from './stochastic';
 import { volume_ratio } from './volume_ratio';
@@ -113,6 +115,7 @@ export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
   [bbpct.id]:                bbpct,
   [bb_width.id]:             bb_width,
   [adx.id]:                  adx,
+  [atr.id]:                  atr,
   [stochrsi.id]:             stochrsi,
   [stochastic.id]:           stochastic,
   [volume_ratio.id]:         volume_ratio,

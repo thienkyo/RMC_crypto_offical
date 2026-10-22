@@ -323,6 +323,114 @@ export function subscribeAggTrades(
   return () => { intentionallyClosed = true; ws?.close(); };
 }
 
+// ─── Derivatives (Binance USD-M Futures) ──────────────────────────────────────
+
+const FUTURES_REST_BASE = 'https://fapi.binance.com';
+
+export interface DerivativesMetrics {
+  fundingRatePct: number;
+  fundingBias: string;
+  openInterestChangePct?: number;
+  openInterestUsd?: number;
+  oiSummary: string;
+}
+
+/**
+ * Fetches live Perpetual Futures funding rate and 4h Open Interest change from Binance Futures.
+ * Returns undefined for equities or if the symbol is not listed on Binance USD-M Futures.
+ */
+export async function fetchDerivativesMetrics(symbol: string): Promise<DerivativesMetrics | undefined> {
+  if (!symbol.endsWith('USDT') && !symbol.endsWith('USDC')) {
+    return undefined;
+  }
+
+  try {
+    const [premiumRes, oiHistRes] = await Promise.allSettled([
+      fetch(`${FUTURES_REST_BASE}/fapi/v1/premiumIndex?symbol=${encodeURIComponent(symbol)}`, {
+        next: { revalidate: 60 },
+        headers: { Accept: 'application/json' },
+      }),
+      fetch(
+        `${FUTURES_REST_BASE}/futures/data/openInterestHist?symbol=${encodeURIComponent(symbol)}&period=1h&limit=5`,
+        {
+          next: { revalidate: 60 },
+          headers: { Accept: 'application/json' },
+        },
+      ),
+    ]);
+
+    if (premiumRes.status !== 'fulfilled' || !premiumRes.value.ok) {
+      return undefined;
+    }
+
+    const premiumJson = (await premiumRes.value.json()) as {
+      lastFundingRate?: string;
+    };
+    if (!premiumJson.lastFundingRate) return undefined;
+
+    // Funding rate is decimal (e.g. 0.0001 = 0.01% per 8h)
+    const fundingRatePct = Number((parseFloat(premiumJson.lastFundingRate) * 100).toFixed(4));
+
+    let fundingBias: string;
+    if (fundingRatePct >= 0.03) {
+      fundingBias = `Overheated Longs (+${fundingRatePct}% / 8h — elevated long liquidation risk)`;
+    } else if (fundingRatePct >= 0.012) {
+      fundingBias = `Bullish Premium (+${fundingRatePct}% / 8h — longs paying shorts)`;
+    } else if (fundingRatePct <= -0.02) {
+      fundingBias = `Crowded Shorts (${fundingRatePct}% / 8h — high short squeeze potential)`;
+    } else if (fundingRatePct < 0) {
+      fundingBias = `Bearish Discount (${fundingRatePct}% / 8h — shorts paying longs)`;
+    } else {
+      fundingBias = `Neutral / Balanced (${fundingRatePct >= 0 ? '+' : ''}${fundingRatePct}% / 8h — healthy positioning)`;
+    }
+
+    let openInterestChangePct: number | undefined;
+    let openInterestUsd: number | undefined;
+    let oiSummary = 'Open Interest data unavailable';
+
+    if (oiHistRes.status === 'fulfilled' && oiHistRes.value.ok) {
+      const oiRows = (await oiHistRes.value.json()) as Array<{
+        sumOpenInterest?: string;
+        sumOpenInterestValue?: string;
+      }>;
+      if (Array.isArray(oiRows) && oiRows.length >= 2) {
+        const firstOi = parseFloat(oiRows[0]?.sumOpenInterest ?? '0');
+        const latestOi = parseFloat(oiRows[oiRows.length - 1]?.sumOpenInterest ?? '0');
+        const latestVal = parseFloat(oiRows[oiRows.length - 1]?.sumOpenInterestValue ?? '0');
+
+        if (latestVal > 0) {
+          openInterestUsd = Math.round(latestVal);
+        }
+
+        if (firstOi > 0 && latestOi > 0) {
+          openInterestChangePct = Number((((latestOi - firstOi) / firstOi) * 100).toFixed(2));
+          const valFormatted = openInterestUsd
+            ? ` ($${openInterestUsd / 1e9 >= 1 ? (openInterestUsd / 1e9).toFixed(2) + 'B' : (openInterestUsd / 1e6).toFixed(1) + 'M'})`
+            : '';
+
+          if (openInterestChangePct >= 2.0) {
+            oiSummary = `Aggressive Leverage Inflow (${openInterestChangePct > 0 ? '+' : ''}${openInterestChangePct}% 4h${valFormatted} — new positions opening rapidly)`;
+          } else if (openInterestChangePct <= -2.0) {
+            oiSummary = `Position Flush / De-leveraging (${openInterestChangePct}% 4h${valFormatted} — positions closing or liquidating)`;
+          } else {
+            oiSummary = `Stable Open Interest (${openInterestChangePct >= 0 ? '+' : ''}${openInterestChangePct}% 4h${valFormatted})`;
+          }
+        }
+      }
+    }
+
+    return {
+      fundingRatePct,
+      fundingBias,
+      openInterestChangePct,
+      openInterestUsd,
+      oiSummary,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {

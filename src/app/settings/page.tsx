@@ -28,6 +28,7 @@ export default async function SettingsPage() {
     ai_evaluator_max_cost_usd: null,
     ai_evaluator_monthly_budget_usd: null,
     enable_ai_signal_gatekeeper: null,
+    telegram_send_signal_chart: null,
   };
 
   try {
@@ -49,6 +50,7 @@ export default async function SettingsPage() {
       ai_evaluator_max_cost_usd: map['ai_evaluator_max_cost_usd'] ?? null,
       ai_evaluator_monthly_budget_usd: map['ai_evaluator_monthly_budget_usd'] ?? null,
       enable_ai_signal_gatekeeper: map['enable_ai_signal_gatekeeper'] ?? null,
+      telegram_send_signal_chart: map['telegram_send_signal_chart'] ?? null,
     };
   } catch (err) {
     // DB may not have run the latest migration yet — form still renders with empty defaults

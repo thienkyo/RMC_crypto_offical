@@ -240,5 +240,13 @@ export async function deleteSignal(id: number): Promise<void> {
   await db.query(`DELETE FROM strategy_signals WHERE id = $1`, [id]);
 }
 
+/** Mark a logged signal row as delivered to Telegram. */
+export async function markSignalDelivered(id: number): Promise<void> {
+  await db.query(
+    `UPDATE strategy_signals SET telegram_delivered = TRUE WHERE id = $1`,
+    [id],
+  );
+}
+
 // computeSignalMetrics, SignalMetrics, and StrategySignalRow are
 // re-exported from src/lib/strategy/signalMetrics.ts above.

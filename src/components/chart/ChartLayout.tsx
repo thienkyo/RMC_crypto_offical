@@ -2,6 +2,7 @@
 
 import { useRef, useMemo, useEffect, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import type { LogicalRange, IChartApi, SeriesMarker, UTCTimestamp as LWCTimestamp } from 'lightweight-charts';
 import { format } from 'date-fns';
 import { useChartStore } from '@/store/chart';
@@ -16,7 +17,8 @@ import { useLiveStrategies } from '@/hooks/useLiveStrategy';
 import { useHtfCandles } from '@/hooks/useHtfCandles';
 import { computeSignalCandles } from '@/lib/strategy/signals';
 import { strategyScoreRange }  from '@/lib/strategy/rating';
-import { PriceChart, type PriceChartHandle } from './PriceChart';
+import type { StrategySignalRow } from '@/lib/strategy/signalMetrics';
+import { PriceChart, type PriceChartHandle, type TradeScreenshotOverlay } from './PriceChart';
 import { SubChart,   type SubChartHandle   } from './SubChart';
 import { VPConfigCard }                      from './VPConfigCard';
 import { CandleTimer, CandleTimerInline }       from './CandleTimer';
@@ -163,7 +165,7 @@ interface ChartLayoutProps {
    * current price chart canvas as a base64 PNG.  Used by AnalysisPanel to
    * feed screenshots to the Phase 3 AI analysis API.
    */
-  onCaptureMounted?: (capture: () => string | null) => void;
+  onCaptureMounted?: (capture: (overlay?: TradeScreenshotOverlay) => string | null) => void;
 }
 
 export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
@@ -568,7 +570,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   useEffect(() => {
     if (!onCaptureMounted) return;
     const raf = requestAnimationFrame(() => {
-      onCaptureMounted(() => priceRef.current?.captureScreenshot() ?? null);
+      onCaptureMounted((overlay) => priceRef.current?.captureScreenshot(overlay) ?? null);
     });
     return () => cancelAnimationFrame(raf);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -581,6 +583,19 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
   const liveStrategies = useLiveStrategies();
   const { htfCandlesBySymbol } = useHtfCandles(chartStrategies);
+
+  // Share the same React Query cache as RecentSignalsStrip so persisted DB signals
+  // always render a yellow square even if a candle wicked back before closing.
+  const { data: persistedSignals = [] } = useQuery<StrategySignalRow[]>({
+    queryKey: ['recent-signals-strip'],
+    queryFn: async () => {
+      const res = await fetch('/api/strategy-signals');
+      if (!res.ok) throw new Error('Failed to fetch signals');
+      return res.json();
+    },
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
 
   // ── Marker visibility controls — init from persisted store ──────────────
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
@@ -660,21 +675,31 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       const raw:     SeriesMarker<LWCTimestamp>[] = [];
       const entries: SeriesMarker<LWCTimestamp>[] = [];
       const exits:   SeriesMarker<LWCTimestamp>[] = [];
+      const rawSeen = new Set<string>();
 
       if (liveStrategies.length === 0) return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
 
+      const activeStrategyIds = new Set<string>();
+      const candleTimesSec    = new Set<number>(candles.map((c) => Math.floor(c.openTime / 1000)));
+
       for (let idx = 0; idx < liveStrategies.length; idx++) {
         const { strategy, trades } = liveStrategies[idx]!;
+        activeStrategyIds.add(strategy.id);
         const label = (strategy.name.split(' ')[0] ?? 'S').slice(0, 4).toUpperCase();
         const htfCandles = htfCandlesBySymbol.get(strategy.symbol) ?? {};
 
         // Raw condition-signal markers — amber squares
         const rawSignals = computeSignalCandles(strategy, candles, htfCandles);
         for (const signal of rawSignals) {
-          const isLong = signal.direction === 'long';
+          const isLong   = signal.direction === 'long';
+          const timeSec  = Math.floor(signal.openTimeMs / 1000) as LWCTimestamp;
+          const position = isLong ? 'belowBar' : 'aboveBar';
+          const dedupKey = `${timeSec}:${position}`;
+          if (rawSeen.has(dedupKey)) continue;
+          rawSeen.add(dedupKey);
           raw.push({
-            time:     Math.floor(signal.openTimeMs / 1000) as LWCTimestamp,
-            position: isLong ? 'belowBar' : 'aboveBar',
+            time:     timeSec,
+            position,
             color:    '#fbbf24',
             shape:    'square',
             text:     '',
@@ -705,9 +730,32 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           }
         }
       }
+
+      // Merge persisted Telegram signals from strategy_signals so any intra-bar
+      // signal that later retraced before bar close still keeps its yellow square.
+      for (const dbSig of persistedSignals) {
+        if (!activeStrategyIds.has(dbSig.strategy_id)) continue;
+        if (dbSig.symbol !== symbol || dbSig.timeframe !== timeframe) continue;
+        const timeSec = Math.floor(dbSig.candle_time / 1000) as LWCTimestamp;
+        if (!candleTimesSec.has(timeSec)) continue;
+        const isLong   = dbSig.direction === 'long';
+        const position = isLong ? 'belowBar' : 'aboveBar';
+        const dedupKey = `${timeSec}:${position}`;
+        if (rawSeen.has(dedupKey)) continue;
+        rawSeen.add(dedupKey);
+        raw.push({
+          time:     timeSec,
+          position,
+          color:    '#fbbf24',
+          shape:    'square',
+          text:     '',
+          size:     1,
+        });
+      }
+
       return { rawSignalMarkers: raw, tradeEntryMarkers: entries, tradeExitMarkers: exits };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveStrategies, candles.length, savedMarkerSettings.showLabels, htfCandlesBySymbol]);
+    }, [liveStrategies, candles.length, savedMarkerSettings.showLabels, htfCandlesBySymbol, persistedSignals, symbol, timeframe]);
 
   // ── Pattern markers on price chart ───────────────────────────────────────
   // Extract IndicatorMarker[] from any indicator series that carries them

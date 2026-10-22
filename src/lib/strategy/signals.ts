@@ -24,10 +24,10 @@ export interface RawSignal {
 }
 
 /**
- * Return every closed candle (excluding the currently-forming bar) where
+ * Return every candle (including the currently-forming bar) where
  * the strategy's entry conditions were met, honouring each condition's
- * checkMode + checkCandles window.  Matches the backtester exactly so chart
- * markers and trade counts are always in sync.
+ * checkMode + checkCandles window. Matches notify.ts and the backtester so chart
+ * markers and live Telegram alerts are always in sync.
  */
 export function computeSignalCandles(strategy: Strategy, candles: Candle[], htfCandles?: HtfCandleSets): RawSignal[] {
   const allConditions = strategy.entryConditions.flatMap((g) => g.conditions);
@@ -47,9 +47,9 @@ export function computeSignalCandles(strategy: Strategy, candles: Candle[], htfC
 
   const signals: RawSignal[] = [];
 
-  // candles.length - 1 skips the currently-forming bar (same convention as notify.ts).
-  for (let i = 1; i < candles.length - 1; i++) {
-    if (evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache)) {
+  // Evaluate up to and including the forming bar (same convention as notify.ts).
+  for (let i = 1; i < candles.length; i++) {
+    if (evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache, direction)) {
       signals.push({ openTimeMs: candles[i]!.openTime, direction });
     }
   }

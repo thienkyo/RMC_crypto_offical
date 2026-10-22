@@ -194,6 +194,9 @@ function SignalRow({ signal, onSave, onClear, onDelete }: SignalRowProps) {
       {/* ── Row top: direction badge + symbol + signal price ── */}
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[10px] font-mono text-text-muted flex-shrink-0" title={`Signal DB ID: sig#${signal.id}`}>
+            #{signal.id}
+          </span>
           <span className={`text-[9px] font-mono font-bold px-1.5 py-px rounded flex-shrink-0
                             ${isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
             {isLong ? '▲ LONG' : '▼ SHORT'}

@@ -93,10 +93,19 @@ export function parseAndValidateEvaluationResponse(
 
   const reasonsRaw = (parsed['reasons'] as Record<string, unknown>) ?? {};
   const metricsRaw = (parsed['metrics'] as Record<string, unknown>) ?? {};
+  const stepsRaw = parsed['analysisSteps'] as Record<string, unknown> | undefined;
 
   const confidence = ['high', 'medium', 'low'].includes(String(parsed['confidence']).toLowerCase())
     ? (String(parsed['confidence']).toLowerCase() as 'high' | 'medium' | 'low')
     : 'medium';
+
+  const analysisSteps = stepsRaw
+    ? {
+        trendAndHtfConfluence: String(stepsRaw['trendAndHtfConfluence'] ?? ''),
+        indicatorAndVolumeFlow: String(stepsRaw['indicatorAndVolumeFlow'] ?? ''),
+        riskRewardAndVolatility: String(stepsRaw['riskRewardAndVolatility'] ?? ''),
+      }
+    : undefined;
 
   return {
     status,
@@ -104,6 +113,7 @@ export function parseAndValidateEvaluationResponse(
     summary: typeof parsed['summary'] === 'string' && parsed['summary'].trim().length > 0
       ? parsed['summary'].trim()
       : `Evaluation completed with ${status} verdict.`,
+    ...(analysisSteps ? { analysisSteps } : {}),
     reasons: {
       technical: String(reasonsRaw['technical'] ?? 'Technical indicators analyzed.'),
       sentiment: String(reasonsRaw['sentiment'] ?? 'Sentiment analyzed.'),

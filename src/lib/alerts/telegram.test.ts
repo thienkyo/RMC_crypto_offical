@@ -322,6 +322,30 @@ describe('Telegram Alerts with Topics', () => {
     const sendBody = JSON.parse(sendCall[1].body);
     expect(sendBody.message_thread_id).toBeUndefined(); // Fallback to main chat
   });
+
+  it('sends photo before sendMessage when image is provided', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/sendPhoto') || url.includes('/sendMessage')) {
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return { ok: false };
+    });
+
+    const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const res = await sendTelegramAlert(
+      'Signal message text',
+      'StrategyAlpha',
+      'signal',
+      { enabled: false, name: '' },
+      { buffer: fakePng, caption: '<b>BTCUSDT</b> • LONG ▲' },
+    );
+
+    expect(res.ok).toBe(true);
+    // Should call /sendPhoto and then /sendMessage
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toContain('/sendPhoto');
+    expect(fetchMock.mock.calls[1][0]).toContain('/sendMessage');
+  });
 });
 
 describe('resolveStrategyTelegramTopic', () => {
@@ -366,6 +390,72 @@ describe('formatMarketFlushMessage (Option E)', () => {
     expect(msg).toContain('PAXGUSDT');
     expect(msg).toContain('CAVEAT');
     expect(msg).toContain('Wait for 4h candle close');
+  });
+
+  it('includes debug Ref IDs in strategy signal, alert, and market flush messages', async () => {
+    const {
+      formatStrategySignalMessage,
+      formatAlertMessage,
+      formatMarketFlushMessage,
+    } = await import('./telegram');
+
+    const sigMsg = formatStrategySignalMessage({
+      strategyName:    'UTILMATE_L',
+      rating:          5,
+      symbol:          'BTCUSDT',
+      timeframe:       '4h',
+      direction:       'long',
+      entryPrice:      67000,
+      stopLossPct:     2,
+      takeProfitPct:   5,
+      conditionGroups: [],
+      timestamp:       1770000000000,
+      signalId:        482,
+      strategyId:      'strategy_1747000111',
+      strategyVersion: 3,
+    });
+    expect(sigMsg).toContain('sig#482');
+    expect(sigMsg).toContain('strategy_1747000111 (v3)');
+
+    const alertMsg = formatAlertMessage({
+      symbol:         'BTCUSDT',
+      timeframe:      '1h',
+      indicatorName:  'RSI(14)',
+      triggerDesc:    'RSI(14) below 30',
+      currentValue:   28.4,
+      price:          67000,
+      timestamp:      1770000000000,
+      ruleId:         'rule_abc_99',
+      alertHistoryId: 84,
+    });
+    expect(alertMsg).toContain('alert#84');
+    expect(alertMsg).toContain('rule:rule_abc_99');
+
+    const flushMsg = formatMarketFlushMessage({
+      signals: [
+        {
+          strategyName: 'L_BTC',
+          symbol:       'BTCUSDT',
+          timeframe:    '4h',
+          direction:    'long',
+          entryPrice:   62000,
+          rating:       5,
+          signalId:     501,
+          strategyId:   'strategy_999',
+        },
+      ],
+      macroEvaluation: {
+        verdict:            'PASS',
+        confidence:         'high',
+        summary:            'Healthy pullback.',
+        correlationContext: 'Aligned',
+        keyRisks:           [],
+        recommendedAction:  'Proceed',
+      },
+      timestamp: 1770000000000,
+    });
+    expect(flushMsg).toContain('sig#501');
+    expect(flushMsg).toContain('strategy_999');
   });
 });
 

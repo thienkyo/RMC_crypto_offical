@@ -6,13 +6,16 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
 import { fetchStrategiesFromDb } from '@/lib/strategy/api';
 import { useStrategyStore } from '@/store/strategy';
+import { useAlertPoller } from '@/hooks/useAlertPoller';
 
 /**
  * Global hydrator: on app startup, syncs strategies from the database so
  * any client device (desktop, tablet, mobile) on any route has the full
- * strategy library immediately available.
+ * strategy library immediately available. Also runs the global alert poller.
  */
 function StrategyGlobalHydrator() {
+  useAlertPoller();
+
   useEffect(() => {
     fetchStrategiesFromDb().then((remote) => {
       if (remote && remote.length > 0) {

@@ -344,7 +344,7 @@ export function runBacktest(
     if (
       openPositions.length < maxPositions &&
       pendingLimit === null &&
-      evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache)
+      evaluateConditionGroupsChecked(strategy.entryConditions, candles, i, cache, direction)
     ) {
       if (isMarketFill(entryOffset)) {
         // Market fill — same behaviour as before this feature was added

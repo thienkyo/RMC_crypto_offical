@@ -168,6 +168,12 @@ export function StrategyForm({ strategy: initial }: Props) {
             }`}>
               {draft.action.type === 'enter_long' ? '▲ Bullish' : '▼ Bearish'}
             </span>
+            <span
+              className="ml-auto text-[10px] font-mono font-normal text-text-muted bg-surface-2 border border-surface-border px-1.5 py-0.5 rounded select-all"
+              title="Strategy ID & Version (matches Telegram Ref ID)"
+            >
+              {draft.id} · v{draft.version}
+            </span>
           </h3>
 
           <div className="flex flex-wrap gap-3 items-end">
@@ -525,6 +531,31 @@ export function StrategyForm({ strategy: initial }: Props) {
                         </span>
                       </div>
                     </label>
+                  </div>
+
+                  {/* Minimum Signal Rating Gate */}
+                  <div className="pt-2 border-t border-surface-border/40 flex items-center justify-between gap-3">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-text-primary flex items-center gap-1.5">
+                        <span>⭐</span>
+                        <span>Minimum Signal Grade to Fire</span>
+                      </span>
+                      <span className="text-[11px] text-text-muted leading-relaxed">
+                        Suppresses live Telegram alerts and trade logging for weak signals below this confluence rating.
+                      </span>
+                    </div>
+                    <select
+                      value={draft.minSignalRating ?? 3}
+                      onChange={(e) => patch('minSignalRating', Number(e.target.value))}
+                      className="h-7 rounded border border-surface-border bg-surface px-2 text-xs font-mono text-text-primary outline-none focus:border-blue-500/60 cursor-pointer flex-shrink-0"
+                    >
+                      <option value={1}>All (≥ D / 1★)</option>
+                      <option value={2}>≥ C (2★)</option>
+                      <option value={3}>≥ C+ (3★ Default)</option>
+                      <option value={4}>≥ B (4★)</option>
+                      <option value={5}>≥ B+ (5★)</option>
+                      <option value={6}>≥ A (6★)</option>
+                    </select>
                   </div>
                 </div>
               </>

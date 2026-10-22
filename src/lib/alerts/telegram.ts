@@ -39,6 +39,30 @@ export interface TelegramSendResult {
  *
  * Returns ok:true as long as at least one delivery succeeded. Never throws.
  */
+export interface TelegramAlertImage {
+  buffer: Buffer;
+  caption?: string;
+}
+
+/**
+ * Checks whether chart images should be attached to strategy signals.
+ * Priority: DB setting `telegram_send_signal_chart` > default (true).
+ */
+export async function isSignalChartEnabled(): Promise<boolean> {
+  try {
+    const { rows } = await db.query<{ value: string | null }>(
+      `SELECT value FROM settings WHERE key = 'telegram_send_signal_chart' LIMIT 1`,
+    );
+    if (rows[0]?.value !== undefined && rows[0]?.value !== null) {
+      const val = rows[0].value.trim().toLowerCase();
+      return val === 'true' || val === '1';
+    }
+  } catch (err) {
+    console.warn('[telegram] Failed to read telegram_send_signal_chart setting:', err);
+  }
+  return true; // Default is ON
+}
+
 /**
  * Send an HTML-mode message, routing to the appropriate chat IDs.
  *
@@ -53,7 +77,8 @@ export async function sendTelegramAlert(
   text:       string,
   targetName: string,
   channel:    'signal' | 'alert' = 'signal',
-  topic?:     { enabled: boolean; name: string }
+  topic?:     { enabled: boolean; name: string },
+  image?:     TelegramAlertImage
 ): Promise<TelegramSendResult> {
   if (!process.env.TELEGRAM_BOT_TOKEN) {
     return { ok: false, error: 'TELEGRAM_BOT_TOKEN not set in .env.local' };
@@ -114,6 +139,40 @@ export async function sendTelegramAlert(
 
         if (finalTopicName) {
           threadId = await resolveTopicThreadId(chatId, finalTopicName);
+        }
+
+        // If image is present, send photo first
+        if (image?.buffer) {
+          try {
+            const formData = new FormData();
+            formData.append('chat_id', chatId);
+            if (threadId) formData.append('message_thread_id', String(threadId));
+            formData.append(
+              'photo',
+              new Blob([new Uint8Array(image.buffer)], { type: 'image/png' }),
+              'signal_chart.png',
+            );
+            if (image.caption) {
+              formData.append('caption', image.caption);
+              formData.append('parse_mode', 'HTML');
+            }
+
+            let photoRes = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+              method: 'POST',
+              body: formData,
+            });
+
+            if (!photoRes.ok && threadId) {
+              // Retry without threadId if topic wasn't found
+              formData.delete('message_thread_id');
+              await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+                method: 'POST',
+                body: formData,
+              });
+            }
+          } catch (photoErr) {
+            console.warn('[telegram] Signal photo send exception:', photoErr);
+          }
         }
 
         const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: 'HTML' };
@@ -257,15 +316,20 @@ export function resolveStrategyTelegramTopic(
  * Time:      2026-05-08 14:35 UTC
  */
 export function formatAlertMessage(opts: {
-  symbol:        string;
-  timeframe:     string;
-  indicatorName: string;  // e.g. "RSI(14)" or "Price"
-  triggerDesc:   string;  // e.g. "RSI crossed below 30"
-  currentValue:  number;  // e.g. 28.4
-  price:         number;  // close price of the triggering candle
-  timestamp:     number;  // Unix ms of the candle open time
+  symbol:          string;
+  timeframe:       string;
+  indicatorName:   string;  // e.g. "RSI(14)" or "Price"
+  triggerDesc:     string;  // e.g. "RSI crossed below 30"
+  currentValue:    number;  // e.g. 28.4
+  price:           number;  // close price of the triggering candle
+  timestamp:       number;  // Unix ms of the candle open time
+  ruleId?:         string;  // alert_rules.id for debugging
+  alertHistoryId?: number;  // alert_history.id for debugging
 }): string {
-  const { symbol, timeframe, indicatorName, triggerDesc, currentValue, price, timestamp } = opts;
+  const {
+    symbol, timeframe, indicatorName, triggerDesc,
+    currentValue, price, timestamp, ruleId, alertHistoryId,
+  } = opts;
 
   const W = 11; // label column width (longest label is "Indicator:" = 10 + 1 space)
   const lines = [
@@ -276,6 +340,13 @@ export function formatAlertMessage(opts: {
     `${lbl('Price:', W)}${fmtPrice(price)}`,
     `${lbl('Time:', W)}${fmtLocal(timestamp)}`,
   ];
+
+  const refParts: string[] = [];
+  if (alertHistoryId != null) refParts.push(`alert#${alertHistoryId}`);
+  if (ruleId)                 refParts.push(`rule:${ruleId}`);
+  if (refParts.length > 0) {
+    lines.push(`${lbl('Ref:', W)}${refParts.join(' · ')}`);
+  }
 
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
 }
@@ -336,11 +407,18 @@ export function formatStrategySignalMessage(opts: {
   timestamp:        number;
   /** Optional AI order verdict & evaluation snapshot. */
   aiEvaluation?:    import('@/lib/ai/evaluator/types').OrderEvaluationResult;
+  /** Optional DB row ID in strategy_signals for troubleshooting (e.g. sig#482). */
+  signalId?:        number;
+  /** Optional strategy ID for troubleshooting (e.g. strategy_174...). */
+  strategyId?:      string;
+  /** Optional strategy version number for troubleshooting. */
+  strategyVersion?: number;
 }): string {
   const {
     strategyName, rating, symbol, timeframe, direction,
     entryPrice, entryPriceLimit, stopLossPct, takeProfitPct,
     conditionGroups, timestamp, aiEvaluation,
+    signalId, strategyId, strategyVersion,
   } = opts;
 
 
@@ -448,6 +526,16 @@ export function formatStrategySignalMessage(opts: {
     lines.push('');
     lines.push(`🤖 ${lbl('AI Verdict:', W)}${icon} (${aiEvaluation.confidence.toUpperCase()})`);
     lines.push(`💡 ${lbl('AI Note:', W)}${aiEvaluation.summary}`);
+  }
+
+  const refParts: string[] = [];
+  if (signalId != null) refParts.push(`sig#${signalId}`);
+  if (strategyId) {
+    refParts.push(strategyVersion != null ? `${strategyId} (v${strategyVersion})` : strategyId);
+  }
+  if (refParts.length > 0) {
+    lines.push('');
+    lines.push(`🆔 ${lbl('Ref:', W)}${refParts.join(' · ')}`);
   }
 
   return `<pre>${lines.map(esc).join('\n')}</pre>`;
@@ -798,6 +886,8 @@ export function formatMarketFlushMessage(opts: {
     direction: 'long' | 'short';
     entryPrice: number;
     rating: number;
+    signalId?: number;
+    strategyId?: string;
   }>;
   macroEvaluation: import('@/lib/ai/evaluator/macro').MacroMarketEvaluation;
   timestamp: number;
@@ -823,8 +913,13 @@ export function formatMarketFlushMessage(opts: {
   for (const s of signals) {
     const isLong = s.direction === 'long';
     const stars = '⭐'.repeat(Math.min(7, Math.max(1, s.rating)));
+    const idMeta = [
+      s.signalId != null ? `sig#${s.signalId}` : null,
+      s.strategyId ? s.strategyId : null,
+    ].filter(Boolean).join(' · ');
+    const metaSuffix = idMeta ? ` <code>[${esc(idMeta)}]</code>` : '';
     lines.push(
-      `• <b>${s.symbol}</b> (${s.timeframe}): ${isLong ? '🟢 LONG' : '🔴 SHORT'} @ $${s.entryPrice.toLocaleString('en-US')} | ${stars} ("${s.strategyName}")`
+      `• <b>${s.symbol}</b> (${s.timeframe}): ${isLong ? '🟢 LONG' : '🔴 SHORT'} @ $${s.entryPrice.toLocaleString('en-US')} | ${stars} ("${s.strategyName}")${metaSuffix}`
     );
   }
 

@@ -19,23 +19,28 @@ You MUST choose exactly ONE of these three verdicts:
 
 STRICT GUIDELINES:
 1. Be objective, conservative, and realistic. Most setups in financial markets contain nuances — only assign "PASS" when confluence is truly high.
-2. Explanations must be concise, punchy, and fact-based. Mention specific indicators (e.g. RSI value, EMA position, pattern, ADX regime, CVD divergence, HTF trend) and specific news/social context.
-3. Check Higher Timeframe (HTF) confluence: penalize counter-trend setups fighting the macro trend. Check Market Regime (ADX): penalize breakout attempts in ranging chop (ADX < 20).
+2. Explanations must be concise, punchy, and fact-based. Mention specific indicators (e.g. RSI value, EMA position, pattern, ADX regime, CVD divergence, HTF trend, ATR multiple, Funding/Open Interest) and specific news/social context.
+3. Check Higher Timeframe (HTF) confluence: penalize counter-trend setups fighting the macro trend. Check Market Regime (ADX): penalize breakout attempts in ranging chop (ADX < 20). Check ATR Sizing: warn or penalize if Stop Loss is inside normal 1-bar ATR noise (< 1.0x ATR). Check Derivatives: warn if funding rate and OI show crowded leverage in the direction of the trade.
 4. NEVER return generic financial disclaimers like "trading involves risk".
-5. You MUST return ONLY valid JSON matching this schema:
+5. REASON BEFORE DECIDING: You MUST populate "analysisSteps", "reasons", and "metrics" BEFORE writing your final "status", "confidence", and "summary". Return ONLY valid JSON matching this exact schema order:
 {
-  "status": "PASS" | "CAVEAT" | "REJECT",
-  "confidence": "high" | "medium" | "low",
-  "summary": "<1-2 sentence high-level executive decision>",
+  "analysisSteps": {
+    "trendAndHtfConfluence": "<Step 1: Evaluate local trend, ADX regime, and Higher Timeframe (HTF) alignment>",
+    "indicatorAndVolumeFlow": "<Step 2: Evaluate RSI, MACD, Bollinger, CVD order flow, and Derivatives (Funding/OI) positioning>",
+    "riskRewardAndVolatility": "<Step 3: Evaluate Entry, Stop Loss / Take Profit placement relative to 14-period ATR and Volume Profile POC>"
+  },
   "reasons": {
-    "technical": "<Concise summary of technical indicators & price action>",
+    "technical": "<Concise summary of technical indicators, derivatives, & price action>",
     "sentiment": "<Concise summary of news, social sentiment, or macro catalyst>",
     "primaryRisk": "<Single most critical risk factor or invalidation point>"
   },
   "metrics": {
     "technicalScore": <integer 0 to 100>,
     "sentimentScore": <integer -100 to +100>
-  }
+  },
+  "status": "PASS" | "CAVEAT" | "REJECT",
+  "confidence": "high" | "medium" | "low",
+  "summary": "<1-2 sentence high-level executive decision>"
 }
 `;
 
@@ -65,6 +70,25 @@ export function buildEvaluationUserPrompt(payload: EvaluationPromptPayload): str
 `
     : '';
 
+  const volatilitySection = technical.volatilityMetrics
+    ? `
+### VOLATILITY & INVALIDATION SIZING (ATR-14)
+- 14-Period ATR: $${technical.volatilityMetrics.atr14.toLocaleString('en-US')}
+- Stop Loss Distance: ${technical.volatilityMetrics.slAtrMultiple !== undefined ? `${technical.volatilityMetrics.slAtrMultiple}x ATR` : 'Not specified'}
+- Take Profit Distance: ${technical.volatilityMetrics.tpAtrMultiple !== undefined ? `${technical.volatilityMetrics.tpAtrMultiple}x ATR` : 'Not specified'}
+- ATR Noise Assessment: ${technical.volatilityMetrics.noiseAssessment}
+`
+    : '';
+
+  const derivativesSection = technical.derivatives
+    ? `
+### DERIVATIVES & LEVERAGE CONTEXT (PERPETUAL FUTURES)
+- 8h Funding Rate: ${technical.derivatives.fundingRatePct >= 0 ? '+' : ''}${technical.derivatives.fundingRatePct}% (${technical.derivatives.fundingBias})
+- 4h Open Interest Change: ${technical.derivatives.openInterestChangePct !== undefined ? `${technical.derivatives.openInterestChangePct >= 0 ? '+' : ''}${technical.derivatives.openInterestChangePct}%` : 'N/A'}
+- Positioning & Squeeze Risk: ${technical.derivatives.oiSummary}
+`
+    : '';
+
   return `### PROPOSED ORDER SETUP
 - Asset / Symbol: ${symbol}
 - Chart Timeframe: ${timeframe}
@@ -73,7 +97,7 @@ export function buildEvaluationUserPrompt(payload: EvaluationPromptPayload): str
 - Stop Loss: ${slText}
 - Take Profit: ${tpText}
 ${customNotes ? `- User Notes: "${customNotes}"` : ''}
-${htfSection}
+${htfSection}${volatilitySection}${derivativesSection}
 ### TECHNICAL CONTEXT & PRICE ACTION (${timeframe.toUpperCase()})
 - Current Price: $${technical.currentPrice.toLocaleString('en-US')} (${technical.priceChange24hPct ? `${technical.priceChange24hPct > 0 ? '+' : ''}${technical.priceChange24hPct.toFixed(2)}% (24h)` : 'N/A'})
 - Market Regime (ADX): ${technical.marketRegime?.regime ?? 'N/A'}

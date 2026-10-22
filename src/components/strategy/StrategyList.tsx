@@ -592,14 +592,16 @@ function StrategyRow({
   return (
     <div className="relative">
       <div
-        className={`group flex items-center justify-between px-3 py-2 cursor-pointer
+        className={`group flex items-center justify-between pl-5 pr-3 py-1.5 cursor-pointer
                     hover:bg-surface-2 transition-colors
-                    ${active ? 'bg-surface-2 border-l-2 border-blue-500' : 'border-l-2 border-transparent'}`}
+                    ${active ? 'bg-surface-2 border-l-2 border-blue-500' : 'border-l-2 border-surface-border/50'}`}
         onClick={onSelect}
       >
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-sm text-text-primary truncate">{s.name}</span>
+            <span className={`text-xs truncate ${active ? 'text-text-primary font-medium' : 'text-text-secondary group-hover:text-text-primary'}`}>
+              {s.name}
+            </span>
             {(s.isActive ?? false) && (
               <span className={`text-[9px] font-bold flex-shrink-0 animate-pulse
                                ${s.action.type === 'enter_long' ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -1308,24 +1310,31 @@ function SymbolGroupList({
         });
 
         return (
-          <div key={symbol} className="relative">
-            <div className="group/group flex items-center gap-1.5 px-3 py-1.5
-                            text-text-muted hover:text-text-primary hover:bg-surface-2
-                            transition-colors select-none">
+          <div key={symbol} className="relative mb-0.5">
+            <div
+              className={`group/group sticky top-0 z-10 flex items-center gap-1.5 px-2.5 py-1.5
+                          bg-surface-2/95 hover:bg-surface-3 border-y border-surface-border/80
+                          border-l-2 ${isMtf ? 'border-l-cyan-400' : 'border-l-amber-400'}
+                          transition-colors select-none`}
+            >
               <button
                 type="button"
                 onClick={() => toggleGroup(symbol)}
                 className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
               >
-                <span className={`text-[10px] transition-transform duration-150 flex-shrink-0 ${isCollapsed ? '-rotate-90' : ''}`}>
+                <span className={`text-[10px] text-text-secondary transition-transform duration-150 flex-shrink-0 ${isCollapsed ? '-rotate-90' : ''}`}>
                   ▾
                 </span>
-                <span className="text-[11px] font-mono font-semibold text-text-secondary truncate">
+                <span className={`text-xs font-mono font-bold tracking-wide truncate ${
+                  isMtf ? 'text-cyan-300' : 'text-amber-300'
+                }`}>
                   {symbol}
                 </span>
                 {activeLongs > 0 && <span className="text-[9px] font-bold text-emerald-400 flex-shrink-0 animate-pulse">▲</span>}
                 {activeShorts > 0 && <span className="text-[9px] font-bold text-red-400 flex-shrink-0 animate-pulse">▼</span>}
-                <span className="text-[10px] font-mono text-text-muted flex-shrink-0">{list.length}</span>
+                <span className="px-1.5 py-px rounded bg-surface-3 text-[10px] font-mono font-semibold text-text-secondary flex-shrink-0">
+                  {list.length}
+                </span>
               </button>
               <button
                 type="button"

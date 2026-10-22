@@ -186,4 +186,107 @@ describe('AI Order Decision Evaluator', () => {
     expect(prompt).toContain('Market Regime (ADX): Strong Bullish Trend (ADX: 29.4, +DI > -DI)');
     expect(prompt).toContain('Order Flow (CVD Divergence): Bullish Absorption');
   });
+
+  it('parses Chain-of-Thought analysisSteps before verdict status', () => {
+    const raw = JSON.stringify({
+      analysisSteps: {
+        trendAndHtfConfluence: '1h trend aligns with 4h macro bullish structure (ADX 28.5).',
+        indicatorAndVolumeFlow: 'CVD shows buyer absorption; funding rate is neutral (+0.01%).',
+        riskRewardAndVolatility: 'Stop loss is placed at 1.8x ATR below POC support.',
+      },
+      reasons: {
+        technical: 'Strong trend and order flow confluence.',
+        sentiment: 'Positive institutional flows.',
+        primaryRisk: 'Break below 4h EMA50.',
+      },
+      metrics: {
+        technicalScore: 86,
+        sentimentScore: 50,
+      },
+      status: 'PASS',
+      confidence: 'high',
+      summary: 'High-conviction continuation setup.',
+    });
+
+    const parsed = parseAndValidateEvaluationResponse(raw, 'gemini', 'gemini-3.8-flash');
+    expect(parsed.status).toBe('PASS');
+    expect(parsed.analysisSteps).toBeDefined();
+    expect(parsed.analysisSteps?.trendAndHtfConfluence).toContain('4h macro bullish');
+    expect(parsed.analysisSteps?.indicatorAndVolumeFlow).toContain('funding rate');
+    expect(parsed.analysisSteps?.riskRewardAndVolatility).toContain('1.8x ATR');
+  });
+
+  it('computes 14-period ATR and flags tight Stop Loss (< 1.0x ATR) in buildTechnicalSnapshot', async () => {
+    const { buildTechnicalSnapshot } = await import('./contextBuilder');
+    const candles = Array.from({ length: 40 }, (_, i) => ({
+      openTime: 1700000000000 + i * 3600000,
+      closeTime: 1700000000000 + (i + 1) * 3600000 - 1,
+      open: 1000 + i * 2,
+      high: 1025 + i * 2, // ~$50 high-low bar range
+      low: 975 + i * 2,
+      close: 1010 + i * 2,
+      volume: 500,
+    }));
+
+    const latestClose = candles[candles.length - 1]!.close;
+    // Stop loss only $15 away while ATR is ~$50 -> ~0.3x ATR (tight stop inside noise)
+    const tightSnap = buildTechnicalSnapshot(
+      candles,
+      undefined,
+      undefined,
+      latestClose,
+      latestClose - 15,
+      latestClose + 120,
+    );
+
+    expect(tightSnap.volatilityMetrics).toBeDefined();
+    expect(tightSnap.volatilityMetrics!.atr14).toBeGreaterThan(40);
+    expect(tightSnap.volatilityMetrics!.slAtrMultiple).toBeLessThan(1.0);
+    expect(tightSnap.volatilityMetrics!.noiseAssessment).toContain('HIGH NOISE RISK');
+    expect(tightSnap.volatilityMetrics!.noiseAssessment).toContain('wick stop-out');
+  });
+
+  it('injects ATR volatility sizing and Futures Derivatives metrics into the prompt', () => {
+    const payload: EvaluationPromptPayload = {
+      symbol: 'BTCUSDT',
+      timeframe: '1h',
+      direction: 'long',
+      entryPrice: 90000,
+      stopLossPrice: 88200,
+      takeProfitPrice: 94500,
+      technical: {
+        currentPrice: 90000,
+        trendEma: 'Price > EMA20 > EMA50',
+        rsi14: 58,
+        volatilityMetrics: {
+          atr14: 900,
+          slAtrMultiple: 2.0,
+          tpAtrMultiple: 5.0,
+          noiseAssessment: 'Healthy Structural Buffer (SL = 2x ATR — outside normal 1-bar noise)',
+        },
+        derivatives: {
+          fundingRatePct: 0.045,
+          fundingBias: 'Elevated Long Funding (Crowded Longs)',
+          openInterestChangePct: 6.2,
+          oiSummary: 'Elevated Long Squeeze Risk (Rising OI + High Positive Funding — late longs vulnerable to flush)',
+        },
+        activePatterns: [],
+        recentCandlesSummary: 'Bar -0: GREEN',
+      },
+      sentiment: {
+        averageScore: 0.1,
+        overallLabel: 'neutral',
+        totalArticlesSampled: 2,
+        recentHeadlines: [],
+      },
+    };
+
+    const prompt = buildEvaluationUserPrompt(payload);
+    expect(prompt).toContain('VOLATILITY & INVALIDATION SIZING (ATR-14)');
+    expect(prompt).toContain('2x ATR');
+    expect(prompt).toContain('DERIVATIVES & LEVERAGE CONTEXT (PERPETUAL FUTURES)');
+    expect(prompt).toContain('+0.045% (Elevated Long Funding (Crowded Longs))');
+    expect(prompt).toContain('+6.2%');
+    expect(prompt).toContain('Elevated Long Squeeze Risk');
+  });
 });

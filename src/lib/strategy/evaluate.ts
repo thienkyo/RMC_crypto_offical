@@ -215,50 +215,208 @@ export function evaluateConditionChecked(
   const mode = condition.checkMode    ?? 'confirmation';
   const n    = Math.max(1, condition.checkCandles ?? 1);
 
+  // Option C Smart Split:
+  // Indicators (RSI, BB %B, MACD, EMA, etc.) evaluate live on the forming bar.
+  // Candlestick shape patterns anchor to the last completed bar (barIndex - 1)
+  // while the live bar is < 75% complete, preventing early-bar fake candle shapes
+  // while still letting the strategy fire intra-bar when indicators confirm.
+  const isPattern = INDICATORS[condition.indicatorId]?.bias !== undefined;
+  const bar = candles[barIndex];
+  const now = Date.now();
+  const isFormingBar = bar !== undefined && bar.closeTime > now;
+  const barDuration = bar ? Math.max(1, bar.closeTime - bar.openTime) : 1;
+  const formingProgress = isFormingBar && bar ? (now - bar.openTime) / barDuration : 1;
+  const skipFormingPatternBar = isPattern && isFormingBar && formingProgress < 0.75 && barIndex > 0;
+
   if (mode === 'confirmation') {
-    // ALL of the last N candles (barIndex-N+1 … barIndex) must pass.
-    for (let i = barIndex; i > barIndex - n; i--) {
+    const effectiveBarIndex = skipFormingPatternBar ? barIndex - 1 : barIndex;
+    // ALL of the last N candles (effectiveBarIndex-N+1 … effectiveBarIndex) must pass.
+    for (let i = effectiveBarIndex; i > effectiveBarIndex - n; i--) {
       if (i < 0) return false;
       if (!evaluateCondition(condition, candles[i]!, candles[i - 1], cache)) return false;
     }
     return true;
   }
 
-  // lookback: ANY of the last N candles must pass.
-  for (let i = barIndex; i >= Math.max(0, barIndex - n + 1); i--) {
+  // lookback: ANY of the last N candles [barIndex-N+1 … barIndex] must pass.
+  // When skipFormingPatternBar is true, exclude the unformed barIndex without
+  // shifting the tail back to barIndex-N (which caused signals to vanish on bar close).
+  const startIdx = skipFormingPatternBar ? barIndex - 1 : barIndex;
+  const endIdx   = Math.max(0, barIndex - n + 1);
+  for (let i = startIdx; i >= endIdx; i--) {
     if (evaluateCondition(condition, candles[i]!, candles[i - 1], cache)) return true;
   }
   return false;
 }
 
+// ─── Regime-Aware Gate for Pure Level Groups ───────────────────────────────
+
+interface RegimeData {
+  plusDi:   Map<number, number>;
+  minusDi:  Map<number, number>;
+  rsi:      Map<number, number>;
+  macdHist: Map<number, number>;
+}
+
+const regimeCache = new WeakMap<Candle[], RegimeData>();
+
+/**
+ * Lazily compute and cache ADX(+DI/-DI), RSI(14), and MACD histogram
+ * for a candle series (at most once per candle array).
+ */
+export function getRegimeData(candles: Candle[]): RegimeData {
+  const cached = regimeCache.get(candles);
+  if (cached) return cached;
+
+  const plusDi   = new Map<number, number>();
+  const minusDi  = new Map<number, number>();
+  const rsiMap   = new Map<number, number>();
+  const macdHist = new Map<number, number>();
+
+  if (candles.length >= 15) {
+    try {
+      const adxSeries = INDICATORS.adx?.compute(candles, { period: 14 });
+      if (adxSeries?.[1]?.data && adxSeries?.[2]?.data) {
+        for (const pt of adxSeries[1].data) plusDi.set(pt.time, pt.value);
+        for (const pt of adxSeries[2].data) minusDi.set(pt.time, pt.value);
+      }
+    } catch {
+      // non-fatal
+    }
+
+    try {
+      const rsiSeries = INDICATORS.rsi?.compute(candles, { period: 14, emaPeriod: 0 });
+      if (rsiSeries?.[0]?.data) {
+        for (const pt of rsiSeries[0].data) rsiMap.set(pt.time, pt.value);
+      }
+    } catch {
+      // non-fatal
+    }
+
+    try {
+      const macdSeries = INDICATORS.macd?.compute(candles, { fast: 12, slow: 26, signal: 9, trendEma: 200 });
+      if (macdSeries?.[2]?.data) {
+        for (const pt of macdSeries[2].data) macdHist.set(pt.time, pt.value);
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  const data: RegimeData = { plusDi, minusDi, rsi: rsiMap, macdHist };
+  regimeCache.set(candles, data);
+  return data;
+}
+
+/**
+ * A "pure level" group consists solely of static indicator thresholds
+ * (e.g. RSI < 40, BB %B < 0.09) with no crossover operators (crosses_above/below)
+ * and no candlestick patterns.
+ */
+export function isLevelGroup(group: ConditionGroup): boolean {
+  const active = group.conditions.filter((c) => c.enabled !== false);
+  if (active.length === 0) return false;
+  return active.every((c) => {
+    if (String(c.operator).startsWith('crosses')) return false;
+    const ind = INDICATORS[c.indicatorId];
+    if (ind && ind.bias !== undefined) return false;
+    return true;
+  });
+}
+
+/**
+ * Regime-Aware Gate for pure level condition groups:
+ *
+ *   LONG in Bear Regime (-DI > +DI):
+ *     Requires reversal confirmation (green candle + RSI rising + MACD histogram rising).
+ *     Prevents catching falling knives on repeated oversold bars.
+ *
+ *   SHORT in Bull Regime (+DI > -DI):
+ *     Requires reversal confirmation (red candle + RSI falling + MACD histogram falling).
+ *     Prevents shorting into parabolic vertical expansions on repeated overbought bars.
+ *
+ * When trend direction aligns with the trade (or if the group has crossover/pattern triggers),
+ * the signal passes immediately with zero delay.
+ */
+export function passesRegimeGate(
+  group:     ConditionGroup,
+  candles:   Candle[],
+  barIndex:  number,
+  direction?: 'long' | 'short',
+): boolean {
+  if (!direction || barIndex <= 0) return true;
+  if (!isLevelGroup(group)) return true;
+
+  const cur = candles[barIndex];
+  const prev = candles[barIndex - 1];
+  if (!cur || !prev) return true;
+
+  const regime = getRegimeData(candles);
+  const p = regime.plusDi.get(cur.openTime) ?? 0;
+  const m = regime.minusDi.get(cur.openTime) ?? 0;
+  if (p === 0 && m === 0) return true; // ADX warm-up safeguard
+
+  const rCur = regime.rsi.get(cur.openTime) ?? 0;
+  const rPrev = regime.rsi.get(prev.openTime) ?? 0;
+  const mhCur = regime.macdHist.get(cur.openTime) ?? 0;
+  const mhPrev = regime.macdHist.get(prev.openTime) ?? 0;
+
+  if (direction === 'long') {
+    if (m > p) {
+      const isGreen = cur.close > cur.open;
+      const rsiUp   = rCur > rPrev;
+      const macdUp  = mhCur > mhPrev;
+      return isGreen && rsiUp && macdUp;
+    }
+    return true;
+  }
+
+  if (direction === 'short') {
+    if (p > m) {
+      const isRed    = cur.close < cur.open;
+      const rsiDown  = rCur < rPrev;
+      const macdDown = mhCur < mhPrev;
+      return isRed && rsiDown && macdDown;
+    }
+    return true;
+  }
+
+  return true;
+}
+
 /**
  * Evaluate one condition group at `barIndex` using its conditionOperator
- * (AND/OR within group), honouring checkMode + checkCandles per condition.
+ * (AND/OR within group), honouring checkMode + checkCandles per condition
+ * and applying the regime-aware gate for pure level groups.
  */
 export function evaluateConditionGroupChecked(
-  group:    ConditionGroup,
-  candles:  Candle[],
-  barIndex: number,
-  cache:    Map<string, TimeValueMap>,
+  group:     ConditionGroup,
+  candles:   Candle[],
+  barIndex:  number,
+  cache:     Map<string, TimeValueMap>,
+  direction?: 'long' | 'short',
 ): boolean {
   const active = group.conditions.filter((c) => c.enabled !== false);
   if (active.length === 0) return false;
   const op = resolveConditionOperator(group);
-  return op === 'or'
+  const passesConditions = op === 'or'
     ? active.some((c)  => evaluateConditionChecked(c, candles, barIndex, cache))
     : active.every((c) => evaluateConditionChecked(c, candles, barIndex, cache));
+  if (!passesConditions) return false;
+  return passesRegimeGate(group, candles, barIndex, direction);
 }
 
 /**
  * Evaluate a list of condition groups at `barIndex` using the OR/AND split logic.
  */
 export function evaluateConditionGroupsChecked(
-  groups:   ConditionGroup[],
-  candles:  Candle[],
-  barIndex: number,
-  cache:    Map<string, TimeValueMap>,
+  groups:    ConditionGroup[],
+  candles:   Candle[],
+  barIndex:  number,
+  cache:     Map<string, TimeValueMap>,
+  direction?: 'long' | 'short',
 ): boolean {
   return combineGroupResults(groups, (g) =>
-    evaluateConditionGroupChecked(g, candles, barIndex, cache),
+    evaluateConditionGroupChecked(g, candles, barIndex, cache, direction),
   );
 }

@@ -18,7 +18,33 @@
 
 import { useEffect, useRef } from 'react';
 
-const INTERVAL_MS = 60_000; // 1 minute — matches cron schedule
+export const ALERT_POLL_INTERVAL_STORAGE_KEY = 'rmc_alert_poll_interval_ms';
+export const ALERT_POLL_INTERVAL_EVENT = 'rmc-poll-interval-changed';
+export const DEFAULT_ALERT_POLL_INTERVAL_MS = 5 * 60_000; // Default 5 minutes
+
+export function getStoredAlertPollIntervalMs(): number {
+  if (typeof window === 'undefined') return DEFAULT_ALERT_POLL_INTERVAL_MS;
+  try {
+    const raw = localStorage.getItem(ALERT_POLL_INTERVAL_STORAGE_KEY);
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    if (parsed === 5 * 60_000 || parsed === 10 * 60_000 || parsed === 15 * 60_000) {
+      return parsed;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return DEFAULT_ALERT_POLL_INTERVAL_MS;
+}
+
+export function setStoredAlertPollIntervalMs(ms: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(ALERT_POLL_INTERVAL_STORAGE_KEY, String(ms));
+    window.dispatchEvent(new CustomEvent(ALERT_POLL_INTERVAL_EVENT, { detail: ms }));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 async function runCheck(): Promise<void> {
   try {
@@ -44,19 +70,27 @@ export function useAlertPoller(): void {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    function startTimer(ms: number) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(() => {
+        void runCheck();
+      }, ms);
+    }
+
     // Fire immediately on mount
     void runCheck();
+    startTimer(getStoredAlertPollIntervalMs());
 
-    // Poll every INTERVAL_MS regardless of tab visibility.
-    // The interval keeps running when the user switches to another app —
-    // fetch() to the local Next.js server works fine from a background tab,
-    // and browser timer throttling is irrelevant here since the interval is
-    // already 60 s (matching the minimum throttle floor in background tabs).
-    // Vercel cron only runs on deployed infra, so this loop is the sole
-    // signal driver in local dev — stopping it on blur = no alerts at all.
-    intervalRef.current = setInterval(() => { void runCheck(); }, INTERVAL_MS);
+    function handleIntervalChange(e: Event) {
+      const custom = e as CustomEvent<number>;
+      const nextMs = typeof custom.detail === 'number' ? custom.detail : getStoredAlertPollIntervalMs();
+      startTimer(nextMs);
+    }
+
+    window.addEventListener(ALERT_POLL_INTERVAL_EVENT, handleIntervalChange);
 
     return () => {
+      window.removeEventListener(ALERT_POLL_INTERVAL_EVENT, handleIntervalChange);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);

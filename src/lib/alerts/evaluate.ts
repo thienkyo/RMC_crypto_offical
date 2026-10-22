@@ -98,6 +98,7 @@ export async function evaluateAlertRule(rule: AlertRule): Promise<AlertEvalResul
       currentValue,
       price:         lastClosed.close,
       timestamp:     lastClosed.closeTime + 1,
+      ruleId:        rule.id,
     });
 
     return { fired: true, rule, message };

@@ -175,13 +175,12 @@ const adxTrendLong: Strategy = {
   ...BASE,
   id:          'starter_adx_trend_long',
   name:        'ADX Trend-Following',
-  longName:    '📈 LONG — ADX strong trend + StochRSI oversold dip',
+  longName:    '📈 LONG — ADX strong trend + StochRSI oversold dip + EMA(50) uptrend',
   description:
-    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K < 20 (oversold pullback).\n\n' +
+    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K < 20 (oversold pullback) + EMA(50) > 0 (uptrend).\n\n' +
     '• ADX(14) > 25: confirms the market is trending — filters out choppy, ranging conditions.\n' +
-    '• StochRSI %K < 20: momentum has pulled back to oversold — times a "buy the dip" entry in an uptrend.\n\n' +
-    'Direction note: ADX measures strength, not direction. This template enters LONG. ' +
-    'To flip SHORT, clone and change: action → enter_short and StochRSI threshold → > 80 (overbought).\n\n' +
+    '• StochRSI %K < 20: momentum has pulled back to oversold — times a "buy the dip" entry in an uptrend.\n' +
+    '• EMA Dev(50) > 0: confirms price is above the 50 EMA so we only buy dips in an actual uptrend (not during a crash).\n\n' +
     'Mirror of the SHORT "ADX Trend-Following" template.',
   symbol:    'BTCUSDT',
   timeframe: '4h',
@@ -207,6 +206,16 @@ const adxTrendLong: Strategy = {
           seriesIndex:  0,   // %K (fast line)
           operator:     'lt',
           value:        20,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_adxl_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 50 },
+          seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
           checkMode:    'confirmation',
           checkCandles: 1,
         },
@@ -564,13 +573,12 @@ const adxTrend: Strategy = {
   ...BASE,
   id:          'starter_adx_trend',
   name:        'ADX Trend-Following',
-  longName:    '📉 SHORT — ADX strong trend + StochRSI overbought rip',
+  longName:    '📉 SHORT — ADX strong trend + StochRSI overbought rip + EMA(50) downtrend',
   description:
-    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K > 80 (overbought momentum).\n\n' +
+    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K > 80 (overbought momentum) + EMA(50) < 0 (downtrend).\n\n' +
     '• ADX(14) > 25: confirms the market is trending — filters out choppy, ranging conditions.\n' +
-    '• StochRSI %K > 80: momentum is overbought — times a "sell the rip" entry in a downtrend.\n\n' +
-    'Direction note: ADX measures strength, not direction. This template enters SHORT. ' +
-    'To flip LONG, clone and change: action → enter_long and StochRSI threshold → < 20 (oversold).\n\n' +
+    '• StochRSI %K > 80: momentum is overbought — times a "sell the rip" entry in a downtrend.\n' +
+    '• EMA Dev(50) < 0: confirms price is below the 50 EMA so we only short rips in an actual downtrend.\n\n' +
     'Multi-timeframe tip: for best results check that the 1D chart agrees with the 4h direction.',
   symbol:    'BTCUSDT',
   timeframe: '4h',
@@ -596,6 +604,16 @@ const adxTrend: Strategy = {
           seriesIndex:  0,
           operator:     'gt',
           value:        80,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_adx_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 50 },
+          seriesIndex:  0,
+          operator:     'lt',
+          value:        0,
           checkMode:    'confirmation',
           checkCandles: 1,
         },

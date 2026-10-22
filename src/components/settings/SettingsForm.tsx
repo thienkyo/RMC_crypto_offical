@@ -51,6 +51,12 @@ export function SettingsForm({ initial }: Props) {
       : initial.enable_ai_signal_gatekeeper === 'true' || initial.enable_ai_signal_gatekeeper === '1',
   );
 
+  const [sendSignalChart, setSendSignalChart] = useState(
+    initial.telegram_send_signal_chart === null
+      ? true
+      : initial.telegram_send_signal_chart === 'true' || initial.telegram_send_signal_chart === '1',
+  );
+
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [errorMsg,  setErrorMsg]  = useState('');
   const [, startTransition]       = useTransition();
@@ -67,7 +73,8 @@ export function SettingsForm({ initial }: Props) {
     openaiModel  !== (initial.openai_evaluator_model || LATEST_MODELS.chatgpt.default) ||
     maxCostUsd !== initialCost ||
     monthlyBudgetUsd !== (initial.ai_evaluator_monthly_budget_usd ?? '10.00') ||
-    gatekeeperEnabled !== (initial.enable_ai_signal_gatekeeper === null ? true : initial.enable_ai_signal_gatekeeper === 'true' || initial.enable_ai_signal_gatekeeper === '1');
+    gatekeeperEnabled !== (initial.enable_ai_signal_gatekeeper === null ? true : initial.enable_ai_signal_gatekeeper === 'true' || initial.enable_ai_signal_gatekeeper === '1') ||
+    sendSignalChart !== (initial.telegram_send_signal_chart === null ? true : initial.telegram_send_signal_chart === 'true' || initial.telegram_send_signal_chart === '1');
 
   async function handleSave() {
     setSaveState('saving');
@@ -94,6 +101,7 @@ export function SettingsForm({ initial }: Props) {
           ai_evaluator_monthly_budget_usd: monthlyBudgetUsd.trim() || '10.00',
           ai_evaluator_max_tokens:   String(computedTokens),
           enable_ai_signal_gatekeeper: gatekeeperEnabled ? 'true' : 'false',
+          telegram_send_signal_chart: sendSignalChart ? 'true' : 'false',
         }),
       });
 
@@ -473,6 +481,25 @@ export function SettingsForm({ initial }: Props) {
             onChange={setAlertIds}
             placeholder={'123456789\n-1001234567890'}
           />
+
+          {/* Signal Chart Image Toggle */}
+          <div className="pt-4 border-t border-surface-border/60 flex items-start gap-3">
+            <input
+              type="checkbox"
+              id="telegram_chart_toggle"
+              checked={sendSignalChart}
+              onChange={(e) => setSendSignalChart(e.target.checked)}
+              className="mt-0.5 rounded border-slate-700 text-blue-500 focus:ring-blue-500 bg-[#0f1629] cursor-pointer"
+            />
+            <label htmlFor="telegram_chart_toggle" className="cursor-pointer">
+              <span className="text-xs font-semibold text-text-primary block">
+                Attach Chart Image to Telegram Strategy Signals
+              </span>
+              <span className="text-[11px] text-text-secondary leading-relaxed block mt-0.5">
+                Automatically renders and sends a 1000×560 dark-themed chart with candlesticks, volume, Entry/SL/TP lines, shaded Risk:Reward zones, and the signal trigger marker alongside each Telegram signal. (Default: On)
+              </span>
+            </label>
+          </div>
 
         </div>
       </section>

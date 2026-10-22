@@ -23,6 +23,11 @@ import { BacktestPanel }    from './BacktestPanel';
 import { SignalHistory }    from './SignalHistory';
 import { VersionHistory }   from './VersionHistory';
 import { PortfolioOverview } from './PortfolioOverview';
+import {
+  getStoredAlertPollIntervalMs,
+  setStoredAlertPollIntervalMs,
+  ALERT_POLL_INTERVAL_EVENT,
+} from '@/hooks/useAlertPoller';
 
 type RightTab   = 'signals' | 'backtest' | 'history';
 type TopTab     = 'strategies' | 'portfolio';
@@ -40,6 +45,15 @@ export function StrategyBuilder() {
   const [activeTab,     setActiveTab]     = useState<RightTab>('signals');
   const [rightVisible,  setRightVisible]  = useState(true);
   const [dbOffline,     setDbOffline]     = useState(false);
+  const [pollIntervalMs, setPollIntervalMs] = useState<number>(() => getStoredAlertPollIntervalMs());
+
+  useEffect(() => {
+    function onPollChange() {
+      setPollIntervalMs(getStoredAlertPollIntervalMs());
+    }
+    window.addEventListener(ALERT_POLL_INTERVAL_EVENT, onPollChange);
+    return () => window.removeEventListener(ALERT_POLL_INTERVAL_EVENT, onPollChange);
+  }, []);
 
   // ── Hydrate from DB on mount (DB is source of truth) ─────────────────────
   useEffect(() => {
@@ -117,7 +131,7 @@ export function StrategyBuilder() {
       )}
 
       {/* ── Top-level tab bar: Strategies | Portfolio ───────────────── */}
-      <div className="flex-shrink-0 flex border-b border-surface-border bg-surface">
+      <div className="flex-shrink-0 flex items-center border-b border-surface-border bg-surface pr-4">
         <TopTabButton
           label="Strategies"
           active={topTab === 'strategies'}
@@ -128,6 +142,35 @@ export function StrategyBuilder() {
           active={topTab === 'portfolio'}
           onClick={() => setTopTab('portfolio')}
         />
+
+        {/* Global Signal Check Interval selector */}
+        <div
+          className="ml-auto flex items-center bg-slate-900/80 border border-slate-800 rounded-md p-0.5 text-[11px] font-mono"
+          title="Live signal & Telegram check interval (5m / 10m / 15m)"
+        >
+          <span className="px-2 text-slate-400">Signal Check:</span>
+          {([5, 10, 15] as const).map((mins) => {
+            const ms = mins * 60_000;
+            const active = pollIntervalMs === ms;
+            return (
+              <button
+                key={mins}
+                type="button"
+                onClick={() => {
+                  setPollIntervalMs(ms);
+                  setStoredAlertPollIntervalMs(ms);
+                }}
+                className={`px-2 py-0.5 rounded transition-colors ${
+                  active
+                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40 font-semibold'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {mins}m
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ── Portfolio view ──────────────────────────────────────────── */}

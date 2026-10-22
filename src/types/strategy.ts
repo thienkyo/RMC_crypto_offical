@@ -194,6 +194,11 @@ export interface Strategy {
    * Defaults to false (opt-in).
    */
   aiGatekeeperEnabled?: boolean;
+  /**
+   * Minimum signal rating (1–7 stars) required to fire a live notification.
+   * Defaults to 3 (Grade C+) when absent.
+   */
+  minSignalRating?: number;
   /** Created via the MTF section's + button; drives left-rail grouping + per-condition TF UI. */
   isMtf?: boolean;
 }

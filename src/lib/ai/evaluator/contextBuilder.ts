@@ -16,9 +16,11 @@ import { macd } from '@/lib/indicators/macd';
 import { ema } from '@/lib/indicators/ema';
 import { bollinger } from '@/lib/indicators/bollinger';
 import { adx } from '@/lib/indicators/adx';
+import { atr } from '@/lib/indicators/atr';
 import { cvd_divergence } from '@/lib/indicators/cvd_divergence';
 import * as patterns from '@/lib/patterns';
 import { getArticlesForSymbol } from '@/lib/db/news';
+import { fetchDerivativesMetrics } from '@/lib/exchange/binance';
 
 export interface BuildContextParams {
   symbol: string;
@@ -53,10 +55,24 @@ export async function buildEvaluationContext(params: BuildContextParams): Promis
   }
 
   // ── 2. Build Technical Snapshot ───────────────────────────────────────────
-  const technical = buildTechnicalSnapshot(candles, htfCandles, htfTimeframe);
+  const technical = buildTechnicalSnapshot(
+    candles,
+    htfCandles,
+    htfTimeframe,
+    entryPrice,
+    stopLossPrice,
+    takeProfitPrice,
+  );
 
-  // ── 3. Build Sentiment Snapshot from Database ─────────────────────────────
-  const sentiment = await buildSentimentSnapshot(symbol);
+  // ── 3. Build Sentiment & Derivatives Snapshot in Parallel ─────────────────
+  const [sentiment, derivatives] = await Promise.all([
+    buildSentimentSnapshot(symbol),
+    fetchDerivativesMetrics(symbol),
+  ]);
+
+  if (derivatives) {
+    technical.derivatives = derivatives;
+  }
 
   return {
     symbol,
@@ -71,10 +87,13 @@ export async function buildEvaluationContext(params: BuildContextParams): Promis
   };
 }
 
-function buildTechnicalSnapshot(
+export function buildTechnicalSnapshot(
   candles: Candle[],
   htfCandles?: Candle[],
   htfTimeframe?: string,
+  entryPrice?: number,
+  stopLossPrice?: number,
+  takeProfitPrice?: number,
 ): TechnicalSnapshot {
   if (!candles || candles.length === 0) {
     return {
@@ -256,6 +275,42 @@ function buildTechnicalSnapshot(
   // ── Higher Timeframe (HTF) Confluence ─────────────────────────────────────
   const htfConfluence = buildHtfSnapshot(htfCandles, htfTimeframe);
 
+  // ── Volatility & ATR Noise Validation ─────────────────────────────────────
+  let volatilityMetrics: TechnicalSnapshot['volatilityMetrics'];
+  try {
+    const atrRes = atr.compute(candles, { period: 14 });
+    const atrVal = atrRes[0]?.data?.slice(-1)[0]?.value;
+    if (atrVal !== undefined && atrVal > 0) {
+      const refEntry = entryPrice ?? currentPrice;
+      const slDist = stopLossPrice !== undefined ? Math.abs(refEntry - stopLossPrice) : undefined;
+      const tpDist = takeProfitPrice !== undefined ? Math.abs(takeProfitPrice - refEntry) : undefined;
+      const slAtrMultiple = slDist !== undefined ? Number((slDist / atrVal).toFixed(2)) : undefined;
+      const tpAtrMultiple = tpDist !== undefined ? Number((tpDist / atrVal).toFixed(2)) : undefined;
+
+      let noiseAssessment: string;
+      if (slAtrMultiple !== undefined) {
+        if (slAtrMultiple < 1.0) {
+          noiseAssessment = `HIGH NOISE RISK: Stop Loss is only ${slAtrMultiple}x ATR (< 1.0x ATR) — inside normal bar volatility, high risk of premature wick stop-out.`;
+        } else if (slAtrMultiple <= 2.5) {
+          noiseAssessment = `Optimal Volatility Sizing: Stop Loss is ${slAtrMultiple}x ATR (outside normal 1.0x ATR noise zone).`;
+        } else {
+          noiseAssessment = `Wide Structural Buffer: Stop Loss is ${slAtrMultiple}x ATR (> 2.5x ATR — requires reduced position size).`;
+        }
+      } else {
+        noiseAssessment = `ATR(14) is $${atrVal.toFixed(2)} (${((atrVal / currentPrice) * 100).toFixed(2)}% per bar).`;
+      }
+
+      volatilityMetrics = {
+        atr14: Number(atrVal.toFixed(4)),
+        slAtrMultiple,
+        tpAtrMultiple,
+        noiseAssessment,
+      };
+    }
+  } catch {
+    // Non-fatal
+  }
+
   return {
     currentPrice,
     priceChange24hPct,
@@ -267,6 +322,7 @@ function buildTechnicalSnapshot(
     marketRegime,
     cvdDivergence,
     htfConfluence,
+    volatilityMetrics,
     activePatterns,
     recentCandlesSummary,
   };

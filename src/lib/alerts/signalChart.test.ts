@@ -48,6 +48,30 @@ describe('signalChart', () => {
     expect(svg).toContain('▲ BUY');
   });
 
+  it('renders AI Gatekeeper badge in SVG header when aiEvaluation is provided', () => {
+    const svg = generateSignalChartSvg({
+      symbol: 'SOLUSDT',
+      timeframe: '1h',
+      strategyName: 'Trend Follower',
+      direction: 'long',
+      rating: 5,
+      entryPrice: 180,
+      candles: mockCandles,
+      aiEvaluation: {
+        status: 'PASS',
+        confidence: 'high',
+        summary: 'Solid trend continuation setup.',
+        reasons: { technical: '', sentiment: '', primaryRisk: '' },
+        metrics: { technicalScore: 88, sentimentScore: 60 },
+        model: { provider: 'gemini', modelName: 'gemini-3.8-flash' },
+        evaluatedAt: new Date().toISOString(),
+      },
+    });
+
+    expect(svg).toContain('AI PASS 88');
+    expect(svg).toContain('SOLUSDT');
+  });
+
   it('generates a valid PNG Buffer via sharp', async () => {
     const buffer = await generateSignalChartPng({
       symbol: 'ETHUSDT',

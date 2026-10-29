@@ -140,6 +140,16 @@ export interface RiskManagement {
   takeProfitPct: number;
 }
 
+export interface DynamicAtrLevels {
+  atr: number;
+  entryPrice?: number;
+  entryOffsetPct?: number;
+  stopLossPrice?: number;
+  stopLossPct?: number;
+  takeProfitPrice?: number;
+  takeProfitPct?: number;
+}
+
 // ── Strategy document ─────────────────────────────────────────────────────────
 
 export interface Strategy {
@@ -157,10 +167,20 @@ export interface Strategy {
   version: number;
   createdAt: number; // Unix ms
   updatedAt: number; // Unix ms
-  symbol: string;    // e.g. 'BTCUSDT'
+  symbol: string;    // e.g. 'BTCUSDT' (or primary symbol)
   timeframe: Timeframe;
   /** When true, evaluated live on the chart and entry/exit markers are painted. */
   isActive: boolean;
+  /**
+   * When true this is a common strategy shared across multiple tickers.
+   * `symbols` contains the list of assigned tickers.
+   */
+  isCommon?: boolean;
+  /**
+   * The list of tickers assigned to this strategy when `isCommon` is true.
+   * e.g. ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']
+   */
+  symbols?: string[];
   /**
    * When true this is a reusable template — it cannot be activated or monitored
    * directly. Clone it to create a regular working strategy.

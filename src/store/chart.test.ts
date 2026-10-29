@@ -57,4 +57,12 @@ describe('Chart Store — Symbol & Source Management', () => {
     expect(state.candles).toEqual([]);
     expect(state.candlesKey).toBeNull();
   });
+
+  it('toggles log scale mode', () => {
+    expect(useChartStore.getState().isLogScale).toBe(false);
+    useChartStore.getState().toggleLogScale();
+    expect(useChartStore.getState().isLogScale).toBe(true);
+    useChartStore.getState().toggleLogScale();
+    expect(useChartStore.getState().isLogScale).toBe(false);
+  });
 });

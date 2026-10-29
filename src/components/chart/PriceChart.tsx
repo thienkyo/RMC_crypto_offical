@@ -12,15 +12,17 @@ import {
   ColorType,
   CrosshairMode,
   TickMarkType,
+  PriceScaleMode,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
   type SeriesMarker,
 } from 'lightweight-charts';
 import { format } from 'date-fns';
+import { clsx } from 'clsx';
 import type { Candle } from '@/types/market';
 import type { IndicatorSeries } from '@/lib/indicators';
-import type { VolumeProfileConfig } from '@/store/chart';
+import { useChartStore, type VolumeProfileConfig } from '@/store/chart';
 import { VolumeProfileRenderer } from './VolumeProfileRenderer';
 
 export interface TradeScreenshotOverlay {
@@ -34,6 +36,8 @@ export interface PriceChartHandle {
   getChart:    () => IChartApi | null;
   /** Direct series.update() — bypasses React, zero jank on live ticks. */
   updateCandle: (candle: Candle) => void;
+  /** Direct overlay lineSeries.update() on live ticks — avoids setData() viewport resets. */
+  updateOverlayPoint: (id: string, point: { time: number; value: number }) => void;
   /** Scroll back to the most recent bar (same as pressing "Go to present" in TradingView). */
   scrollToNow: () => void;
   /**
@@ -154,6 +158,9 @@ function rightOffsetBars(chart: IChartApi): number {
 
 export const PriceChart = forwardRef<PriceChartHandle, Props>(
   function PriceChart({ candles, overlays, contextKey, dataKey, onCrosshair, crosshairTime, showTimeAxis = true, markers, savedBarSpacing, onBarSpacingChange, vpConfig }, ref) {
+    const isLogScale     = useChartStore((s) => s.isLogScale);
+    const toggleLogScale = useChartStore((s) => s.toggleLogScale);
+
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -210,8 +217,34 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
           // Stale WebSocket tick during symbol/timeframe transition — safe to ignore.
         }
       },
+      updateOverlayPoint: (id, point) => {
+        if (loadedKeyRef.current !== contextKeyRef.current) return;
+        const ser = overlayRefs.current.get(id);
+        if (!ser || Number.isNaN(point.value)) return;
+        try {
+          ser.update({
+            time:  toSec(point.time),
+            value: point.value,
+          });
+        } catch {
+          // Safe to ignore during transitions
+        }
+      },
       scrollToNow: () => {
-        chartRef.current?.timeScale().scrollToRealTime();
+        const chart = chartRef.current;
+        if (!chart) return;
+        const ts = chart.timeScale();
+        const gap = rightOffsetBars(chart);
+        ts.applyOptions({ rightOffset: gap });
+        const total = lastCandlesRef.current?.length ?? 0;
+        if (total > 0) {
+          ts.setVisibleLogicalRange({
+            from: Math.max(0, total - INITIAL_BARS - 1),
+            to: total + gap,
+          });
+        }
+        chart.priceScale('right').applyOptions({ autoScale: true });
+        candleRef.current?.priceScale().applyOptions({ autoScale: true });
       },
       captureScreenshot: (overlay?: TradeScreenshotOverlay) => {
         const chart = chartRef.current;
@@ -361,6 +394,7 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         rightPriceScale: {
           borderColor: '#1e2a3d',
           minimumWidth: 80,
+          mode: isLogScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
         },
         timeScale: {
           borderColor:    '#1e2a3d',
@@ -516,21 +550,20 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         // calling it on the series' own priceScale() forces LWC to rescale immediately.
         chart?.priceScale('right').applyOptions({ autoScale: true });
         candleRef.current.priceScale().applyOptions({ autoScale: true });
+
+        const total = candles.length;
+        const gap = chart ? rightOffsetBars(chart) : INITIAL_GAP_BARS;
         if (savedBarSpacing && chart) {
-          // Restore the user's preferred candle width and scroll to the latest bar.
-          // applyOptions({ barSpacing }) keeps the rightmost bar pinned, so we
-          // explicitly scroll to real time afterwards to always land on the latest candle.
           chart.timeScale().applyOptions({ barSpacing: savedBarSpacing });
-          // rightOffset has to be recomputed against the restored spacing —
-          // the seeded INITIAL_GAP_BARS only matches the default zoom level.
-          chart.timeScale().applyOptions({ rightOffset: rightOffsetBars(chart) });
-          chart.timeScale().scrollToRealTime();
-        } else {
-          const total = candles.length;
-          chart?.timeScale().setVisibleLogicalRange({
-            from: total - INITIAL_BARS - 1,
-            to:   total + INITIAL_GAP_BARS,
-          });
+        }
+        if (chart) {
+          chart.timeScale().applyOptions({ rightOffset: gap });
+          if (total > 0) {
+            chart.timeScale().setVisibleLogicalRange({
+              from: Math.max(0, total - INITIAL_BARS - 1),
+              to:   total + gap,
+            });
+          }
         }
         loadedKeyRef.current = contextKey;
       } else {
@@ -605,11 +638,14 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       for (const series of overlays) {
         seen.add(series.id);
         const existing = overlayRefs.current.get(series.id);
+        const lineData = series.data.map((p) => {
+          const timeVal = toSec(p.time);
+          if (Number.isNaN(p.value)) return { time: timeVal } as any;
+          return { time: timeVal, value: p.value };
+        });
 
         if (existing) {
-          existing.setData(
-            series.data.map((p) => ({ time: toSec(p.time), value: p.value })),
-          );
+          existing.setData(lineData);
         } else {
           const lineSeries = chart.addLineSeries({
             color:            series.color,
@@ -618,9 +654,7 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          lineSeries.setData(
-            series.data.map((p) => ({ time: toSec(p.time), value: p.value })),
-          );
+          lineSeries.setData(lineData);
           overlayRefs.current.set(series.id, lineSeries);
         }
       }
@@ -672,12 +706,50 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
       vpRendererRef.current.setCandles(candles);
     }, [vpConfig, candles]);
 
+    // ── React to Logarithmic / Linear scale toggle ─────────────────────────
+    useEffect(() => {
+      if (!chartRef.current) return;
+      chartRef.current.priceScale('right').applyOptions({
+        mode: isLogScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+      });
+    }, [isLogScale]);
+
     return (
-      <div
-        ref={containerRef}
-        className="w-full h-full"
-        style={{ minHeight: 0 }}
-      />
+      <div className="relative w-full h-full" style={{ minHeight: 0 }}>
+        <div
+          ref={containerRef}
+          className="w-full h-full"
+          style={{ minHeight: 0 }}
+        />
+
+        {/* Bottom-right Price Scale Controls: Auto & Log (placed just left of the 80px right price axis) */}
+        <div className="absolute bottom-1.5 right-[86px] z-20 flex items-center gap-1 select-none font-mono text-[10px]">
+          <button
+            type="button"
+            onClick={() => {
+              chartRef.current?.priceScale('right').applyOptions({ autoScale: true });
+              candleRef.current?.priceScale().applyOptions({ autoScale: true });
+            }}
+            className="px-1.5 py-0.5 rounded bg-surface-2/90 hover:bg-surface-3 border border-surface-border text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+            title="Reset vertical price scale (Auto)"
+          >
+            auto
+          </button>
+          <button
+            type="button"
+            onClick={toggleLogScale}
+            className={clsx(
+              'px-1.5 py-0.5 rounded border transition-colors cursor-pointer font-bold',
+              isLogScale
+                ? 'bg-accent/25 border-accent text-accent'
+                : 'bg-surface-2/90 hover:bg-surface-3 border-surface-border text-text-muted hover:text-text-primary',
+            )}
+            title={isLogScale ? 'Switch to Linear price scale' : 'Switch to Logarithmic price scale'}
+          >
+            log
+          </button>
+        </div>
+      </div>
     );
   },
 );

@@ -36,6 +36,8 @@ interface Props {
   bias?:         'bullish' | 'bearish';
   /** Fixed height in pixels. */
   height:        number;
+  /** Optional callback to close/remove this sub-pane indicator. */
+  onClose?:      () => void;
   /**
    * Crosshair time from the main price chart (unix seconds).
    * When set, the sub-pane legend shows values at this time even when
@@ -96,7 +98,7 @@ function toSeriesMarkers(markers: IndicatorMarker[] | undefined): SeriesMarker<U
  * cursor moves. Values disappear when the cursor leaves the chart.
  */
 export const SubChart = forwardRef<SubChartHandle, Props>(
-  function SubChart({ series, title, bias, height, crosshairTime, showTimeAxis = false, onCrosshair }, ref) {
+  function SubChart({ series, title, bias, height, crosshairTime, showTimeAxis = false, onCrosshair, onClose }, ref) {
     const containerRef    = useRef<HTMLDivElement>(null);
     const chartRef        = useRef<IChartApi | null>(null);
     const seriesRefs      = useRef<Map<string, ISeriesApi<'Line' | 'Histogram'>>>(new Map());
@@ -394,11 +396,26 @@ export const SubChart = forwardRef<SubChartHandle, Props>(
     return (
       <div className="relative w-full">
         {/* ── Pane legend ─────────────────────────────────────────────────── */}
-        <div className="absolute top-1 left-2 z-10 flex items-center gap-3 select-none pointer-events-none">
-          {/* Title */}
-          <span className="text-[10px] font-mono text-text-secondary">
-            {title}
-          </span>
+        <div className="absolute top-1 left-2 z-10 flex items-center gap-2 select-none group/subpane pointer-events-none">
+          {/* Title + close button */}
+          <div className="flex items-center gap-1 pointer-events-auto">
+            <span className="text-[10px] font-mono text-text-secondary">
+              {title}
+            </span>
+            {onClose && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose();
+                }}
+                className="opacity-0 group-hover/subpane:opacity-100 p-0.5 rounded text-text-muted hover:text-rose-400 hover:bg-surface-2 transition-all cursor-pointer text-[10px] leading-none"
+                title={`Close ${title} pane`}
+              >
+                ✕
+              </button>
+            )}
+          </div>
 
           {/* Bias pill — bullish/bearish tag for pattern indicators */}
           {bias && (

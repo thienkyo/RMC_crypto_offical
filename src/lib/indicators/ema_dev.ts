@@ -23,6 +23,7 @@
  */
 import type { Candle }          from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { emaArray } from './math';
 
 interface EmaDevParams { period: number; [key: string]: number }
 
@@ -43,23 +44,11 @@ export const ema_dev: Indicator<EmaDevParams> = {
     const p = Math.max(2, Math.round(period));
     if (candles.length < p) return [];
 
+    const emaValues = emaArray(candles.map((c) => c.close), p);
     const data: { time: number; value: number }[] = [];
 
-    // Wilder/standard EMA using the 2/(p+1) multiplier
-    const k = 2 / (p + 1);
-
-    // Seed with SMA of the first p bars
-    let ema = candles.slice(0, p).reduce((s, c) => s + c.close, 0) / p;
-
-    // Emit first value at index p-1
-    {
-      const c = candles[p - 1]!;
-      const dev = ema > 0 ? ((c.close - ema) / ema) * 100 : 0;
-      data.push({ time: c.openTime, value: dev });
-    }
-
-    for (let i = p; i < candles.length; i++) {
-      ema = candles[i]!.close * k + ema * (1 - k);
+    for (let i = p - 1; i < candles.length; i++) {
+      const ema = emaValues[i]!;
       const dev = ema > 0 ? ((candles[i]!.close - ema) / ema) * 100 : 0;
       data.push({ time: candles[i]!.openTime, value: dev });
     }

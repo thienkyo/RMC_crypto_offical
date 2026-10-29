@@ -1,20 +1,8 @@
 import type { Candle } from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { emaArray } from './math';
 
 interface MacdParams { fast: number; slow: number; signal: number; trendEma: number; [key: string]: number }
-
-function emaArray(values: number[], period: number): number[] {
-  const k   = 2 / (period + 1);
-  const out: number[] = [];
-  let prev = values.slice(0, period).reduce((s, v) => s + v, 0) / period;
-  for (let i = 0; i < period - 1; i++) out.push(NaN);
-  out.push(prev);
-  for (let i = period; i < values.length; i++) {
-    prev = values[i]! * k + prev * (1 - k);
-    out.push(prev);
-  }
-  return out;
-}
 
 export const macd: Indicator<MacdParams> = {
   id: 'macd',

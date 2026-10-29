@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS strategies (
   -- Unix ms of the last entry signal we already sent a Telegram message for.
   -- NULL = never notified; first cron run sets this without firing (avoids backlog spam).
   last_notified_trade_time  TIMESTAMPTZ,
+  is_common                 BOOLEAN     NOT NULL DEFAULT FALSE,
+  symbols                   TEXT[]      NOT NULL DEFAULT '{}',
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -128,6 +130,26 @@ CREATE TABLE IF NOT EXISTS strategies (
 -- ALTER statements for existing DBs that predate these columns (idempotent):
 ALTER TABLE strategies ADD COLUMN IF NOT EXISTS notify_on_signal         BOOLEAN     NOT NULL DEFAULT FALSE;
 ALTER TABLE strategies ADD COLUMN IF NOT EXISTS last_notified_trade_time TIMESTAMPTZ;
+ALTER TABLE strategies ADD COLUMN IF NOT EXISTS is_common                BOOLEAN     NOT NULL DEFAULT FALSE;
+ALTER TABLE strategies ADD COLUMN IF NOT EXISTS symbols                  TEXT[]      NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS strategies_symbols_gin ON strategies USING GIN (symbols);
+
+-- ─── Per-ticker state for common strategies ──────────────────────────────────
+-- Tracks per-ticker alert timestamps and per-ticker active flags so multiple
+-- tickers evaluating the same common strategy don't overwrite each other's timestamps.
+CREATE TABLE IF NOT EXISTS strategy_ticker_states (
+  strategy_id              TEXT        NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+  symbol                   TEXT        NOT NULL,
+  last_notified_trade_time TIMESTAMPTZ,
+  is_active                BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (strategy_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS strategy_ticker_states_lookup
+  ON strategy_ticker_states (strategy_id, symbol);
 
 -- ─── Strategy versions ────────────────────────────────────────────────────────
 -- Every save creates a version snapshot so we can diff / rollback.
@@ -423,3 +445,43 @@ CREATE TABLE IF NOT EXISTS telegram_topics (
 -- We use a separate unique index because PostgreSQL PRIMARY KEY cannot wrap columns in functions like lower().
 CREATE UNIQUE INDEX IF NOT EXISTS telegram_topics_chat_lower_name_idx 
   ON telegram_topics (chat_id, lower(name));
+
+-- ─── Signal Monitoring ───────────────────────────────────────────────────────
+-- Tracks active trades spawned by fired strategy signals for real-time TP/SL,
+-- Breakeven arming, micro-health alerts, and threaded Telegram lifecycle updates.
+CREATE TABLE IF NOT EXISTS signal_monitors (
+  id                  SERIAL PRIMARY KEY,
+  signal_id           INTEGER REFERENCES strategy_signals(id) ON DELETE CASCADE,
+  strategy_id         TEXT NOT NULL,
+  strategy_name       TEXT NOT NULL,
+  symbol              TEXT NOT NULL,
+  timeframe           TEXT NOT NULL,
+  direction           VARCHAR(10) NOT NULL CHECK (direction IN ('long', 'short')),
+  entry_price         NUMERIC(20,8) NOT NULL,
+  stop_loss_price     NUMERIC(20,8) NOT NULL,
+  take_profit_price   NUMERIC(20,8) NOT NULL,
+  breakeven_price     NUMERIC(20,8) NOT NULL,
+  is_breakeven_armed  BOOLEAN NOT NULL DEFAULT FALSE,
+  status              VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  exit_reason         VARCHAR(30),
+  exit_price          NUMERIC(20,8),
+  exit_time           TIMESTAMPTZ,
+  max_price           NUMERIC(20,8) NOT NULL,
+  min_price           NUMERIC(20,8) NOT NULL,
+  max_profit_pct      NUMERIC(10,4) NOT NULL DEFAULT 0,
+  max_drawdown_pct    NUMERIC(10,4) NOT NULL DEFAULT 0,
+  telegram_chat_id    TEXT,
+  telegram_message_id BIGINT,
+  telegram_thread_id  BIGINT,
+  confluence_count    INTEGER NOT NULL DEFAULT 1,
+  last_heartbeat_at   TIMESTAMPTZ,
+  last_checked_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS signal_monitors_active_idx
+  ON signal_monitors (symbol, direction, status) WHERE status = 'open';
+
+-- Store Telegram delivery references on strategy_signals
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT;
+ALTER TABLE strategy_signals ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;

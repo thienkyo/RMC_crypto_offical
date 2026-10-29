@@ -329,20 +329,35 @@ export function Watchlist() {
   const collapsedSet    = new Set(collapsedSections);
 
   // Default crypto minus hidden and minus favorited (favorites shown in their own section)
+  const seenCrypto = new Set<string>();
   const cryptoItems = [
     ...(data?.crypto ?? []).filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol)),
     ...customSymbols.filter((s) => s.source === 'binance' && !favSet.has(s.symbol)),
-  ];
+  ].filter((s) => {
+    if (seenCrypto.has(s.symbol)) return false;
+    seenCrypto.add(s.symbol);
+    return true;
+  });
 
   // Mag 7 basket minus hidden and minus favorited
-  const mag7Items = (data?.mag7 ?? data?.equities ?? []).filter(
-    (s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol),
-  );
+  const seenMag7 = new Set<string>();
+  const mag7Items = (data?.mag7 ?? data?.equities ?? [])
+    .filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol))
+    .filter((s) => {
+      if (seenMag7.has(s.symbol)) return false;
+      seenMag7.add(s.symbol);
+      return true;
+    });
 
   // AI / AI-infra starter basket minus hidden and minus favorited
-  const aiItems = (data?.ai ?? []).filter(
-    (s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol),
-  );
+  const seenAi = new Set<string>();
+  const aiItems = (data?.ai ?? [])
+    .filter((s) => !hiddenSet.has(s.symbol) && !favSet.has(s.symbol))
+    .filter((s) => {
+      if (seenAi.has(s.symbol)) return false;
+      seenAi.add(s.symbol);
+      return true;
+    });
 
   // Known default equity symbols (to avoid duplicate display if user also custom-added them)
   const knownEquitySymbols = new Set([
@@ -351,12 +366,19 @@ export function Watchlist() {
   ]);
 
   // User-added custom equities that aren't in Mag 7 or AI
-  const customEquityItems = customSymbols.filter(
-    (s) => s.source === 'equities'
-      && !hiddenSet.has(s.symbol)
-      && !favSet.has(s.symbol)
-      && !knownEquitySymbols.has(s.symbol),
-  );
+  const seenCustomEq = new Set<string>();
+  const customEquityItems = customSymbols
+    .filter(
+      (s) => s.source === 'equities'
+        && !hiddenSet.has(s.symbol)
+        && !favSet.has(s.symbol)
+        && !knownEquitySymbols.has(s.symbol),
+    )
+    .filter((s) => {
+      if (seenCustomEq.has(s.symbol)) return false;
+      seenCustomEq.add(s.symbol);
+      return true;
+    });
 
   // Build a lookup map for resolving favorite symbols to MarketSymbol objects
   const allMap = new Map<string, MarketSymbol>();
@@ -368,9 +390,15 @@ export function Watchlist() {
   ]) {
     allMap.set(s.symbol, s);
   }
+  const seenFav = new Set<string>();
   const favItems = favoriteSymbols
     .map((sym) => allMap.get(sym))
-    .filter((s): s is MarketSymbol => s !== undefined);
+    .filter((s): s is MarketSymbol => s !== undefined)
+    .filter((s) => {
+      if (seenFav.has(s.symbol)) return false;
+      seenFav.add(s.symbol);
+      return true;
+    });
 
   type Section = { id: string; label: string; items: MarketSymbol[]; isFavSection: boolean };
   const sections: Section[] = [

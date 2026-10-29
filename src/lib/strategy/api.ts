@@ -66,3 +66,24 @@ export async function pushManyStrategiesToDb(list: Strategy[]): Promise<number> 
   }
   return ok;
 }
+
+/**
+ * Fire-and-forget wrapper for `pushStrategyToDb` that logs warnings instead of throwing.
+ */
+export function syncStrategyToDb(s: Strategy | undefined, context = 'strategy'): void {
+  if (!s) return;
+  pushStrategyToDb(s).catch((err) => {
+    console.warn(`[${context}] DB sync failed:`, err);
+  });
+}
+
+/**
+ * Fire-and-forget wrapper for `pushManyStrategiesToDb` that logs warnings instead of throwing.
+ */
+export function syncManyStrategiesToDb(list: Strategy[], context = 'strategy'): void {
+  if (!list || list.length === 0) return;
+  pushManyStrategiesToDb(list).catch((err) => {
+    console.warn(`[${context}] DB batch sync failed:`, err);
+  });
+}
+

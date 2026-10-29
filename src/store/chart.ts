@@ -101,9 +101,13 @@ interface ChartState {
   // ── Volume Profile ────────────────────────────────────────────────────────
   vpConfig: VolumeProfileConfig;
 
+  /** Logarithmic price scaling toggle. */
+  isLogScale: boolean;
+
   // ── Actions ───────────────────────────────────────────────────────────────
-  setSymbol:    (symbol: string, source?: SymbolSource) => void;
-  setTimeframe: (tf: Timeframe) => void;
+  setSymbol:       (symbol: string, source?: SymbolSource) => void;
+  setTimeframe:    (tf: Timeframe) => void;
+  toggleLogScale:  () => void;
 
   /**
    * Replace the candle series. When `contextKey` is provided it must match the
@@ -179,8 +183,11 @@ export const useChartStore = create<ChartState>()(
         bins:         50,
         valueAreaPct: 70,
       },
+      isLogScale: false,
 
       // ── Actions ─────────────────────────────────────────────────────────────
+
+      toggleLogScale: () => set((s) => ({ isLogScale: !s.isLogScale })),
 
       setSymbol: (symbol, source) => {
         const inferredSource = source ?? (isEquitySymbol(symbol) ? 'equities' : 'binance');
@@ -346,6 +353,7 @@ export const useChartStore = create<ChartState>()(
         subPaneHeights:   s.subPaneHeights,
         markerSettings:   s.markerSettings,
         vpConfig:         s.vpConfig,
+        isLogScale:       s.isLogScale,
       }),
     },
   ),

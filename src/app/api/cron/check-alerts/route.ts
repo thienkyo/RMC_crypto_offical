@@ -24,10 +24,11 @@ import { generateSignalChartPng } from '@/lib/alerts/signalChart';
 import { logStrategySignal, markSignalDelivered } from '@/lib/db/signals';
 import { shouldRunAiVerdict } from '@/lib/strategy/rating';
 import { evaluateMarketFlush, type FiredSignalSummary } from '@/lib/ai/evaluator/macro';
+import { registerOrConfirmSignalMonitor, runSignalMonitorCheck } from '@/lib/alerts/signalMonitor';
 
 export const maxDuration = 60;
 
-async function runCheckAlerts(): Promise<Response> {
+export async function runCheckAlerts(): Promise<Response> {
   // Run both checks concurrently — they're independent.
   const [rules, notifiableStrategies] = await Promise.all([
     getEnabledAlertRules(),
@@ -245,9 +246,9 @@ async function runCheckAlerts(): Promise<Response> {
     // ── Option A + C: Individual Signal Processing with Cycle Cap ────────────
     const MAX_AI_PER_CYCLE = 2;
 
-    // Filter AI candidates (Option C: strategy.aiGatekeeperEnabled === true && rating >= 4)
+    // Filter AI candidates (Option C: strategy.aiGatekeeperEnabled === true && rating >= threshold)
     const aiCandidates = dedupedFiredResults.filter(
-      (f) => f.strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(f.rating),
+      (f) => f.strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(f.rating, f.strategy.minSignalRating),
     );
 
     // Sort descending by rating (highest stars get AI evaluation first)
@@ -270,7 +271,29 @@ async function runCheckAlerts(): Promise<Response> {
           );
 
           if (aiEvaluation?.status === 'REJECT') {
-            console.log(`[cron:check-alerts] Strategy rejected by AI Gatekeeper: ${f.strategy.name}`);
+            console.log(`[cron:check-alerts] Strategy rejected by AI Gatekeeper: ${f.strategy.name} (${f.strategy.symbol})`);
+            // Log rejected signal to DB with telegramDelivered = false so the user can verify in Signal History why it was blocked
+            try {
+              await logStrategySignal({
+                strategyId:          f.strategy.id,
+                strategyName:        f.strategy.name,
+                symbol:              f.strategy.symbol,
+                timeframe:           f.strategy.timeframe,
+                direction,
+                entryPrice:          f.entryPrice,
+                stopLossPct:         f.strategy.risk.stopLossPct,
+                takeProfitPct:       f.strategy.risk.takeProfitPct,
+                candleTime:          f.candleTime,
+                telegramDelivered:   false,
+                conditionsSnapshot:  f.conditionGroups,
+                rating:              f.rating,
+                entryPriceLimit:     f.entryPriceLimit,
+                aiEvaluation,
+              });
+            } catch (err) {
+              console.error('[cron:check-alerts] logStrategySignal (rejected) failed:', err);
+            }
+
             strategyDebug.push({
               name:      f.strategy.name,
               symbol:    f.strategy.symbol,
@@ -296,6 +319,7 @@ async function runCheckAlerts(): Promise<Response> {
               conditionGroups: f.conditionGroups,
               timestamp:       f.candleTime,
               aiEvaluation,
+              dynamicLevels:   f.dynamicLevels,
             });
           }
         } catch (aiErr) {
@@ -345,6 +369,7 @@ async function runCheckAlerts(): Promise<Response> {
         signalId,
         strategyId:      f.strategy.id,
         strategyVersion: f.strategy.version,
+        dynamicLevels:   f.dynamicLevels,
       });
 
       // Render chart image attachment if enabled (default: true)
@@ -377,20 +402,28 @@ async function runCheckAlerts(): Promise<Response> {
             takeProfitPct:   f.strategy.risk.takeProfitPct,
             candles:         f.closedCandles,
             signalId,
+            aiEvaluation,
+            dynamicLevels:   f.dynamicLevels,
           });
 
           const dirBadge = direction === 'long' ? 'LONG ▲' : 'SHORT ▼';
+          const aiTag = aiEvaluation ? ` • [${aiEvaluation.status === 'PASS' ? '🟢' : '🟡'} AI ${aiEvaluation.status}]` : '';
           const sigTag = signalId ? ` • sig#${signalId}` : '';
           alertImage = {
             buffer: chartBuffer,
-            caption: `📊 <b>${f.strategy.symbol} (${f.strategy.timeframe.toUpperCase()})</b> • ${dirBadge}${sigTag}`,
+            caption: `📊 <b>${f.strategy.symbol} (${f.strategy.timeframe.toUpperCase()})</b> • ${dirBadge}${aiTag}${sigTag}`,
           };
         } catch (chartErr) {
           console.warn(`[cron:check-alerts] Failed to generate signal chart for ${f.strategy.name}:`, chartErr);
         }
       }
 
-      const resolvedTopic = resolveStrategyTelegramTopic(f.strategy.telegramTopic, f.strategy.symbol);
+      const resolvedTopic = resolveStrategyTelegramTopic(
+        f.strategy.telegramTopic,
+        f.strategy.symbol,
+        f.strategy.isCommon,
+        f.strategy.symbols,
+      );
       const telegramResult = await sendTelegramAlert(
         finalMessage,
         f.strategy.name,
@@ -399,9 +432,28 @@ async function runCheckAlerts(): Promise<Response> {
         alertImage,
       );
 
-      if (telegramResult.ok && signalId !== undefined) {
-        await markSignalDelivered(signalId).catch((err) =>
-          console.error('[cron:check-alerts] markSignalDelivered failed:', err),
+      if (telegramResult.ok) {
+        if (signalId !== undefined) {
+          await markSignalDelivered(signalId).catch((err) =>
+            console.error('[cron:check-alerts] markSignalDelivered failed:', err),
+          );
+        }
+
+        await registerOrConfirmSignalMonitor({
+          signalId,
+          strategyId:        f.strategy.id,
+          strategyName:      f.strategy.name,
+          symbol:            f.strategy.symbol,
+          timeframe:         f.strategy.timeframe,
+          direction,
+          entryPrice:        f.entryPrice,
+          stopLossPct:       f.strategy.risk?.stopLossPct,
+          takeProfitPct:     f.strategy.risk?.takeProfitPct,
+          dynamicLevels:     f.dynamicLevels,
+          telegramMessageId: telegramResult.messageId,
+          telegramTopic:     resolvedTopic,
+        }).catch((mErr) =>
+          console.warn('[cron:check-alerts] registerOrConfirmSignalMonitor failed:', mErr),
         );
       }
 
@@ -424,11 +476,18 @@ async function runCheckAlerts(): Promise<Response> {
     }
   }
 
+  // ── Run post-signal monitor cycle ─────────────────────────────────────────
+  const monitorStats = await runSignalMonitorCheck().catch((err) => {
+    console.warn('[cron:check-alerts] runSignalMonitorCheck failed:', err);
+    return null;
+  });
+
   return Response.json({
     ok:                 true,
     alertsEvaluated:   rules.length,
     strategiesChecked: notifiableStrategies.length,
     fired:             firedCount,
+    monitors:          monitorStats,
     // Per-strategy detail — visible in the Manual button response in dev tools
     strategies:        strategyDebug,
   });

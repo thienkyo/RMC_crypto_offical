@@ -26,6 +26,7 @@ import { fetchLatestCandlesCached }    from '@/lib/db/candles';
 import { TF_TO_MS }                    from '@/lib/exchange/binance';
 import { buildIndicatorCache,
          conditionCacheKey,
+         evaluateCondition,
          evaluateConditionChecked,
          evaluateConditionGroupsChecked } from '@/lib/strategy/evaluate';
 import { collectHtfTimeframes, buildMtfIndicatorCache, type HtfCandleSets } from '@/lib/strategy/mtf';
@@ -35,7 +36,8 @@ import { conditionLabel }              from '@/lib/alerts/evaluate';
 import { computeEntryPriceLimit }      from '@/lib/strategy/entryPrice';
 import { isEquitySymbol }              from '@/lib/exchange/equities';
 import { getUSEquityMarketStatus }     from '@/lib/exchange/marketHours';
-import type { Strategy, StrategyCondition } from '@/types/strategy';
+import { atr }                         from '@/lib/indicators/atr';
+import type { Strategy, StrategyCondition, DynamicAtrLevels } from '@/types/strategy';
 import type { Candle, Timeframe }      from '@/types/market';
 import type { ConditionSnapshotGroup } from '@/lib/db/signals';
 
@@ -57,7 +59,7 @@ export type StrategyNotifySkipReason =
   | 'market_closed';
 
 export type StrategyNotifyResult =
-  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; closedCandles?: Candle[]; debug?: StrategyNotifyDebug }
+  | { fired: true;  strategy: Strategy; message: string; entryPrice: number; entryPriceLimit: number; rating: number; candleTime: number; conditionGroups: ConditionSnapshotGroup[]; aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult; closedCandles?: Candle[]; dynamicLevels?: DynamicAtrLevels; debug?: StrategyNotifyDebug }
   | { fired: false; strategy: Strategy; reason: StrategyNotifySkipReason; debug?: StrategyNotifyDebug };
 
 
@@ -112,7 +114,7 @@ export async function evaluateStrategySignal(
 
   // ── 2. First-run guard ─────────────────────────────────────────────────────
   if (lastNotifiedTimeMs === null) {
-    await tryStampNotifiedTime(strategy.id, targetBar.openTime);
+    await tryStampNotifiedTime(strategy.id, strategy.symbol, targetBar.openTime, strategy.isCommon ?? false);
     return { fired: false, strategy, reason: 'first_run', debug: baseDebug };
   }
 
@@ -180,12 +182,11 @@ export async function evaluateStrategySignal(
       conditions:        g.conditions
         .filter((c) => c.enabled !== false)
         .map((c) => {
-          const key     = conditionCacheKey(c);
-          const timeMap = cache.get(key);
-          const value   = timeMap?.get(targetBar.openTime);
+          const passed = conditionPassesCheck(c, evalCandles, cache);
+          const value  = resolveConditionSnapshotValue(c, evalCandles, cache, passed);
           return {
             label:        conditionLabel(c),
-            passed:       conditionPassesCheck(c, evalCandles, cache),
+            passed,
             value,
             checkCandles: c.checkCandles ?? 1,
             checkMode:    c.checkMode    ?? 'confirmation',
@@ -223,7 +224,7 @@ export async function evaluateStrategySignal(
   // Stamp BEFORE building/sending the message. The UPDATE only succeeds if no
   // other cron process has already stamped this candle (conditional WHERE).
   // If rowCount === 0, we lost the race — bail out silently.
-  const stamped = await tryStampNotifiedTime(strategy.id, targetBar.openTime);
+  const stamped = await tryStampNotifiedTime(strategy.id, strategy.symbol, targetBar.openTime, strategy.isCommon ?? false);
   if (!stamped) {
     console.log(
       `[strategy/notify] dedup (concurrent): ${strategy.name} already stamped for ` +
@@ -237,10 +238,40 @@ export async function evaluateStrategySignal(
     computeEntryPriceLimit(targetBar.close, strategy.action.entryPriceOffset, direction).toFixed(8),
   );
 
+  // ── 8a. Dynamic ATR Levels (Option 5: dual fixed + volatility-adaptive) ──
+  let dynamicLevels: DynamicAtrLevels | undefined;
+  try {
+    const atrResult = atr.compute(evalCandles, { period: 14 });
+    const atrSeries = atrResult[0]?.data;
+    const currentAtr = atrSeries && atrSeries.length > 0 ? atrSeries[atrSeries.length - 1]?.value : undefined;
+    if (currentAtr && currentAtr > 0) {
+      const isLong = direction === 'long';
+      const dynEntry = isLong ? targetBar.close - 0.5 * currentAtr : targetBar.close + 0.5 * currentAtr;
+      const dynEntryOffsetPct = (0.5 * currentAtr / targetBar.close) * 100;
+      const dynAnchor = dynEntry > 0 ? dynEntry : targetBar.close;
+      const dynSl = isLong ? dynAnchor - 1.5 * currentAtr : dynAnchor + 1.5 * currentAtr;
+      const dynSlPct = (1.5 * currentAtr / dynAnchor) * 100;
+      const dynTp = isLong ? dynAnchor + 2.5 * currentAtr : dynAnchor - 2.5 * currentAtr;
+      const dynTpPct = (2.5 * currentAtr / dynAnchor) * 100;
+
+      dynamicLevels = {
+        atr: currentAtr,
+        entryPrice: dynEntry > 0 ? dynEntry : undefined,
+        entryOffsetPct: dynEntryOffsetPct,
+        stopLossPrice: dynSl > 0 ? dynSl : undefined,
+        stopLossPct: dynSlPct,
+        takeProfitPrice: dynTp > 0 ? dynTp : undefined,
+        takeProfitPct: dynTpPct,
+      };
+    }
+  } catch (atrErr) {
+    console.warn(`[strategy/notify] ATR computation failed for ${strategy.id}:`, atrErr);
+  }
+
   // ── 8b. Optional AI Order Evaluation ───────────────────────────────────────
-  // Option C: Strategy must explicitly enable AI Gatekeeper, not skipped by batch runner, and rating >= 4
+  // Option C: Strategy must explicitly enable AI Gatekeeper, not skipped by batch runner, and rating >= threshold
   let aiEvaluation: import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined;
-  const isAiEligible = !opts?.skipAi && strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(rating);
+  const isAiEligible = !opts?.skipAi && strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(rating, strategy.minSignalRating);
   if (isAiEligible) {
     aiEvaluation = await runOrderEvaluationForSignal(
       strategy,
@@ -274,6 +305,7 @@ export async function evaluateStrategySignal(
     aiEvaluation,
     strategyId:      strategy.id,
     strategyVersion: strategy.version,
+    dynamicLevels,
   });
 
   return {
@@ -287,6 +319,7 @@ export async function evaluateStrategySignal(
     conditionGroups,
     aiEvaluation,
     closedCandles: evalCandles,
+    dynamicLevels,
     debug: ratedDebug,
   };
 }
@@ -313,6 +346,22 @@ export async function runOrderEvaluationForSignal(
       ]);
 
       if (geminiKey || claudeKey || openaiKey) {
+        // Fetch Higher Timeframe candles for top-down MTF confluence
+        const { getParentTimeframe } = await import('@/lib/ai/evaluator/types');
+        const parentTf = getParentTimeframe(strategy.timeframe);
+        let htfCandles: Candle[] | undefined;
+        if (parentTf) {
+          try {
+            htfCandles = await fetchLatestCandlesCached(strategy.symbol, parentTf, 200);
+          } catch (err) {
+            console.warn(`[strategy/notify] Failed to fetch HTF candles for ${strategy.symbol}/${parentTf}:`, err);
+          }
+        }
+
+        const strategyContextNote = strategy.description
+          ? `Strategy: "${strategy.name}" — ${strategy.description}`
+          : `Strategy: "${strategy.name}"`;
+
         const { evaluateOrder } = await import('@/lib/ai/evaluator/gateway');
         return await evaluateOrder(
           {
@@ -323,8 +372,11 @@ export async function runOrderEvaluationForSignal(
             stopLossPct: strategy.risk.stopLossPct,
             takeProfitPct: strategy.risk.takeProfitPct,
             candleTime,
+            customNotes: strategyContextNote,
           },
           closedCandles,
+          htfCandles,
+          parentTf ?? undefined,
         );
       }
     }
@@ -345,6 +397,36 @@ function conditionPassesCheck(
   cache:     Map<string, Map<number, number>>,
 ): boolean {
   return evaluateConditionChecked(condition, closed, closed.length - 1, cache);
+}
+
+/**
+ * Resolves the indicator value to display in the condition snapshot.
+ * When a condition passes via lookback (or pattern forming-bar skip), returns
+ * the value from the candle that actually satisfied the condition so the alert
+ * message does not display a misleading 0 from the current bar.
+ */
+function resolveConditionSnapshotValue(
+  condition: StrategyCondition,
+  candles:   Candle[],
+  cache:     Map<string, Map<number, number>>,
+  passed:    boolean,
+): number | undefined {
+  const key     = conditionCacheKey(condition);
+  const timeMap = cache.get(key);
+  if (!timeMap || candles.length === 0) return undefined;
+
+  const barIndex = candles.length - 1;
+  if (passed) {
+    const n      = Math.max(1, condition.checkCandles ?? 1);
+    const endIdx = Math.max(0, barIndex - n);
+    for (let i = barIndex; i >= endIdx; i--) {
+      if (evaluateCondition(condition, candles[i]!, candles[i - 1], cache)) {
+        return timeMap.get(candles[i]!.openTime);
+      }
+    }
+  }
+
+  return timeMap.get(candles[barIndex]!.openTime);
 }
 
 /**
@@ -382,6 +464,8 @@ async function hasRecentSymbolSignal(
 
 /**
  * Atomically stamp the strategy's last_notified_trade_time.
+ * For common strategies, stamps in `strategy_ticker_states` per ticker symbol.
+ * For regular strategies, stamps in `strategies.last_notified_trade_time`.
  *
  * The WHERE guard ensures only the first writer wins when two cron processes
  * overlap — equivalent to a test-and-set.
@@ -389,7 +473,26 @@ async function hasRecentSymbolSignal(
  * Returns true  → we won the race, safe to send the Telegram message.
  * Returns false → another process already stamped this candle, skip.
  */
-async function tryStampNotifiedTime(strategyId: string, openTimeMs: number): Promise<boolean> {
+async function tryStampNotifiedTime(
+  strategyId: string,
+  symbol: string,
+  openTimeMs: number,
+  isCommon = false,
+): Promise<boolean> {
+  if (isCommon) {
+    const { rowCount } = await db.query(
+      `INSERT INTO strategy_ticker_states (strategy_id, symbol, last_notified_trade_time, updated_at)
+       VALUES ($1, $2, to_timestamp($3::bigint / 1000.0), NOW())
+       ON CONFLICT (strategy_id, symbol) DO UPDATE SET
+         last_notified_trade_time = EXCLUDED.last_notified_trade_time,
+         updated_at = NOW()
+       WHERE strategy_ticker_states.last_notified_trade_time IS NULL
+          OR strategy_ticker_states.last_notified_trade_time < EXCLUDED.last_notified_trade_time`,
+      [strategyId, symbol, openTimeMs],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
   const { rowCount } = await db.query(
     `UPDATE strategies
      SET last_notified_trade_time = to_timestamp($2::bigint / 1000.0)
@@ -407,18 +510,84 @@ export async function getNotifiableStrategies(): Promise<
   Array<{ strategy: Strategy; lastNotifiedTimeMs: number | null }>
 > {
   const { rows } = await db.query<{
+    id:                       string;
     definition:               Record<string, unknown>;
     last_notified_trade_time: Date | null;
+    is_common:                boolean;
+    symbols:                  string[] | null;
   }>(
-    `SELECT definition, last_notified_trade_time
+    `SELECT id, definition, last_notified_trade_time, is_common, symbols
      FROM strategies
      WHERE notify_on_signal = TRUE
        AND (definition->>'isActive')::boolean = true`,
   );
-  return rows.map((r) => ({
-    strategy:           r.definition as unknown as Strategy,
-    lastNotifiedTimeMs: r.last_notified_trade_time
-                          ? r.last_notified_trade_time.getTime()
-                          : null,
-  }));
+
+  const commonRows = rows.filter((r) => r.is_common);
+  const commonIds = commonRows.map((r) => r.id);
+  const tickerStateMap = new Map<string, number | null>(); // key: `${strategy_id}:${symbol}`
+
+  if (commonIds.length > 0) {
+    const { rows: stateRows } = await db.query<{
+      strategy_id:              string;
+      symbol:                   string;
+      last_notified_trade_time: Date | null;
+      is_active:                boolean;
+    }>(
+      `SELECT strategy_id, symbol, last_notified_trade_time, is_active
+       FROM strategy_ticker_states
+       WHERE strategy_id = ANY($1::text[])`,
+      [commonIds],
+    );
+    for (const s of stateRows) {
+      if (!s.is_active) {
+        // Paused specifically for this ticker
+        tickerStateMap.set(`${s.strategy_id}:${s.symbol}`, -1);
+      } else {
+        tickerStateMap.set(
+          `${s.strategy_id}:${s.symbol}`,
+          s.last_notified_trade_time ? s.last_notified_trade_time.getTime() : null,
+        );
+      }
+    }
+  }
+
+  const result: Array<{ strategy: Strategy; lastNotifiedTimeMs: number | null }> = [];
+
+  for (const r of rows) {
+    const baseStrategy = r.definition as unknown as Strategy;
+    if (r.is_common) {
+      baseStrategy.isCommon = true;
+      const assignedSymbols = (r.symbols && r.symbols.length > 0)
+        ? r.symbols
+        : (baseStrategy.symbols && baseStrategy.symbols.length > 0)
+          ? baseStrategy.symbols
+          : [baseStrategy.symbol];
+      baseStrategy.symbols = assignedSymbols;
+
+      for (const sym of assignedSymbols) {
+        const key = `${r.id}:${sym}`;
+        const tickerTime = tickerStateMap.has(key) ? tickerStateMap.get(key) : null;
+        if (tickerTime === -1) {
+          // Explicitly deactivated for this specific ticker
+          continue;
+        }
+        result.push({
+          strategy: {
+            ...baseStrategy,
+            symbol: sym, // Evaluated for this specific ticker
+          },
+          lastNotifiedTimeMs: tickerTime ?? null,
+        });
+      }
+    } else {
+      result.push({
+        strategy: baseStrategy,
+        lastNotifiedTimeMs: r.last_notified_trade_time
+          ? r.last_notified_trade_time.getTime()
+          : null,
+      });
+    }
+  }
+
+  return result;
 }

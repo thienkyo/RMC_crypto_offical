@@ -48,6 +48,15 @@ export function createDefaultMtfStrategy(): Strategy {
   };
 }
 
+export function createDefaultCommonStrategy(): Strategy {
+  return {
+    ...createDefaultStrategy(),
+    name: 'New Common Strategy',
+    isCommon: true,
+    symbols: ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'],
+  };
+}
+
 export function createDefaultTemplate(): Strategy {
   return {
     ...createDefaultStrategy(),

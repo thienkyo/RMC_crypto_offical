@@ -57,12 +57,18 @@ export function useLiveStrategies(): LiveStrategyState[] {
   const strategies = useStrategyStore((s) => s.strategies);
 
   // All active strategies matching this chart's symbol + timeframe.
+  // Common strategies matching this symbol are adapted so strategy.symbol matches the chart symbol.
   // Stable reference via useMemo so the outer memo doesn't churn on every tick.
   const activeStrategies = useMemo(
     () =>
-      strategies.filter(
-        (s) => (s.isActive ?? false) && s.symbol === symbol && s.timeframe === timeframe,
-      ),
+      strategies
+        .filter(
+          (s) =>
+            (s.isActive ?? false) &&
+            (s.symbol === symbol || (s.isCommon && s.symbols?.includes(symbol))) &&
+            s.timeframe === timeframe,
+        )
+        .map((s) => (s.isCommon && s.symbol !== symbol ? { ...s, symbol } : s)),
     [strategies, symbol, timeframe],
   );
 

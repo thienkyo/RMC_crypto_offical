@@ -102,6 +102,16 @@ export function ConditionGroupEditor({
       {/* ── Group header ────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
         <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+          {/* Collapse/Expand toggle on the left — separated from Remove */}
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? 'Expand group' : 'Collapse group'}
+            className="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors flex-shrink-0 cursor-pointer"
+          >
+            <span className="text-[10px] leading-none">{collapsed ? '▶' : '▼'}</span>
+          </button>
+
           {/* Group number indicator */}
           <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-surface-3 text-text-secondary border border-surface-border flex-shrink-0">
             Group {groupIndex + 1}
@@ -159,7 +169,7 @@ export function ConditionGroupEditor({
           />
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+        <div className="flex items-center gap-3 flex-shrink-0 ml-auto">
           {/* Condition count badge */}
           <span className="text-[10px] font-mono text-text-muted">
             {group.conditions.filter(c => c.enabled !== false).length} cond{group.conditions.filter(c => c.enabled !== false).length !== 1 ? 's' : ''}
@@ -169,21 +179,12 @@ export function ConditionGroupEditor({
             <button
               type="button"
               onClick={onRemoveGroup}
-              className="btn-icon-xs text-red-400 hover:text-red-300 text-xs px-1"
+              className="text-[10px] font-mono text-red-400 hover:text-red-300 hover:bg-red-500/10 px-2 py-0.5 rounded border border-red-500/25 transition-colors cursor-pointer"
               title="Remove group"
             >
               Remove
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={() => setCollapsed((v) => !v)}
-            title={collapsed ? 'Expand group' : 'Collapse group'}
-            className="text-[11px] text-text-muted hover:text-text-primary transition-colors px-1"
-          >
-            {collapsed ? '▶' : '▼'}
-          </button>
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 import type { Candle } from '@/types/market';
 import type { Indicator, IndicatorResult, IndicatorPoint } from './types';
+import { computeWilderRsiValues, emaArray } from './math';
 
 interface RsiParams {
   period:    number;
@@ -29,27 +30,11 @@ export const rsi: Indicator<RsiParams> = {
     if (candles.length < period + 1) return [];
 
     // ── RSI (Wilder smoothing) ────────────────────────────────────────────────
-    const rsiData: IndicatorPoint[] = [];
-    let avgGain = 0;
-    let avgLoss = 0;
-
-    for (let i = 1; i <= period; i++) {
-      const diff = candles[i]!.close - candles[i - 1]!.close;
-      avgGain += diff > 0 ? diff  : 0;
-      avgLoss += diff < 0 ? -diff : 0;
-    }
-    avgGain /= period;
-    avgLoss /= period;
-
-    const rsiVal = (g: number, l: number) => l === 0 ? 100 : 100 - 100 / (1 + g / l);
-    rsiData.push({ time: candles[period]!.openTime, value: rsiVal(avgGain, avgLoss) });
-
-    for (let i = period + 1; i < candles.length; i++) {
-      const diff = candles[i]!.close - candles[i - 1]!.close;
-      avgGain = (avgGain * (period - 1) + (diff > 0 ? diff  : 0)) / period;
-      avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
-      rsiData.push({ time: candles[i]!.openTime, value: rsiVal(avgGain, avgLoss) });
-    }
+    const rsiValues = computeWilderRsiValues(candles, period);
+    const rsiData: IndicatorPoint[] = rsiValues.map((value, idx) => ({
+      time: candles[period + idx]!.openTime,
+      value,
+    }));
 
     // ── EMA of RSI + crossover markers ───────────────────────────────────────
     if (!emaPeriod || emaPeriod <= 0 || rsiData.length < emaPeriod) {
@@ -60,14 +45,10 @@ export const rsi: Indicator<RsiParams> = {
     }
 
     // Compute EMA on RSI values
-    const k = 2 / (emaPeriod + 1);
+    const emaValues = emaArray(rsiValues, emaPeriod);
     const emaData: IndicatorPoint[] = [];
-    let prev = rsiData.slice(0, emaPeriod).reduce((s, p) => s + p.value, 0) / emaPeriod;
-    emaData.push({ time: rsiData[emaPeriod - 1]!.time, value: prev });
-
-    for (let i = emaPeriod; i < rsiData.length; i++) {
-      prev = rsiData[i]!.value * k + prev * (1 - k);
-      emaData.push({ time: rsiData[i]!.time, value: prev });
+    for (let i = emaPeriod - 1; i < rsiData.length; i++) {
+      emaData.push({ time: rsiData[i]!.time, value: emaValues[i]! });
     }
 
     return [

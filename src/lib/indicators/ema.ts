@@ -1,5 +1,6 @@
 import type { Candle } from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { emaArray } from './math';
 
 interface EmaParams { period: number; [key: string]: number }
 
@@ -15,15 +16,11 @@ export const ema: Indicator<EmaParams> = {
   compute(candles: Candle[], { period }: EmaParams): IndicatorResult {
     if (candles.length < period) return [];
 
-    const k    = 2 / (period + 1);
+    const emaValues = emaArray(candles.map((c) => c.close), period);
     const data: { time: number; value: number }[] = [];
 
-    let prev = candles.slice(0, period).reduce((s, c) => s + c.close, 0) / period;
-    data.push({ time: candles[period - 1]!.openTime, value: prev });
-
-    for (let i = period; i < candles.length; i++) {
-      prev = candles[i]!.close * k + prev * (1 - k);
-      data.push({ time: candles[i]!.openTime, value: prev });
+    for (let i = period - 1; i < candles.length; i++) {
+      data.push({ time: candles[i]!.openTime, value: emaValues[i]! });
     }
 
     return [{

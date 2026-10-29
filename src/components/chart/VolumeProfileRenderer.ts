@@ -40,16 +40,18 @@ interface ProfileBin {
 interface ComputedProfile {
   bins:   ProfileBin[];
   levels: ProfileLevels;
+  maxVol: number;
 }
 
 // Maximum histogram width as a fraction of the pane width.
 const MAX_BAR_WIDTH_FRACTION = 0.20;
 
 export class VolumeProfileRenderer implements ISeriesPrimitive {
-  private _config:  VolumeProfileConfig;
-  private _candles: Candle[] = [];
+  private _config:        VolumeProfileConfig;
+  private _candles:       Candle[] = [];
+  private _cachedProfile: ComputedProfile | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private _series:  any | null = null;
+  private _series:        any | null = null;
 
   constructor(config: VolumeProfileConfig) {
     this._config = { ...config };
@@ -59,6 +61,9 @@ export class VolumeProfileRenderer implements ISeriesPrimitive {
 
   attached({ series }: SeriesAttachedParameter): void {
     this._series = series;
+    if (!this._cachedProfile && this._candles.length >= 2) {
+      this._cachedProfile = this._computeProfile();
+    }
   }
 
   detached(): void {
@@ -75,10 +80,12 @@ export class VolumeProfileRenderer implements ISeriesPrimitive {
 
   setConfig(config: VolumeProfileConfig): void {
     this._config = { ...config };
+    this._cachedProfile = this._computeProfile();
   }
 
   setCandles(candles: Candle[]): void {
     this._candles = candles;
+    this._cachedProfile = this._computeProfile();
   }
 
   // ── Profile computation ────────────────────────────────────────────────────
@@ -140,13 +147,14 @@ export class VolumeProfileRenderer implements ISeriesPrimitive {
         poc: rangeLow + (pocBin + 0.5) * binSize,
         val: rangeLow + vaLow * binSize,
       },
+      maxVol,
     };
   }
 
   // ── Pane view ──────────────────────────────────────────────────────────────
 
   private _buildPaneView(): ISeriesPrimitivePaneView {
-    const getProfile   = () => this._computeProfile();
+    const getProfile   = () => this._cachedProfile;
     const getSeries    = () => this._series;
     const getShowLines = () => this._config.showLines;
 
@@ -157,12 +165,9 @@ export class VolumeProfileRenderer implements ISeriesPrimitive {
         if (!series) return;
 
         const result = getProfile();
-        if (!result) return;
+        if (!result || result.maxVol === 0) return;
 
-        const { bins: profile, levels } = result;
-        const maxVol = Math.max(...profile.map((b) => b.volume));
-        if (maxVol === 0) return;
-
+        const { bins: profile, levels, maxVol } = result;
         const showLines = getShowLines();
 
         target.useBitmapCoordinateSpace((scope: {

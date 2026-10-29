@@ -15,7 +15,7 @@ import { useState } from 'react';
 import { ConditionGroupEditor } from './ConditionGroupEditor';
 import { ActionEditor }         from './ActionEditor';
 import { useStrategyStore }     from '@/store/strategy';
-import { pushStrategyToDb, pushManyStrategiesToDb } from '@/lib/strategy/api';
+import { pushStrategyToDb, syncStrategyToDb, syncManyStrategiesToDb } from '@/lib/strategy/api';
 import { useBacktest }          from '@/hooks/useBacktest';
 import { TIMEFRAMES }           from '@/types/market';
 import { TF_TO_MS }             from '@/lib/exchange/binance';
@@ -45,6 +45,7 @@ export function StrategyForm({ strategy: initial }: Props) {
   const [error, setError]               = useState<string | null>(null);
   const [saving, setSaving]             = useState(false);
   const [groupTopicToast, setGroupTopicToast] = useState<string | null>(null);
+  const [newTickerInput, setNewTickerInput]   = useState('');
 
   const strategies           = useStrategyStore((s) => s.strategies);
   const upsertStrategy       = useStrategyStore((s) => s.upsertStrategy);
@@ -57,6 +58,35 @@ export function StrategyForm({ strategy: initial }: Props) {
   const siblingStrategies = strategies.filter(
     (s) => !s.isTemplate && s.symbol === draft.symbol && s.id !== draft.id
   );
+
+  const popularTickers = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'PAXGUSDT', 'NEARUSDT', 'SUIUSDT', 'DOGEUSDT', 'AVAXUSDT'];
+  const currentSymbols = draft.symbols && draft.symbols.length > 0 ? draft.symbols : [draft.symbol || 'BTCUSDT'];
+  const availableQuickAdd = popularTickers.filter((sym) => !currentSymbols.includes(sym));
+
+  function addTicker(sym: string) {
+    const clean = sym.trim().toUpperCase();
+    if (!clean) return;
+    const current = draft.symbols && draft.symbols.length > 0 ? draft.symbols : [draft.symbol || 'BTCUSDT'];
+    if (!current.includes(clean)) {
+      const next = [...current, clean];
+      patch('symbols', next);
+      if (!draft.symbol) patch('symbol', clean);
+    }
+    setNewTickerInput('');
+  }
+
+  function removeTicker(sym: string) {
+    const current = draft.symbols && draft.symbols.length > 0 ? draft.symbols : [draft.symbol || 'BTCUSDT'];
+    if (current.length <= 1) {
+      alert('A common strategy must have at least one ticker assigned.');
+      return;
+    }
+    const next = current.filter((x) => x !== sym);
+    patch('symbols', next);
+    if (draft.symbol === sym && next.length > 0) {
+      patch('symbol', next[0]!);
+    }
+  }
 
   // Re-sync draft if a different strategy is selected
   // (parent re-mounts this component with a new key when activeStrategyId changes)
@@ -98,8 +128,16 @@ export function StrategyForm({ strategy: initial }: Props) {
     setError(null);
     setSaving(true);
     const saved = { ...draft, version: draft.version + 1 };
+    if (saved.isCommon) {
+      if (!saved.symbols || saved.symbols.length === 0) {
+        saved.symbols = [saved.symbol || 'BTCUSDT'];
+      }
+      if (!saved.symbol && saved.symbols.length > 0) {
+        saved.symbol = saved.symbols[0]!;
+      }
+    }
     if (saved.telegramTopic?.enabled && !saved.telegramTopic.name.trim()) {
-      saved.telegramTopic = { ...saved.telegramTopic, name: saved.symbol };
+      saved.telegramTopic = { ...saved.telegramTopic, name: saved.isCommon ? '{symbol}' : saved.symbol };
     }
     try {
       await pushStrategyToDb(saved);
@@ -120,8 +158,16 @@ export function StrategyForm({ strategy: initial }: Props) {
     setSaving(true);
     // DB-first save so results are associated with the persisted state
     const saved = { ...draft, version: draft.version + 1 };
+    if (saved.isCommon) {
+      if (!saved.symbols || saved.symbols.length === 0) {
+        saved.symbols = [saved.symbol || 'BTCUSDT'];
+      }
+      if (!saved.symbol && saved.symbols.length > 0) {
+        saved.symbol = saved.symbols[0]!;
+      }
+    }
     if (saved.telegramTopic?.enabled && !saved.telegramTopic.name.trim()) {
-      saved.telegramTopic = { ...saved.telegramTopic, name: saved.symbol };
+      saved.telegramTopic = { ...saved.telegramTopic, name: saved.isCommon ? '{symbol}' : saved.symbol };
     }
     try {
       await pushStrategyToDb(saved);
@@ -161,6 +207,12 @@ export function StrategyForm({ strategy: initial }: Props) {
                 MTF
               </span>
             )}
+            {draft.isCommon && (
+              <span className="text-[10px] font-mono font-semibold px-1.5 py-px rounded
+                               bg-purple-500/20 text-purple-300 border border-purple-500/40 tracking-wider">
+                🔗 Common ({currentSymbols.length} tickers)
+              </span>
+            )}
             <span className={`text-[10px] font-mono font-semibold px-1.5 py-px rounded ${
               draft.action.type === 'enter_long'
                 ? 'bg-emerald-500/15 text-emerald-400'
@@ -188,16 +240,40 @@ export function StrategyForm({ strategy: initial }: Props) {
               />
             </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="field-label">Symbol</span>
-              <input
-                type="text"
-                value={draft.symbol}
-                onChange={(e) => patch('symbol', e.target.value.toUpperCase())}
-                className="input-sm w-28 font-mono"
-                placeholder="BTCUSDT"
-              />
-            </label>
+            {draft.isCommon ? (
+              <label className="flex flex-col gap-1">
+                <span className="field-label flex items-center gap-1">
+                  Primary Ticker
+                  <span className="text-[10px] text-text-muted font-normal">(for backtest)</span>
+                </span>
+                <select
+                  value={draft.symbol}
+                  onChange={(e) => patch('symbol', e.target.value)}
+                  className="select-sm w-32 font-mono"
+                >
+                  {currentSymbols.map((sym) => (
+                    <option key={sym} value={sym}>{sym}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className="flex flex-col gap-1">
+                <span className="field-label">Symbol</span>
+                <input
+                  type="text"
+                  value={draft.symbol}
+                  onChange={(e) => {
+                    const sym = e.target.value.toUpperCase();
+                    patch('symbol', sym);
+                    if (draft.symbols && draft.symbols.length > 0) {
+                      patch('symbols', [sym]);
+                    }
+                  }}
+                  className="input-sm w-28 font-mono"
+                  placeholder="BTCUSDT"
+                />
+              </label>
+            )}
 
             <label className="flex flex-col gap-1">
               <span className="field-label">Timeframe</span>
@@ -228,7 +304,118 @@ export function StrategyForm({ strategy: initial }: Props) {
                 ))}
               </select>
             </label>
+
+            {/* Common strategy toggle */}
+            <div className="flex items-center gap-2 self-end pb-1.5 ml-auto">
+              <label className="flex items-center gap-2 cursor-pointer text-xs select-none">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.isCommon ?? false}
+                  onClick={() => {
+                    const nextCommon = !(draft.isCommon ?? false);
+                    patch('isCommon', nextCommon);
+                    if (nextCommon) {
+                      const initialSymbols = draft.symbols && draft.symbols.length > 0
+                        ? draft.symbols
+                        : [draft.symbol || 'BTCUSDT'];
+                      patch('symbols', initialSymbols);
+                    }
+                  }}
+                  className={`w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
+                    draft.isCommon ? 'bg-purple-600' : 'bg-surface-border'
+                  }`}
+                >
+                  <span
+                    className={`block w-3 h-3 rounded-full bg-white shadow transition-transform mx-0.5 ${
+                      draft.isCommon ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span className={`font-mono text-xs ${draft.isCommon ? 'text-purple-400 font-semibold' : 'text-text-muted'}`}>
+                  🔗 Common Strategy
+                </span>
+              </label>
+            </div>
           </div>
+
+          {/* Assigned Tickers Panel for Common Strategy */}
+          {draft.isCommon && (
+            <div className="p-3 rounded-lg border border-purple-500/30 bg-purple-950/15 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-purple-300 font-mono">
+                    Assigned Tickers ({currentSymbols.length})
+                  </span>
+                  <span className="text-[11px] text-text-muted">
+                    Rules and risk settings edit once and apply to all these tickers.
+                  </span>
+                </div>
+              </div>
+
+              {/* Ticker pills */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {currentSymbols.map((sym) => (
+                  <span
+                    key={sym}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-purple-500/40 bg-purple-500/15 text-purple-200 text-xs font-mono"
+                  >
+                    <span>{sym}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeTicker(sym)}
+                      className="text-purple-400 hover:text-red-400 transition-colors ml-0.5 text-xs font-bold leading-none"
+                      title={`Remove ${sym} from this common strategy`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+
+                {/* Add custom ticker input */}
+                <div className="flex items-center gap-1 ml-1">
+                  <input
+                    type="text"
+                    placeholder="+ Add ticker"
+                    value={newTickerInput}
+                    onChange={(e) => setNewTickerInput(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addTicker(newTickerInput);
+                      }
+                    }}
+                    className="w-24 px-1.5 py-0.5 rounded border border-surface-border bg-surface-2 text-xs font-mono text-text-primary focus:border-purple-500 outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => addTicker(newTickerInput)}
+                    disabled={!newTickerInput.trim()}
+                    className="px-2 py-0.5 rounded bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 text-xs font-mono disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick-add suggestions */}
+              {availableQuickAdd.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-purple-500/20 text-[11px]">
+                  <span className="text-text-muted font-mono">Quick add:</span>
+                  {availableQuickAdd.map((sym) => (
+                    <button
+                      key={sym}
+                      type="button"
+                      onClick={() => addTicker(sym)}
+                      className="px-1.5 py-0.5 rounded border border-surface-border/60 bg-surface-2/60 text-text-muted hover:text-purple-300 hover:border-purple-500/40 text-[10px] font-mono transition-colors"
+                    >
+                      +{sym.replace('USDT', '')}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <label className="flex flex-col gap-1">
             <span className="field-label">
@@ -419,7 +606,7 @@ export function StrategyForm({ strategy: initial }: Props) {
             </label>
             {draft.notifyOnSignal && (
               <>
-                <p className="text-xs text-text-muted pl-12 mb-3">
+                <p className="text-xs text-text-secondary pl-12 mb-3">
                   Save to sync this strategy to the server. The cron checks every minute
                   and fires when entry conditions are met. Configure{' '}
                   <span className="text-text-primary">Confirm / Lookback</span> per condition above.
@@ -447,11 +634,11 @@ export function StrategyForm({ strategy: initial }: Props) {
                     </span>
                   </label>
                   {draft.telegramTopic?.enabled && (
-                    <div className="flex flex-col gap-1.5 max-w-[240px]">
-                      <span className="text-xs text-text-muted">Topic name</span>
+                    <div className="flex flex-col gap-1.5 max-w-[280px]">
+                      <span className="text-xs text-text-secondary font-medium">Topic name</span>
                       <input
                         type="text"
-                        placeholder={draft.symbol}
+                        placeholder={draft.isCommon ? '{symbol} (auto per ticker)' : draft.symbol}
                         value={draft.telegramTopic.name || ''}
                         onChange={(e) => {
                           const name = e.target.value.substring(0, 128);
@@ -463,8 +650,13 @@ export function StrategyForm({ strategy: initial }: Props) {
                             patch('telegramTopic', { ...draft.telegramTopic, enabled: true, name });
                           }
                         }}
-                        className="w-full bg-surface-elevated text-text-primary text-xs px-2 py-1.5 border border-surface-border rounded outline-none focus:border-indigo-500 transition-colors"
+                        className="w-full bg-surface-2 text-text-primary placeholder:text-text-secondary/60 text-xs px-2.5 py-1.5 border border-surface-border rounded outline-none focus:border-accent font-mono transition-colors"
                       />
+                      <span className="text-[11px] text-text-secondary font-mono">
+                        {draft.isCommon
+                          ? 'Leave empty or use {symbol} to route to each coin\'s topic (#BTCUSDT, etc.)'
+                          : `Routes to #${(draft.telegramTopic.name || draft.symbol).trim()}`}
+                      </span>
                     </div>
                   )}
                   {siblingStrategies.length > 0 && (
@@ -477,11 +669,7 @@ export function StrategyForm({ strategy: initial }: Props) {
                           const topic = { enabled, name };
                           patch('telegramTopic', topic);
                           const updated = setGroupTelegramTopic(draft.symbol, topic);
-                          if (updated.length > 0) {
-                            pushManyStrategiesToDb(updated).catch((err) =>
-                              console.warn('[group-topic-apply] sync failed:', err)
-                            );
-                          }
+                          syncManyStrategiesToDb(updated, 'group-topic-apply');
                           setGroupTopicToast(
                             enabled
                               ? `Applied topic #${name} to all ${updated.length} ${draft.symbol} strategies!`
@@ -585,9 +773,7 @@ export function StrategyForm({ strategy: initial }: Props) {
                 type="button"
                 onClick={() => {
                   const copy = duplicateStrategy(draft.id);
-                  if (copy) pushStrategyToDb(copy).catch((err) =>
-                    console.warn('[StrategyForm] duplicate DB push failed:', err),
-                  );
+                  syncStrategyToDb(copy, 'StrategyForm:duplicate');
                 }}
                 className="btn-sm btn-secondary"
                 title="Duplicate as another template"
@@ -598,9 +784,7 @@ export function StrategyForm({ strategy: initial }: Props) {
                 type="button"
                 onClick={() => {
                   const clone = cloneFromTemplate(draft.id);
-                  if (clone) pushStrategyToDb(clone).catch((err) =>
-                    console.warn('[StrategyForm] clone DB push failed:', err),
-                  );
+                  syncStrategyToDb(clone, 'StrategyForm:clone');
                 }}
                 className="btn-sm btn-primary"
                 title="Clone as a working strategy"

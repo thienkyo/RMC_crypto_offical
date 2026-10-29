@@ -18,6 +18,7 @@
  */
 import type { Candle }          from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { computeWilderRsiValues, smaArray } from './math';
 
 interface StochRsiParams {
   rsiPeriod:   number;
@@ -25,51 +26,6 @@ interface StochRsiParams {
   kSmooth:     number;
   dSmooth:     number;
   [key: string]: number;
-}
-
-/** Wilder RSI — same algorithm as rsi.ts, returns an array of RSI values
- *  aligned to candles[rsiPeriod], candles[rsiPeriod+1], … */
-function computeRsi(candles: Candle[], period: number): number[] {
-  const out: number[] = [];
-  if (candles.length < period + 1) return out;
-
-  let avgGain = 0;
-  let avgLoss = 0;
-  for (let i = 1; i <= period; i++) {
-    const d = candles[i]!.close - candles[i - 1]!.close;
-    avgGain += d > 0 ? d  : 0;
-    avgLoss += d < 0 ? -d : 0;
-  }
-  avgGain /= period;
-  avgLoss /= period;
-
-  const rsiVal = (g: number, l: number) => l === 0 ? 100 : 100 - 100 / (1 + g / l);
-  out.push(rsiVal(avgGain, avgLoss));
-
-  for (let i = period + 1; i < candles.length; i++) {
-    const d = candles[i]!.close - candles[i - 1]!.close;
-    avgGain = (avgGain * (period - 1) + (d > 0 ? d  : 0)) / period;
-    avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
-    out.push(rsiVal(avgGain, avgLoss));
-  }
-
-  return out;
-}
-
-/** Simple moving average over an array, returns same length (NaN for warm-up). */
-function smaArray(values: number[], period: number): number[] {
-  const out: number[] = [];
-  let sum = 0;
-  for (let i = 0; i < values.length; i++) {
-    sum += values[i]!;
-    if (i < period - 1) {
-      out.push(NaN);
-    } else {
-      if (i >= period) sum -= values[i - period]!;
-      out.push(sum / period);
-    }
-  }
-  return out;
 }
 
 export const stochrsi: Indicator<StochRsiParams> = {
@@ -96,7 +52,7 @@ export const stochrsi: Indicator<StochRsiParams> = {
     const ks = Math.max(1, Math.round(kSmooth));
     const ds = Math.max(1, Math.round(dSmooth));
 
-    const rsiValues = computeRsi(candles, rp);
+    const rsiValues = computeWilderRsiValues(candles, rp);
     // rsiValues[j] aligns to candles[j + rp]
 
     if (rsiValues.length < sp) return [];

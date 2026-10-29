@@ -13,6 +13,7 @@
 
 import sharp from 'sharp';
 import type { Candle } from '@/types/market';
+import { formatAxisPrice as formatPrice } from '@/lib/format';
 
 export interface SignalChartParams {
   symbol: string;
@@ -28,16 +29,8 @@ export interface SignalChartParams {
   takeProfitPct?: number;
   candles: Candle[];
   signalId?: number;
-}
-
-function formatPrice(val: number): string {
-  if (val >= 1000) {
-    return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-  if (val >= 1) {
-    return val.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 4 });
-  }
-  return val.toLocaleString('en-US', { minimumFractionDigits: 5, maximumFractionDigits: 6 });
+  aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult;
+  dynamicLevels?: import('@/types/strategy').DynamicAtrLevels;
 }
 
 function formatDate(ms: number, timeframe: string): string {
@@ -68,6 +61,8 @@ export function generateSignalChartSvg(params: SignalChartParams): string {
     takeProfitPct,
     candles,
     signalId,
+    aiEvaluation,
+    dynamicLevels,
   } = params;
 
   const width = 1000;
@@ -103,6 +98,9 @@ export function generateSignalChartSvg(params: SignalChartParams): string {
     entryPriceLimit,
     stopLossPrice,
     takeProfitPrice,
+    dynamicLevels?.entryPrice,
+    dynamicLevels?.stopLossPrice,
+    dynamicLevels?.takeProfitPrice,
   ].filter((p): p is number => typeof p === 'number' && p > 0);
 
   for (const p of candidatePrices) {
@@ -343,10 +341,31 @@ export function generateSignalChartSvg(params: SignalChartParams): string {
     <!-- Direction Badge -->
     <rect x="${symbol.length * 14 + 54}" y="6" width="76" height="22" rx="4" fill="${dirBg}" stroke="${dirBorder}" stroke-width="1"/>
     <text x="${symbol.length * 14 + 92}" y="21" fill="${dirColor}" font-size="11" font-weight="bold" font-family="sans-serif" text-anchor="middle">${dirText}</text>
-
+${(() => {
+  if (!aiEvaluation) return '';
+  const isPass = aiEvaluation.status === 'PASS';
+  const isCaveat = aiEvaluation.status === 'CAVEAT';
+  const aiColor = isPass ? '#34d399' : isCaveat ? '#fbbf24' : '#f87171';
+  const aiBg = isPass ? 'rgba(16, 185, 129, 0.18)' : isCaveat ? 'rgba(245, 158, 11, 0.18)' : 'rgba(239, 68, 68, 0.18)';
+  const aiBorder = isPass ? 'rgba(16, 185, 129, 0.40)' : isCaveat ? 'rgba(245, 158, 11, 0.40)' : 'rgba(239, 68, 68, 0.40)';
+  const scoreText = aiEvaluation.metrics?.technicalScore ? ` ${aiEvaluation.metrics.technicalScore}` : '';
+  const aiLabel = `AI ${aiEvaluation.status}${scoreText}`;
+  const badgeW = Math.max(76, aiLabel.length * 7.5 + 16);
+  const badgeX = symbol.length * 14 + 138;
+  return `
+    <!-- AI Gatekeeper Badge -->
+    <rect x="${badgeX}" y="6" width="${badgeW}" height="22" rx="4" fill="${aiBg}" stroke="${aiBorder}" stroke-width="1"/>
+    <text x="${badgeX + badgeW / 2}" y="21" fill="${aiColor}" font-size="11" font-weight="bold" font-family="monospace" text-anchor="middle">${aiLabel}</text>`;
+})()}
     <!-- Strategy Name -->
-    <text x="${symbol.length * 14 + 140}" y="21" fill="#94a3b8" font-size="13" font-family="sans-serif">
-      ${strategyName.length > 40 ? strategyName.slice(0, 38) + '…' : strategyName}
+    <text x="${(() => {
+      if (!aiEvaluation) return symbol.length * 14 + 140;
+      const scoreText = aiEvaluation.metrics?.technicalScore ? ` ${aiEvaluation.metrics.technicalScore}` : '';
+      const aiLabel = `AI ${aiEvaluation.status}${scoreText}`;
+      const badgeW = Math.max(76, aiLabel.length * 7.5 + 16);
+      return symbol.length * 14 + 138 + badgeW + 12;
+    })()}" y="21" fill="#94a3b8" font-size="13" font-family="sans-serif">
+      ${strategyName.length > 32 ? strategyName.slice(0, 30) + '…' : strategyName}
     </text>
 
     <!-- Rating & Signal ID (Right-aligned) -->

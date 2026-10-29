@@ -195,6 +195,9 @@ export function ratingToGrade(score: number | null | undefined): SignalGrade {
 
 export const AI_VERDICT_MIN_RATING = 4;
 
-export function shouldRunAiVerdict(rating: number): boolean {
-  return rating >= AI_VERDICT_MIN_RATING;
+export function shouldRunAiVerdict(rating: number, minSignalRating?: number): boolean {
+  const threshold = minSignalRating !== undefined
+    ? Math.min(AI_VERDICT_MIN_RATING, minSignalRating)
+    : AI_VERDICT_MIN_RATING;
+  return rating >= threshold;
 }

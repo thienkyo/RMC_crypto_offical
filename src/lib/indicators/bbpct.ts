@@ -1,5 +1,6 @@
 import type { Candle } from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { computeBollingerStats } from './math';
 
 interface BbPctParams { period: number; stdDevMult: number; [key: string]: number }
 
@@ -30,28 +31,13 @@ export const bbpct: Indicator<BbPctParams> = {
   compute(candles: Candle[], { period, stdDevMult }: BbPctParams): IndicatorResult {
     if (candles.length < period) return [];
 
-    const data: { time: number; value: number }[] = [];
-    let rollingSum = candles.slice(0, period).reduce((s, c) => s + c.close, 0);
-
-    for (let i = period - 1; i < candles.length; i++) {
-      if (i >= period) rollingSum += candles[i]!.close - candles[i - period]!.close;
-
-      const mean = rollingSum / period;
-      let sumSqDiff = 0;
-      for (let j = i - period + 1; j <= i; j++) {
-        const d = candles[j]!.close - mean;
-        sumSqDiff += d * d;
-      }
-      const stdDev = Math.sqrt(sumSqDiff / period);
-      const upper  = mean + stdDevMult * stdDev;
-      const lower  = mean - stdDevMult * stdDev;
-      const range  = upper - lower;
-
+    const stats = computeBollingerStats(candles, period, stdDevMult);
+    const data: { time: number; value: number }[] = stats.map((s) => {
+      const range = s.upper - s.lower;
       // Avoid division by zero when all closes in the window are identical
-      const pctB = range > 0 ? (candles[i]!.close - lower) / range : 0.5;
-
-      data.push({ time: candles[i]!.openTime, value: pctB });
-    }
+      const pctB = range > 0 ? (s.close - s.lower) / range : 0.5;
+      return { time: s.time, value: pctB };
+    });
 
     return [
       {

@@ -361,12 +361,23 @@ export function passesRegimeGate(
   const mhCur = regime.macdHist.get(cur.openTime) ?? 0;
   const mhPrev = regime.macdHist.get(prev.openTime) ?? 0;
 
+  const now = Date.now();
+  const isFormingBar = cur.closeTime > now;
+  const barDuration = Math.max(1, cur.closeTime - cur.openTime);
+  const formingProgress = isFormingBar ? (now - cur.openTime) / barDuration : 1;
+
   if (direction === 'long') {
     if (m > p) {
       const isGreen = cur.close > cur.open;
       const rsiUp   = rCur > rPrev;
       const macdUp  = mhCur > mhPrev;
-      return isGreen && rsiUp && macdUp;
+      // Intra-bar flicker guard: on an unclosed forming bar during a bear regime,
+      // prevent early head-fakes from firing unless either:
+      //  1) The bar has matured to at least 15% of its duration, OR
+      //  2) Price has decisively reclaimed above the prior candle's body midpoint.
+      const prevMid = (prev.open + prev.close) / 2;
+      const progressOk = !isFormingBar || formingProgress >= 0.15 || cur.close >= prevMid;
+      return isGreen && rsiUp && macdUp && progressOk;
     }
     return true;
   }
@@ -376,7 +387,9 @@ export function passesRegimeGate(
       const isRed    = cur.close < cur.open;
       const rsiDown  = rCur < rPrev;
       const macdDown = mhCur < mhPrev;
-      return isRed && rsiDown && macdDown;
+      const prevMid  = (prev.open + prev.close) / 2;
+      const progressOk = !isFormingBar || formingProgress >= 0.15 || cur.close <= prevMid;
+      return isRed && rsiDown && macdDown && progressOk;
     }
     return true;
   }

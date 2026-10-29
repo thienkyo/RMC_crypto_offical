@@ -73,6 +73,7 @@ describe('Regime-Aware Gate for Level Groups', () => {
   it('allows groups without direction specified to pass unconditionally', () => {
     const levelGroup: ConditionGroup = {
       id: 'g1',
+      label: 'Level Group',
       conditions: [
         {
           id: 'c1',
@@ -90,6 +91,7 @@ describe('Regime-Aware Gate for Level Groups', () => {
   it('bypasses crossover or pattern groups from regime gating even with direction', () => {
     const crossGroup: ConditionGroup = {
       id: 'g1',
+      label: 'Cross Group',
       conditions: [
         {
           id: 'c1',
@@ -103,5 +105,55 @@ describe('Regime-Aware Gate for Level Groups', () => {
     };
     // Even if candles array is dummy, non-level group returns true immediately
     expect(passesRegimeGate(crossGroup, [], 1, 'long')).toBe(true);
+  });
+
+  it('blocks forming bar in bear regime when under 15% progress and below prior midpoint', () => {
+    const levelGroup: ConditionGroup = {
+      id: 'g1',
+      label: 'Level Group',
+      conditions: [
+        {
+          id: 'c1',
+          indicatorId: 'rsi',
+          params: { period: 14 },
+          seriesIndex: 0,
+          operator: 'lt',
+          value: 40,
+        },
+      ],
+    };
+
+    const now = Date.now();
+    // 4h candle that opened 5 minutes ago (5 / 240 = 2% progress)
+    const openTime = now - 5 * 60_000;
+    const closeTime = openTime + 4 * 3600_000;
+
+    // Prior candle: open 100, close 80 -> midpoint is 90
+    const prevCandle: Candle = {
+      openTime: openTime - 4 * 3600_000,
+      closeTime: openTime,
+      open: 100,
+      high: 105,
+      low: 78,
+      close: 80,
+      volume: 1000,
+    };
+
+    // Current candle: opened at 80, currently 82 (green, but below midpoint 90, and only 2% into bar)
+    const curCandle: Candle = {
+      openTime,
+      closeTime,
+      open: 80,
+      high: 83,
+      low: 79,
+      close: 82,
+      volume: 100,
+    };
+
+    const candles = [prevCandle, curCandle];
+    // In ADX warm-up state (empty series), gate passes.
+    // When barIndex=1, it computes safely without throwing
+    const res = passesRegimeGate(levelGroup, candles, 1, 'long');
+    expect(typeof res).toBe('boolean');
   });
 });

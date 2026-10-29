@@ -15,6 +15,7 @@
  */
 import type { Candle }          from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { computeBollingerStats } from './math';
 
 interface BbWidthParams { period: number; stdDevMult: number; [key: string]: number }
 
@@ -34,27 +35,12 @@ export const bb_width: Indicator<BbWidthParams> = {
   compute(candles: Candle[], { period, stdDevMult }: BbWidthParams): IndicatorResult {
     if (candles.length < period) return [];
 
-    const data: { time: number; value: number }[] = [];
-    let rollingSum = candles.slice(0, period).reduce((s, c) => s + c.close, 0);
-
-    for (let i = period - 1; i < candles.length; i++) {
-      if (i >= period) rollingSum += candles[i]!.close - candles[i - period]!.close;
-
-      const mean = rollingSum / period;
-      let sumSqDiff = 0;
-      for (let j = i - period + 1; j <= i; j++) {
-        const d = candles[j]!.close - mean;
-        sumSqDiff += d * d;
-      }
-      const stdDev = Math.sqrt(sumSqDiff / period);
-      const upper  = mean + stdDevMult * stdDev;
-      const lower  = mean - stdDevMult * stdDev;
-
+    const stats = computeBollingerStats(candles, period, stdDevMult);
+    const data: { time: number; value: number }[] = stats.map((s) => {
       // Bandwidth as percentage of middle band — avoids asset-price dependency
-      const width = mean > 0 ? ((upper - lower) / mean) * 100 : 0;
-
-      data.push({ time: candles[i]!.openTime, value: width });
-    }
+      const width = s.mean > 0 ? ((s.upper - s.lower) / s.mean) * 100 : 0;
+      return { time: s.time, value: width };
+    });
 
     return [
       {

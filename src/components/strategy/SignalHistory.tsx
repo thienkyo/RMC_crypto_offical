@@ -14,22 +14,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { StrategySignalRow, ConditionSnapshotGroup } from '@/lib/strategy/signalMetrics';
 import { computeSignalMetrics }  from '@/lib/strategy/signalMetrics';
+import { formatUsdPrice as fmtPrice, formatSignedPct as fmtPct } from '@/lib/format';
 
 interface Props {
   strategyId: string;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function fmtPrice(n: number): string {
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  if (n >= 1)    return '$' + n.toFixed(2);
-  return '$' + n.toFixed(6);
-}
-
-function fmtPct(n: number): string {
-  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
-}
 
 function fmtDate(ms: number): string {
   const d = new Date(ms);

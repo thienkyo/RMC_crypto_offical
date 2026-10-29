@@ -4,7 +4,8 @@ import { useMemo } from 'react';
 import type { UTCTimestamp } from 'lightweight-charts';
 import type { Candle } from '@/types/market';
 import type { IndicatorSeries } from '@/lib/indicators';
-import type { ActiveIndicator } from '@/store/chart';
+import { useChartStore, type ActiveIndicator } from '@/store/chart';
+import { formatChartPrice as fmtPrice } from '@/lib/format';
 
 interface Props {
   candles:          Candle[];
@@ -46,13 +47,6 @@ function findSeriesValue(
   return undefined;
 }
 
-function fmtPrice(v: number): string {
-  return v.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: v < 1 ? 6 : 2,
-  });
-}
-
 function fmtVol(v: number): string {
   if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + 'M';
   if (v >= 1_000)     return (v / 1_000).toFixed(1)     + 'K';
@@ -83,6 +77,9 @@ function resolveIndicatorId(seriesId: string, indicators: ActiveIndicator[]): st
  * cursor moves over any chart pane.
  */
 export function ChartLegend({ candles, crosshairTime, allSeries, activeIndicators }: Props) {
+  const toggleIndicator = useChartStore((s) => s.toggleIndicator);
+  const removeIndicator = useChartStore((s) => s.removeIndicator);
+
   // Which candle to display — hovered bar or latest bar
   const candle = useMemo(() => {
     if (!candles.length) return undefined;
@@ -108,7 +105,7 @@ export function ChartLegend({ candles, crosshairTime, allSeries, activeIndicator
   const indicatorGroups = useMemo(() => {
     const map = new Map<string, IndicatorSeries[]>();
     for (const ai of activeIndicators) {
-      if (ai.visible) map.set(ai.id, []);
+      map.set(ai.id, []);
     }
     for (const s of allSeries) {
       const indId = resolveIndicatorId(s.id, activeIndicators);
@@ -142,32 +139,37 @@ export function ChartLegend({ candles, crosshairTime, allSeries, activeIndicator
 
       {/* ── Indicator rows — one row per active indicator ───────────────── */}
       {Array.from(indicatorGroups.entries()).map(([indId, group]) => {
-        // Only show series that have a value at this bar
+        const ai = activeIndicators.find((a) => a.id === indId);
+        const isVisible = ai ? ai.visible : true;
         const present = group.filter((s) => seriesValues.has(s.id));
-        if (!present.length) return null;
+
+        // Skip indicators that are not overlay indicators and have no present series
+        if (!present.length && isVisible) return null;
 
         return (
-          <div key={indId} className="flex items-center gap-x-1.5 text-[10px] font-mono leading-none">
+          <div
+            key={indId}
+            className={`group/ind flex items-center gap-x-1.5 text-[10px] font-mono leading-none py-0.5 px-1 -ml-1 rounded transition-colors pointer-events-auto hover:bg-surface-2/80 ${
+              !isVisible ? 'opacity-40' : ''
+            }`}
+          >
+            {/* Indicator values */}
             {present.map((s, i) => {
               const val = seriesValues.get(s.id)!;
 
               let formatted: string;
               if (s.formatValue) {
-                // Indicator-supplied custom formatter (e.g. K/M for CVD, Active/— for binary).
                 formatted = s.formatValue(val);
               } else if (s.panel === 'overlay') {
-                // Price-scale series (EMA, BB bands) — same decimal format as price.
                 formatted = fmtPrice(val);
               } else if (s.seriesType === 'histogram') {
                 formatted = (val >= 0 ? '+' : '') + val.toFixed(4);
               } else if (s.id === 'bbpct') {
-                // %B oscillator — show 4 decimals so 1.0000 / 0.0000 extremes are clear.
                 formatted = val.toFixed(4);
               } else {
                 formatted = val.toFixed(2);
               }
 
-              // Dim inactive binary signals ("—") so active ones stand out.
               const isDash = formatted === '—';
 
               return (
@@ -178,6 +180,50 @@ export function ChartLegend({ candles, crosshairTime, allSeries, activeIndicator
                 </span>
               );
             })}
+
+            {!isVisible && (
+              <span className="text-text-muted italic">
+                {group[0]?.name ?? indId.toUpperCase()} (hidden)
+              </span>
+            )}
+
+            {/* Quick action buttons on hover */}
+            <div className={`flex items-center gap-1 ml-1.5 transition-opacity ${isVisible ? 'opacity-0 group-hover/ind:opacity-100' : 'opacity-80'}`}>
+              {/* Visibility toggle (eye) */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleIndicator(indId);
+                }}
+                className="p-0.5 rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors cursor-pointer"
+                title={isVisible ? 'Hide indicator' : 'Show indicator'}
+              >
+                {isVisible ? (
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3 h-3 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                  </svg>
+                )}
+              </button>
+
+              {/* Remove indicator (x) */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeIndicator(indId);
+                }}
+                className="p-0.5 rounded text-text-muted hover:text-rose-400 hover:bg-surface-3 transition-colors cursor-pointer text-[10px] leading-none"
+                title="Remove indicator"
+              >
+                ✕
+              </button>
+            </div>
           </div>
         );
       })}

@@ -10,7 +10,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "updateCode": "./updateCode.sh",
-    "restart": "./updateCode.sh -f"
+    "restart": "./updateCode.sh -f",
+    "service:start": "pm2 start pnpm --name rmc-crypto -- run dev",
+    "service:stop": "pm2 stop rmc-crypto",
+    "service:restart": "pm2 restart rmc-crypto",
+    "service:status": "pm2 status",
+    "service:logs": "pm2 logs rmc-crypto"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

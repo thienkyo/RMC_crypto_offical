@@ -369,7 +369,6 @@ export function PortfolioOverview() {
   const [customFrom, setCustomFrom] = useState<string>(() =>
     format(new Date(Date.now() - 60 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
   );
-  const [customTo, setCustomTo] = useState<string>('');
 
   // ── Global Quality & Strategy Pruning state (persisted) ─────────────────────
   const [minRating, setMinRating] = useState<number>(0);
@@ -396,9 +395,6 @@ export function PortfolioOverview() {
         }
         if (typeof parsed.from === 'string' && parsed.from) {
           setCustomFrom(parsed.from);
-        }
-        if (typeof parsed.to === 'string') {
-          setCustomTo(parsed.to);
         }
       }
 
@@ -440,13 +436,21 @@ export function PortfolioOverview() {
     [],
   );
 
-  const persistDateRange = useCallback((preset: DateRangePreset, from: string, to: string) => {
+  const persistDateRange = useCallback((preset: DateRangePreset, from: string) => {
     try {
-      localStorage.setItem(DATE_RANGE_STORAGE_KEY, JSON.stringify({ preset, from, to }));
+      localStorage.setItem(DATE_RANGE_STORAGE_KEY, JSON.stringify({ preset, from }));
     } catch {
       // ignore storage quota errors
     }
   }, []);
+
+  const customDays = useMemo(() => {
+    if (!customFrom) return null;
+    const start = new Date(`${customFrom}T00:00:00`).getTime();
+    if (isNaN(start)) return null;
+    const diff = Math.max(1, Math.round((Date.now() - start) / (24 * 60 * 60 * 1000)));
+    return diff;
+  }, [customFrom]);
 
   const { sinceMs, untilMs } = useMemo(() => {
     if (datePreset === 'all') {
@@ -454,10 +458,9 @@ export function PortfolioOverview() {
     }
     if (datePreset === 'custom') {
       const start = customFrom ? new Date(`${customFrom}T00:00:00`).getTime() : undefined;
-      const end   = customTo   ? new Date(`${customTo}T23:59:59.999`).getTime() : undefined;
       return {
         sinceMs: start && !isNaN(start) ? start : undefined,
-        untilMs: end   && !isNaN(end)   ? end   : undefined,
+        untilMs: undefined, // Always up to now
       };
     }
     const days = PRESET_DAYS[datePreset];
@@ -465,7 +468,7 @@ export function PortfolioOverview() {
       sinceMs: Date.now() - days * 24 * 60 * 60 * 1000,
       untilMs: undefined,
     };
-  }, [datePreset, customFrom, customTo]);
+  }, [datePreset, customFrom]);
 
   // Signals within the active date window (before AI rejection filter, used for AI alpha attribution)
   const dateWindowSignals = useMemo(() => {
@@ -724,13 +727,16 @@ export function PortfolioOverview() {
               <div className="flex items-center rounded-lg border border-surface-border bg-surface p-0.5 text-xs">
                 {DATE_PRESET_OPTIONS.map((opt) => {
                   const active = datePreset === opt.id;
+                  const label = opt.id === 'custom' && active && customDays !== null
+                    ? `Custom (${customDays}d)`
+                    : opt.label;
                   return (
                     <button
                       key={opt.id}
                       type="button"
                       onClick={() => {
                         setDatePreset(opt.id);
-                        persistDateRange(opt.id, customFrom, customTo);
+                        persistDateRange(opt.id, customFrom);
                       }}
                       className={`px-2.5 py-1 rounded-md transition-colors ${
                         active
@@ -738,7 +744,7 @@ export function PortfolioOverview() {
                           : 'text-text-muted hover:text-text-secondary border border-transparent'
                       }`}
                     >
-                      {opt.label}
+                      {label}
                     </button>
                   );
                 })}
@@ -933,47 +939,27 @@ export function PortfolioOverview() {
               )}
             </div>
 
-            {/* Active Window or Custom Date Pickers */}
+            {/* Active Window or Custom Date Picker */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
               {datePreset === 'custom' ? (
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <label className="flex items-center gap-1.5">
                     <span>From</span>
                     <input
                       type="date"
+                      max={format(new Date(), 'yyyy-MM-dd')}
                       value={customFrom}
                       onChange={(e) => {
                         const val = e.target.value;
                         setCustomFrom(val);
-                        persistDateRange('custom', val, customTo);
+                        persistDateRange('custom', val);
                       }}
-                      className="rounded border border-surface-border bg-surface px-2 py-0.5 text-xs text-text-primary outline-none focus:border-blue-500/60"
+                      className="rounded border border-surface-border bg-surface px-2 py-0.5 text-xs text-text-primary outline-none focus:border-blue-500/60 font-mono"
                     />
                   </label>
-                  <label className="flex items-center gap-1.5">
-                    <span>To</span>
-                    <input
-                      type="date"
-                      value={customTo}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setCustomTo(val);
-                        persistDateRange('custom', customFrom, val);
-                      }}
-                      className="rounded border border-surface-border bg-surface px-2 py-0.5 text-xs text-text-primary outline-none focus:border-blue-500/60"
-                    />
-                  </label>
-                  {customTo && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCustomTo('');
-                        persistDateRange('custom', customFrom, '');
-                      }}
-                      className="text-text-muted hover:text-text-secondary px-1"
-                    >
-                      ✕ clear
-                    </button>
+                  <span>to <strong className="text-text-primary font-semibold">Now</strong></span>
+                  {customDays !== null && (
+                    <span className="text-accent font-mono text-[11px] font-semibold">({customDays}d)</span>
                   )}
                 </div>
               ) : (

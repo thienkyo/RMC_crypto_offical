@@ -16,7 +16,7 @@
 
 import { useState, useEffect } from 'react';
 import { useStrategyStore, selectActiveStrategy, createDefaultStrategy } from '@/store/strategy';
-import { fetchStrategiesFromDb, pushStrategyToDb } from '@/lib/strategy/api';
+import { fetchStrategiesFromDb, syncStrategyToDb } from '@/lib/strategy/api';
 import { StrategyList }     from './StrategyList';
 import { StrategyForm }     from './StrategyForm';
 import { BacktestPanel }    from './BacktestPanel';
@@ -99,9 +99,7 @@ export function StrategyBuilder() {
     upsertStrategy(s);
     setActiveStrategy(s.id);
     // New blank strategy — push to DB so it survives a refresh
-    pushStrategyToDb(s).catch((err) =>
-      console.warn('[StrategyBuilder] DB push for new strategy failed:', err),
-    );
+    syncStrategyToDb(s, 'StrategyBuilder:new');
   }
 
   return (

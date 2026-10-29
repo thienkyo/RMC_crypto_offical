@@ -59,7 +59,27 @@ export function SettingsForm({ initial }: Props) {
 
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [errorMsg,  setErrorMsg]  = useState('');
+  const [testMonitorState, setTestMonitorState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [testMonitorMsg, setTestMonitorMsg]     = useState('');
   const [, startTransition]       = useTransition();
+
+  async function handleTestMonitorThread() {
+    setTestMonitorState('sending');
+    setTestMonitorMsg('');
+    try {
+      const res = await fetch('/api/signal-monitors', { method: 'POST' });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setTestMonitorState('sent');
+      setTestMonitorMsg('Sent test signal + threaded monitor reply to your Test Chat ID!');
+      setTimeout(() => setTestMonitorState('idle'), 5_000);
+    } catch (err) {
+      setTestMonitorState('error');
+      setTestMonitorMsg(err instanceof Error ? err.message : 'Failed to send test thread');
+    }
+  }
 
   const isDirty =
     personalIds !== (initial.telegram_personal_chat_id ?? '') ||
@@ -499,6 +519,34 @@ export function SettingsForm({ initial }: Props) {
                 Automatically renders and sends a 1000×560 dark-themed chart with candlesticks, volume, Entry/SL/TP lines, shaded Risk:Reward zones, and the signal trigger marker alongside each Telegram signal. (Default: On)
               </span>
             </label>
+          </div>
+
+          {/* 1-Click Test Signal + Threaded Monitor Reply */}
+          <div className="pt-4 border-t border-surface-border/60 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <span className="text-xs font-semibold text-text-primary block">
+                  Test Post-Signal Monitor Thread
+                </span>
+                <span className="text-[11px] text-text-secondary leading-relaxed block mt-0.5">
+                  Sends a sample <code className="text-amber-400">TEST_MONITOR_DEMO</code> signal to your Test Chat IDs and immediately replies to it with a sample Breakeven (+1R) monitor report.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleTestMonitorThread}
+                disabled={testMonitorState === 'sending'}
+                className="px-3 py-1.5 rounded border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-mono font-semibold transition-colors disabled:opacity-50 cursor-pointer flex-shrink-0"
+              >
+                {testMonitorState === 'sending' ? 'Sending Thread…' : '▶ Send Test Signal + Monitor Reply'}
+              </button>
+            </div>
+            {testMonitorState === 'sent' && (
+              <span className="text-xs text-emerald-400 font-mono">✓ {testMonitorMsg}</span>
+            )}
+            {testMonitorState === 'error' && (
+              <span className="text-xs text-red-400 font-mono">✗ {testMonitorMsg}</span>
+            )}
           </div>
 
         </div>

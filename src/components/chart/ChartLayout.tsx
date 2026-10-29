@@ -20,6 +20,7 @@ import { strategyScoreRange }  from '@/lib/strategy/rating';
 import type { StrategySignalRow } from '@/lib/strategy/signalMetrics';
 import { PriceChart, type PriceChartHandle, type TradeScreenshotOverlay } from './PriceChart';
 import { SubChart,   type SubChartHandle   } from './SubChart';
+import { SymbolSearchModal }                 from './SymbolSearchModal';
 import { VPConfigCard }                      from './VPConfigCard';
 import { CandleTimer, CandleTimerInline }       from './CandleTimer';
 import { ChartLegend }                       from './ChartLegend';
@@ -27,121 +28,22 @@ import { TimeframeSelector } from '../ui/TimeframeSelector';
 import { IndicatorSelector } from '../ui/IndicatorSelector';
 import { ChartLayoutSelector } from './ChartLayoutSelector';
 import { RecentSignalsStrip } from './RecentSignalsStrip';
+import {
+  SUB_HEIGHT_MIN,
+  SUB_HEIGHT_MAX,
+  SUB_HEIGHT_DEFAULT,
+  SUB_HEIGHT_FALLBACK,
+  type ExtremePoint,
+  samePoint,
+  ExtremeMarker,
+  PaneResizer,
+  LivePriceBadge,
+} from './ChartPrimitives';
 import { StaleDataBanner }   from '../ui/StaleDataBanner';
 import { clsx }              from 'clsx';
 import { getUSEquityMarketStatus } from '@/lib/exchange/marketHours';
+import { syncStrategyToDb } from '@/lib/strategy/api';
 import type { Candle } from '@/types/market';
-
-// ─── Pane resize handle ───────────────────────────────────────────────────────
-
-const SUB_HEIGHT_MIN = 60;
-const SUB_HEIGHT_MAX = 500;
-const SUB_HEIGHT_DEFAULT: Record<string, number> = {
-  macd: 140,
-  // all others fall through to 120
-};
-const SUB_HEIGHT_FALLBACK = 120;
-
-/** Shared price formatting for the header readout and the range extreme markers. */
-function fmtPrice(v: number): string {
-  return v.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: v < 1 ? 6 : 2,
-  });
-}
-
-/** One visible-range extreme, already resolved to pane pixel coordinates. */
-interface ExtremePoint {
-  x:     number;
-  y:     number;
-  price: number;
-  /** Chip sits above the bar (caret points down) rather than below it. */
-  above: boolean;
-}
-
-function samePoint(a: ExtremePoint | null, b: ExtremePoint | null): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return a.x === b.x && a.y === b.y && a.price === b.price && a.above === b.above;
-}
-
-/**
- * Price chip + caret marking one extreme of the visible range, pinned to the
- * bar that printed it.  `above` is decided by the caller (which knows the pane
- * height): the high chip normally sits above its bar and the low chip below,
- * but either flips to the other side when the pane edge would clip it.
- */
-function ExtremeMarker({ point, colorClass }: { point: ExtremePoint; colorClass: string }) {
-  const { x, y, price, above } = point;
-  return (
-    <div
-      className={`absolute z-20 pointer-events-none flex flex-col items-center gap-px
-                  font-mono text-[10px] leading-none whitespace-nowrap ${colorClass}`}
-      style={{
-        left:      x,
-        top:       y + (above ? -6 : 6),
-        transform: `translate(-50%, ${above ? '-100%' : '0%'})`,
-      }}
-    >
-      {!above && <span className="text-[8px] opacity-80">▲</span>}
-      <span className="px-1 py-px rounded-sm tabular-nums
-                       bg-surface-2/90 border border-surface-border">
-        {fmtPrice(price)}
-      </span>
-      {above && <span className="text-[8px] opacity-80">▼</span>}
-    </div>
-  );
-}
-
-/**
- * Thin drag strip rendered at the top of each sub-pane.
- * Dragging up → pane grows; dragging down → pane shrinks.
- */
-function PaneResizer({ onDelta }: { onDelta: (delta: number) => void }) {
-  const isDragging = useRef(false);
-  const lastY      = useRef(0);
-
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDragging.current = true;
-    lastY.current = e.clientY;
-
-    const onMove = (ev: MouseEvent) => {
-      if (!isDragging.current) return;
-      const delta = lastY.current - ev.clientY; // up = positive = grow
-      lastY.current = ev.clientY;
-      onDelta(delta);
-    };
-
-    const onUp = () => {
-      isDragging.current = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
-  }, [onDelta]);
-
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      className="w-full h-1.5 cursor-ns-resize flex-shrink-0 group relative z-10
-                 border-t border-surface-border
-                 hover:border-accent/60 active:border-accent transition-colors"
-      title="Drag to resize"
-    >
-      {/* Visual grab indicator — only shows on hover */}
-      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 mx-auto w-10
-                      rounded-full bg-surface-border group-hover:bg-accent/50
-                      group-active:bg-accent transition-colors" />
-    </div>
-  );
-}
 
 // ─── Main layout ──────────────────────────────────────────────────────────────
 
@@ -188,6 +90,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const savedMarkerSettings = useChartStore((s) => s.markerSettings);
   const setBarSpacing      = useChartStore((s) => s.setBarSpacing);
   const setMarkerSettings  = useChartStore((s) => s.setMarkerSettings);
+  const removeIndicator    = useChartStore((s) => s.removeIndicator);
   const vpConfig           = useChartStore((s) => s.vpConfig);
   const setVpConfig        = useChartStore((s) => s.setVpConfig);
   const { isLoading, error } = useCandles();
@@ -195,6 +98,22 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const setActiveStrategy    = useStrategyStore((s) => s.setActiveStrategy);
   const allStrategies        = useStrategyStore((s) => s.strategies);
   const router = useRouter();
+
+  const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
+
+  // Global keydown shortcut: press '/' anywhere on the chart to search symbols
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '/') {
+        e.preventDefault();
+        setSymbolSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const { leftRailVisible, rightRailVisible, toggleLeft, toggleRight } = useLayoutStore();
 
@@ -239,12 +158,13 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
   // All non-template strategies for this chart that haven't been dismissed.
   // Templates are blueprints only — they never appear as active chart chips.
+  // Common strategies matching this symbol are included automatically.
   const chartStrategies = useMemo(
     () =>
       allStrategies.filter(
         (s) =>
           !s.isTemplate &&
-          s.symbol === symbol &&
+          (s.symbol === symbol || (s.isCommon && s.symbols?.includes(symbol))) &&
           s.timeframe === timeframe &&
           !dismissedChipIds.has(s.id),
       ),
@@ -315,11 +235,65 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
 
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
 
+  // ── Surgical indicator throttling refs ──────────────────────────────────
+  const activeIndicatorsRef  = useRef(activeIndicators);
+  useEffect(() => { activeIndicatorsRef.current = activeIndicators; }, [activeIndicators]);
+
+  const lastIndicatorTimeRef = useRef<number>(0);
+  const indicatorRafRef      = useRef<number | null>(null);
+  const indicatorTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCandleRef     = useRef<Candle | null>(null);
+
+  // Helper to run surgical indicator updates across active overlays and sub-charts
+  const runIndicatorUpdate = useCallback((targetCandle: Candle) => {
+    const state = useChartStore.getState();
+    const currentCandles = state.candles;
+    if (currentCandles.length === 0) return;
+    const last = currentCandles[currentCandles.length - 1]!;
+    const merged = (targetCandle.openTime === last.openTime)
+      ? [...currentCandles.slice(0, -1), targetCandle]
+      : [...currentCandles, targetCandle];
+
+    for (const ai of activeIndicatorsRef.current) {
+      if (!ai.visible) continue;
+      const indicator = INDICATORS[ai.id];
+      if (!indicator) continue;
+
+      const subChart = subRefs.current.get(ai.id);
+
+      try {
+        const latestResults = indicator.compute(merged, ai.params);
+        for (const res of latestResults) {
+          const lastPoint = res.data[res.data.length - 1];
+          if (!lastPoint) continue;
+          if (res.panel === 'overlay') {
+            priceRef.current?.updateOverlayPoint(res.id, lastPoint);
+          } else if (subChart) {
+            subChart.updateSeriesPoint(res.id, lastPoint);
+          }
+        }
+      } catch (err) {
+        console.error(`[surgical-indicator:${ai.id}] failed:`, err);
+      }
+    }
+  }, []);
+
   // ── Live tick subscription ──────────────────────────────────────────────
   useEffect(() => {
     lastTickRef.current = Date.now();
     setLivePrice(null);
     setLiveCandle(null);
+
+    // Clear any pending indicator batches from previous symbol/timeframe
+    if (indicatorTimerRef.current) {
+      clearTimeout(indicatorTimerRef.current);
+      indicatorTimerRef.current = null;
+    }
+    if (indicatorRafRef.current) {
+      cancelAnimationFrame(indicatorRafRef.current);
+      indicatorRafRef.current = null;
+    }
+    pendingCandleRef.current = null;
 
     // Equities bypass Binance WebSocket (updates come via 30s background poll)
     if (source === 'equities') {
@@ -346,41 +320,58 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           return;
         }
 
-        // 1. Surgical indicator updates (Sub-charts FIRST to prevent TimeScale clamping)
         const currentCandles = state.candles;
         const last = currentCandles[currentCandles.length - 1]!;
-        const merged = (candle.openTime === last.openTime)
-          ? [...currentCandles.slice(0, -1), candle]
-          : [...currentCandles, candle];
+        const isNewBar = candle.openTime > last.openTime;
 
-        for (const ai of activeIndicators) {
-          if (!ai.visible) continue;
-          const indicator = INDICATORS[ai.id];
-          if (!indicator) continue;
+        if (isNewBar) {
+          // If a new candle opens, cancel any pending throttled frame and execute immediately.
+          // Sub-charts FIRST to prevent TimeScale clamping on the new timestamp.
+          if (indicatorTimerRef.current) {
+            clearTimeout(indicatorTimerRef.current);
+            indicatorTimerRef.current = null;
+          }
+          if (indicatorRafRef.current) {
+            cancelAnimationFrame(indicatorRafRef.current);
+            indicatorRafRef.current = null;
+          }
+          pendingCandleRef.current = null;
+          lastIndicatorTimeRef.current = Date.now();
+          runIndicatorUpdate(candle);
 
-          const subChart = subRefs.current.get(ai.id);
-          if (!subChart) continue;
+          // 2. Direct price update (Main chart SECOND)
+          priceRef.current?.updateCandle(candle);
+          setLivePrice(candle.close);
+          setLiveCandle(candle);
 
-          try {
-            const latestResults = indicator.compute(merged, ai.params);
-            for (const res of latestResults) {
-              const lastPoint = res.data[res.data.length - 1];
-              if (lastPoint) {
-                subChart.updateSeriesPoint(res.id, lastPoint);
-              }
-            }
-          } catch (err) {
-            console.error(`[surgical-indicator:${ai.id}] failed:`, err);
+          // 3. Update store (eventual consistency)
+          updateLastCandle(candle);
+        } else {
+          // Intra-bar tick: update price chart immediately for 0ms visual latency
+          priceRef.current?.updateCandle(candle);
+          setLivePrice(candle.close);
+          setLiveCandle(candle);
+          updateLastCandle(candle);
+
+          // Throttle heavy 1,000-candle indicator recalculation loop (max 10x/sec via 100ms cadence)
+          pendingCandleRef.current = candle;
+          const now = Date.now();
+          const elapsed = now - lastIndicatorTimeRef.current;
+          const waitMs = Math.max(0, 100 - elapsed);
+
+          if (!indicatorTimerRef.current && !indicatorRafRef.current) {
+            indicatorTimerRef.current = setTimeout(() => {
+              indicatorTimerRef.current = null;
+              indicatorRafRef.current = requestAnimationFrame(() => {
+                indicatorRafRef.current = null;
+                lastIndicatorTimeRef.current = Date.now();
+                if (pendingCandleRef.current) {
+                  runIndicatorUpdate(pendingCandleRef.current);
+                }
+              });
+            }, waitMs);
           }
         }
-
-        // 2. Direct price update (Main chart SECOND)
-        priceRef.current?.updateCandle(candle);
-        setLivePrice(candle.close);
-        setLiveCandle(candle);
-
-        // 3. Update store (eventual consistency)
-        updateLastCandle(candle);
       },
       () => setStale(true),
     );
@@ -397,25 +388,27 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     return () => {
       unsubscribe();
       clearInterval(staleTimer);
+      if (indicatorTimerRef.current) {
+        clearTimeout(indicatorTimerRef.current);
+        indicatorTimerRef.current = null;
+      }
+      if (indicatorRafRef.current) {
+        cancelAnimationFrame(indicatorRafRef.current);
+        indicatorRafRef.current = null;
+      }
+      pendingCandleRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, source]);
 
   // ── Compute indicator series ───────────────────────────────────────────────
+  // Computed on bar-close / context changes only (`candles`), while intra-bar
+  // live ticks update both SubCharts and PriceChart overlays surgically via
+  // series.update() in the WebSocket handler above. This avoids calling
+  // existing.setData() on every WebSocket tick (which in Lightweight Charts
+  // resets the viewport / clobbers scrollToRealTime).
   const allSeries: IndicatorSeries[] = useMemo(() => {
     if (candles.length === 0) return [];
-
-    // Merge liveCandle into candles for computation to ensure indicators
-    // reach the absolute end of the chart in real-time.
-    let merged = candles;
-    if (liveCandle) {
-      const last = candles[candles.length - 1];
-      if (last && last.openTime === liveCandle.openTime) {
-        merged = [...candles.slice(0, -1), liveCandle];
-      } else if (last && liveCandle.openTime > last.openTime) {
-        merged = [...candles, liveCandle];
-      }
-    }
 
     const result: IndicatorSeries[] = [];
     for (const ai of activeIndicators) {
@@ -423,27 +416,30 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       const indicator = INDICATORS[ai.id];
       if (!indicator) continue;
       try {
-        const computed = indicator.compute(merged, ai.params);
-        
+        const computed = indicator.compute(candles, ai.params);
+
         // Pad with WhitespaceData (NaN) so logical indices match perfectly
         for (const s of computed) {
-          if (s.data.length > 0 && s.data.length < merged.length) {
-            const missingCount = merged.length - s.data.length;
+          if (s.data.length > 0 && s.data.length < candles.length) {
+            const missingCount = candles.length - s.data.length;
             const pad: IndicatorPoint[] = [];
             for (let i = 0; i < missingCount; i++) {
-              pad.push({ time: merged[i]!.openTime, value: NaN });
+              pad.push({ time: candles[i]!.openTime, value: NaN });
             }
             s.data = [...pad, ...s.data];
           }
         }
-        
+
         result.push(...computed);
       } catch (err) {
         console.error(`[indicator:${ai.id}] compute failed:`, err);
       }
     }
     return result;
-  }, [candles, liveCandle, activeIndicators]);
+  // candles.length (not candles ref) — same-bar ticks update overlays & sub-panes
+  // surgically via updateOverlayPoint / updateSeriesPoint in the WS handler above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles.length, symbol, timeframe, activeIndicators]);
 
   const overlaySeries = useMemo(
     () => allSeries.filter((s) => s.panel === 'overlay'),
@@ -514,18 +510,22 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     if (isSyncing.current) return;
     isSyncing.current = true;
 
-    const mainChart = priceRef.current?.getChart();
-    if (mainChart && mainChart !== sourceChart) {
-      mainChart.timeScale().setVisibleLogicalRange(range);
-    }
-    for (const [, handle] of subRefs.current) {
-      const chart = handle.getChart();
-      if (chart && chart !== sourceChart) {
-        chart.timeScale().setVisibleLogicalRange(range);
+    try {
+      const mainChart = priceRef.current?.getChart();
+      if (mainChart && mainChart !== sourceChart) {
+        mainChart.timeScale().setVisibleLogicalRange(range);
       }
+      for (const [, handle] of subRefs.current) {
+        const chart = handle.getChart();
+        if (chart && chart !== sourceChart) {
+          chart.timeScale().setVisibleLogicalRange(range);
+        }
+      }
+    } finally {
+      queueMicrotask(() => {
+        isSyncing.current = false;
+      });
     }
-
-    isSyncing.current = false;
   }, []);
 
   // Price chart → all sub-panes.
@@ -546,9 +546,17 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     const unsubs: (() => void)[] = [];
 
     const raf = requestAnimationFrame(() => {
+      const mainChart = priceRef.current?.getChart();
+      const initialRange = mainChart?.timeScale().getVisibleLogicalRange();
+
       for (const [, handle] of subRefs.current) {
         const chart = handle.getChart();
         if (!chart) continue;
+        if (initialRange) {
+          isSyncing.current = true;
+          chart.timeScale().setVisibleLogicalRange(initialRange);
+          queueMicrotask(() => { isSyncing.current = false; });
+        }
         const handler = (range: LogicalRange | null) => {
           if (range) syncFromChart(chart, range);
         };
@@ -563,6 +571,19 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subPaneGroups, syncFromChart]);
+
+  const handleScrollToNow = useCallback(() => {
+    if (candles.length === 0) return;
+    priceRef.current?.scrollToNow();
+    const mainChart = priceRef.current?.getChart();
+    if (mainChart) {
+      const range = mainChart.timeScale().getVisibleLogicalRange();
+      if (range) {
+        syncFromChart(mainChart, range);
+      }
+    }
+    setIsScrolledBack(false);
+  }, [candles.length, syncFromChart]);
 
   // ── Register screenshot capture with parent (Phase 3) ────────────────────
   // Runs once after mount.  priceRef.current is set by the time the
@@ -878,6 +899,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // can set a new extreme either way.
   const [highMarker, setHighMarker] = useState<ExtremePoint | null>(null);
   const [lowMarker,  setLowMarker]  = useState<ExtremePoint | null>(null);
+  const [isScrolledBack, setIsScrolledBack] = useState(false);
 
   // Ref mirror of liveCandle so recomputeExtremes can stay dependency-free —
   // same guard as candlesRef above: reading the state directly would recreate
@@ -888,10 +910,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const recomputeExtremes = useCallback(() => {
     const chart = priceRef.current?.getChart();
     const data  = candlesRef.current;
-    if (!chart || data.length === 0) { setHighMarker(null); setLowMarker(null); return; }
+    if (!chart || data.length === 0) { setHighMarker(null); setLowMarker(null); setIsScrolledBack(false); return; }
 
     const range = chart.timeScale().getVisibleLogicalRange();
-    if (!range) { setHighMarker(null); setLowMarker(null); return; }
+    if (!range) { setHighMarker(null); setLowMarker(null); setIsScrolledBack(false); return; }
 
     // PriceChart.updateCandle() appends the forming bar to the LWC series before
     // it reaches the store, so logical indices can run one bar past `data`.
@@ -899,6 +921,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     const lastTime  = data[data.length - 1]!.openTime;
     const extraBar  = live && live.openTime > lastTime ? live : null;
     const lastIndex = data.length - 1 + (extraBar ? 1 : 0);
+
+    // Detect if user has scrolled back in time away from the real-time live bar
+    setIsScrolledBack(range.to < lastIndex - 4);
 
     // Logical indices are fractional at the pane edges — round inward so we only
     // scan bars that are actually fully on screen.
@@ -991,21 +1016,23 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
     <div className="flex flex-col w-full h-full overflow-hidden bg-surface">
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-4 px-4 h-12 border-b border-surface-border flex-shrink-0">
-        <span className="font-mono font-bold text-text-primary text-sm tracking-wide">
-          {symbol}
-        </span>
+      <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 h-12 border-b border-surface-border flex-shrink-0 relative overflow-visible">
+        <button
+          type="button"
+          onClick={() => setSymbolSearchOpen(true)}
+          className="flex items-center gap-1.5 px-2 py-1 -ml-1 rounded hover:bg-surface-2 group transition-colors cursor-pointer border border-transparent hover:border-surface-border"
+          title="Search or switch symbol (or press /)"
+        >
+          <span className="font-mono font-bold text-text-primary text-sm tracking-wide group-hover:text-accent transition-colors">
+            {symbol}
+          </span>
+          <span className="text-[10px] text-text-muted group-hover:text-accent transition-colors">▾</span>
+          <kbd className="hidden sm:inline-block text-[9px] font-mono px-1 py-0.5 rounded bg-surface-3 text-text-muted border border-surface-border">
+            /
+          </kbd>
+        </button>
 
-        {displayPrice !== undefined && (
-          <>
-            <span className="font-mono text-text-price text-sm">
-              {fmtPrice(displayPrice)}
-            </span>
-            <span className={`font-mono text-xs ${priceChange >= 0 ? 'text-up' : 'text-down'}`}>
-              {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
-            </span>
-          </>
-        )}
+        <LivePriceBadge displayPrice={displayPrice} priceChange={priceChange} />
 
         {source === 'equities' ? (
           <div className="flex items-center gap-1.5">
@@ -1037,7 +1064,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           <span className="text-xs text-down ml-2">{error.message}</span>
         )}
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
           {/* Live Signals strip toggle */}
           <button
             type="button"
@@ -1296,20 +1323,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           <TimeframeSelector />
           {/* Scroll back to the most recent candle — all panes together */}
           <button
-            onClick={() => {
-              if (candles.length === 0) return;
-              // scrollToRealTime, not setVisibleLogicalRange: forcing a fixed
-              // logical span made LWC recompute barSpacing to fit it, and the
-              // debounced captureBarSpacing then persisted that over whatever
-              // zoom the user had chosen. Scrolling keeps their bar spacing and
-              // lands on the chart's own rightOffset gap. It fires the range
-              // subscription synchronously, so the pane sync still propagates.
-              priceRef.current?.scrollToNow();
-            }}
-            title="Go to current time"
-            className="px-2 py-1 rounded bg-surface-2 border border-surface-border
-                       text-[11px] font-mono text-text-secondary
-                       hover:text-text-primary hover:border-accent/50 transition-colors"
+            onClick={handleScrollToNow}
+            title="Go to current real-time candle"
+            className="flex-shrink-0 px-2.5 py-1 rounded bg-blue-600/20 border border-blue-500/40
+                       text-[11px] font-mono text-blue-300 font-semibold
+                       hover:bg-blue-600/30 hover:text-white transition-colors cursor-pointer"
           >
             Now
           </button>
@@ -1371,6 +1389,11 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                   <span className="text-xs font-mono text-text-secondary truncate max-w-[90px]">
                     {strategy.name}
                   </span>
+                  {strategy.isCommon && (
+                    <span className="text-[9px] font-mono px-1 py-px rounded bg-purple-500/20 text-purple-300 font-semibold" title="Common strategy shared across multiple tickers">
+                      🔗
+                    </span>
+                  )}
                   {isActive && lastSignal && (
                     <span
                       className="text-[10px] font-mono font-medium"
@@ -1405,7 +1428,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                       <div className="text-text-muted truncate mt-0.5">{strategy.longName}</div>
                     )}
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="text-text-muted">{strategy.symbol} · {strategy.timeframe}</span>
+                      <span className="text-text-muted">
+                        {strategy.isCommon ? `🔗 Common · ${symbol}` : strategy.symbol} · {strategy.timeframe}
+                      </span>
                       <span
                         className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded"
                         style={{ backgroundColor: color + '22', color }}
@@ -1423,11 +1448,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                         toggleStrategyActive(strategy.id);
                         setPinnedChipIds((prev) => new Set([...prev, strategy.id]));
                         const updated = { ...strategy, isActive: !(strategy.isActive ?? false) };
-                        fetch('/api/strategies', {
-                          method:  'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body:    JSON.stringify(updated),
-                        }).catch((err) => console.warn('[strategy-toggle] DB sync failed:', err));
+                        syncStrategyToDb(updated, 'chart-strategy-toggle');
                       }}
                       className={`flex items-center gap-1 px-2 py-1 rounded border text-[11px]
                                   font-mono transition-colors
@@ -1620,6 +1641,22 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
               </span>
             </div>
           ))}
+
+          {/* Floating 'Go to present' button — visible whenever scrolled back into history */}
+          {isScrolledBack && (
+            <button
+              type="button"
+              onClick={handleScrollToNow}
+              className="absolute bottom-1.5 right-[156px] z-20 flex items-center gap-1 px-2 py-0.5 rounded
+                         bg-surface-2/90 hover:bg-surface-3 text-text-muted hover:text-text-primary
+                         border border-surface-border text-[10px] font-mono transition-colors shadow-sm
+                         cursor-pointer select-none backdrop-blur-xs"
+              title="Jump to current real-time candle"
+            >
+              <span className="text-[11px] leading-none">⇥</span>
+              <span>Present</span>
+            </button>
+          )}
         </div>
 
         {/* Sub-pane charts (resizable) */}
@@ -1641,6 +1678,7 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
                   crosshairTime={crosshairTime}
                   showTimeAxis={index === arr.length - 1}
                   onCrosshair={handleCrosshair}
+                  onClose={() => removeIndicator(indicatorId)}
                 />
               </div>
             );
@@ -1648,6 +1686,12 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
         </div>
 
       </div>
+
+      {/* Symbol Search / Quick Switcher Modal */}
+      <SymbolSearchModal
+        open={symbolSearchOpen}
+        onClose={() => setSymbolSearchOpen(false)}
+      />
     </div>
   );
 }

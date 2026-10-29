@@ -1,5 +1,6 @@
 import type { Candle } from '@/types/market';
 import type { Indicator, IndicatorResult } from './types';
+import { computeBollingerStats } from './math';
 
 interface BollingerParams { period: number; stdDevMult: number; [key: string]: number }
 
@@ -16,27 +17,15 @@ export const bollinger: Indicator<BollingerParams> = {
   compute(candles: Candle[], { period, stdDevMult }: BollingerParams): IndicatorResult {
     if (candles.length < period) return [];
 
+    const stats = computeBollingerStats(candles, period, stdDevMult);
     const middle: { time: number; value: number }[] = [];
     const upper:  { time: number; value: number }[] = [];
     const lower:  { time: number; value: number }[] = [];
 
-    let rollingSum = candles.slice(0, period).reduce((s, c) => s + c.close, 0);
-
-    for (let i = period - 1; i < candles.length; i++) {
-      if (i >= period) rollingSum += candles[i]!.close - candles[i - period]!.close;
-
-      const mean = rollingSum / period;
-      let sumSqDiff = 0;
-      for (let j = i - period + 1; j <= i; j++) {
-        const d = candles[j]!.close - mean;
-        sumSqDiff += d * d;
-      }
-      const stdDev = Math.sqrt(sumSqDiff / period);
-      const t      = candles[i]!.openTime;
-
-      middle.push({ time: t, value: mean });
-      upper.push({  time: t, value: mean + stdDevMult * stdDev });
-      lower.push({  time: t, value: mean - stdDevMult * stdDev });
+    for (const s of stats) {
+      middle.push({ time: s.time, value: s.mean });
+      upper.push({  time: s.time, value: s.upper });
+      lower.push({  time: s.time, value: s.lower });
     }
 
     return [

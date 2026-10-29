@@ -1,18 +1,16 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useChartStore } from '@/store/chart';
 import { ratingToGrade } from '@/lib/strategy/rating';
 import type { StrategySignalRow } from '@/lib/strategy/signalMetrics';
+import type { SignalMonitorRow } from '@/lib/alerts/signalMonitor';
 import type { Timeframe } from '@/types/market';
+import { formatUsdPrice } from '@/lib/format';
 import { clsx } from 'clsx';
 
-function fmtPrice(n: number): string {
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  if (n >= 1) return '$' + n.toFixed(2);
-  return '$' + n.toFixed(4);
-}
+const fmtPrice = (n: number) => formatUsdPrice(n, 4);
 
 function fmtTimeAgo(ms: number): string {
   const diffSec = Math.floor((Date.now() - ms) / 1000);
@@ -26,6 +24,7 @@ function fmtTimeAgo(ms: number): string {
 }
 
 export function RecentSignalsStrip() {
+  const queryClient = useQueryClient();
   const activeSymbol = useChartStore((s) => s.symbol);
   const setSymbol = useChartStore((s) => s.setSymbol);
   const setTimeframe = useChartStore((s) => s.setTimeframe);
@@ -45,6 +44,37 @@ export function RecentSignalsStrip() {
     refetchInterval: 15_000,
     staleTime: 10_000,
   });
+
+  // Poll for active post-signal monitors every 15s
+  const { data: activeMonitors = [] } = useQuery<SignalMonitorRow[]>({
+    queryKey: ['active-signal-monitors'],
+    queryFn: async () => {
+      const res = await fetch('/api/signal-monitors');
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+
+  const monitorByKey = useMemo(() => {
+    const map = new Map<string, SignalMonitorRow>();
+    for (const m of activeMonitors) {
+      if (m.signal_id) map.set(`id:${m.signal_id}`, m);
+      map.set(`sym:${m.symbol}:${m.direction}`, m);
+    }
+    return map;
+  }, [activeMonitors]);
+
+  async function handleStopMonitor(e: React.MouseEvent, monitorId: number) {
+    e.stopPropagation();
+    try {
+      await fetch(`/api/signal-monitors?id=${monitorId}`, { method: 'DELETE' });
+      queryClient.invalidateQueries({ queryKey: ['active-signal-monitors'] });
+    } catch {
+      // ignore
+    }
+  }
 
   // Limit to most recent 20 signals
   const recentSignals = useMemo(() => {
@@ -66,6 +96,15 @@ export function RecentSignalsStrip() {
             {recentSignals.length}
           </span>
         )}
+        {activeMonitors.length > 0 && (
+          <span
+            className="text-[9px] px-1.5 py-0.2 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-semibold flex items-center gap-1"
+            title={`${activeMonitors.length} active Post-Signal Monitor(s) tracking TP/SL/Breakeven & bar-close heartbeats`}
+          >
+            <span>👁</span>
+            <span>{activeMonitors.length}</span>
+          </span>
+        )}
       </div>
 
       {/* ── Horizontal scrollable chips feed ── */}
@@ -84,6 +123,11 @@ export function RecentSignalsStrip() {
             const isCurrent = signal.symbol === activeSymbol;
             const stars = signal.rating ? Math.min(7, Math.max(1, signal.rating)) : 4;
             const { grade, badgeClass } = ratingToGrade(signal.rating);
+            const activeMonitor =
+              signal.pnl_pct === null
+                ? (monitorByKey.get(`id:${signal.id}`) ??
+                   monitorByKey.get(`sym:${signal.symbol}:${signal.direction}`))
+                : undefined;
 
             return (
               <div
@@ -170,8 +214,8 @@ export function RecentSignalsStrip() {
                   {fmtPrice(signal.entry_price)}
                 </span>
 
-                {/* P&L if resolved */}
-                {signal.pnl_pct !== null && (
+                {/* P&L if resolved, or Active Monitor live status badge */}
+                {signal.pnl_pct !== null ? (
                   <span
                     className={clsx(
                       'text-[10px] font-bold',
@@ -180,7 +224,35 @@ export function RecentSignalsStrip() {
                   >
                     {signal.pnl_pct >= 0 ? '+' : ''}{signal.pnl_pct.toFixed(1)}%
                   </span>
-                )}
+                ) : activeMonitor ? (
+                  <span
+                    className={clsx(
+                      'text-[9px] font-mono font-semibold px-1 py-0.2 rounded border flex items-center gap-1',
+                      activeMonitor.is_breakeven_armed
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+                    )}
+                    title={
+                      `Active Post-Signal Monitor #${activeMonitor.id}\n` +
+                      `Status: ${activeMonitor.is_breakeven_armed ? 'Breakeven Armed (+1R)' : 'Watching TP/SL'}\n` +
+                      `Confluence: ${activeMonitor.confluence_count}x\n` +
+                      `MFE: +${parseFloat(activeMonitor.max_profit_pct || '0').toFixed(2)}% | MAE: ${parseFloat(activeMonitor.max_drawdown_pct || '0').toFixed(2)}%`
+                    }
+                  >
+                    <span>{activeMonitor.is_breakeven_armed ? '🛡 BE' : '👁 LIVE'}</span>
+                    {activeMonitor.confluence_count > 1 && (
+                      <span className="text-[8px] opacity-90">×{activeMonitor.confluence_count}</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => handleStopMonitor(e, activeMonitor.id)}
+                      className="hover:text-red-400 ml-0.5 leading-none"
+                      title="Stop monitoring this signal"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ) : null}
 
                 {/* Time ago */}
                 <span className="text-[9px] text-text-muted/60 group-hover:text-text-muted flex-shrink-0">

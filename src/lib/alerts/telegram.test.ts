@@ -457,5 +457,87 @@ describe('formatMarketFlushMessage (Option E)', () => {
     expect(flushMsg).toContain('sig#501');
     expect(flushMsg).toContain('strategy_999');
   });
+
+  it('formats rich AI Gatekeeper section with Chain-of-Thought steps in strategy signal messages', async () => {
+    const { formatStrategySignalMessage } = await import('./telegram');
+
+    const msg = formatStrategySignalMessage({
+      strategyName:    'MOMENTUM_ALPHA',
+      rating:          5,
+      symbol:          'BTCUSDT',
+      timeframe:       '1h',
+      direction:       'long',
+      entryPrice:      68500,
+      stopLossPct:     2.5,
+      takeProfitPct:   6.0,
+      conditionGroups: [],
+      timestamp:       1770000000000,
+      aiEvaluation: {
+        status: 'PASS',
+        confidence: 'high',
+        summary: 'High-conviction breakout above resistance.',
+        metrics: { technicalScore: 88, sentimentScore: 65 },
+        analysisSteps: {
+          trendAndHtfConfluence: '1h trend confirmed by 4h macro bullish EMAs.',
+          indicatorAndVolumeFlow: 'CVD buyer absorption with neutral funding (+0.01%).',
+          riskRewardAndVolatility: 'SL placed at 1.9x ATR below swing support.',
+        },
+        reasons: {
+          technical: 'All EMAs stacked.',
+          sentiment: 'Bullish institutional spot ETF inflows.',
+          primaryRisk: 'Potential resistance rejection at 70k.',
+        },
+        model: { provider: 'gemini', modelName: 'gemini-3.8-flash' },
+        evaluatedAt: new Date().toISOString(),
+      },
+    });
+
+    expect(msg).toContain('AI Gatekeeper:');
+    expect(msg).toContain('🟢 PASS');
+    expect(msg).toContain('Score: 88/100');
+    expect(msg).toContain('High-conviction breakout');
+    expect(msg).toContain('Trend/HTF:');
+    expect(msg).toContain('1h trend confirmed by 4h macro bullish EMAs');
+    expect(msg).toContain('Flow/Deriv:');
+    expect(msg).toContain('ATR Sizing:');
+    expect(msg).toContain('SL placed at 1.9x ATR below swing support');
+  });
+
+  it('formats Option 5 dual display with fixed and dynamic ATR levels for Entry, SL, and TP', async () => {
+    const { formatStrategySignalMessage } = await import('./telegram');
+
+    const msg = formatStrategySignalMessage({
+      strategyName:    'UTILMATE_L',
+      rating:          3,
+      symbol:          'ETHUSDT',
+      timeframe:       '4h',
+      direction:       'long',
+      entryPrice:      2367,
+      entryPriceLimit: 2319,
+      stopLossPct:     2.0,
+      takeProfitPct:   4.0,
+      conditionGroups: [],
+      timestamp:       1770000000000,
+      dynamicLevels: {
+        atr:             34.3,
+        entryPrice:      2342,
+        entryOffsetPct:  1.0,
+        stopLossPrice:   2286,
+        stopLossPct:     1.4,
+        takeProfitPrice: 2445,
+        takeProfitPct:   5.4,
+      },
+    });
+
+    // Check header has no "Strategy Signal" and has datetime appended after strategy name
+    expect(msg).not.toContain('Strategy Signal');
+    expect(msg).toContain('📈 "UTILMATE_L" — 2026-02-02 09:40 (UTC+7)');
+    // Check dual Entry line
+    expect(msg).toContain('$2,319 (-2.0%) • $2,342 (0.5×ATR)');
+    // Check dual SL line
+    expect(msg).toContain('$2,273 (-2.0%) • $2,286 (1.5×ATR)');
+    // Check dual TP line
+    expect(msg).toContain('$2,412 (+4.0%) • $2,445 (2.5×ATR)');
+  });
 });
 

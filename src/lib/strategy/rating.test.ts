@@ -18,4 +18,9 @@ describe('AI Verdict Gating', () => {
     expect(shouldRunAiVerdict(6)).toBe(true);
     expect(shouldRunAiVerdict(7)).toBe(true);
   });
+
+  it('respects strategy minSignalRating override if lower than 4', () => {
+    expect(shouldRunAiVerdict(3, 3)).toBe(true);
+    expect(shouldRunAiVerdict(2, 3)).toBe(false);
+  });
 });

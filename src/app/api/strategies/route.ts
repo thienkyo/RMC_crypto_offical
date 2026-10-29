@@ -16,7 +16,14 @@ import type { Strategy } from '@/types/strategy';
 // ── Row mapper ────────────────────────────────────────────────────────────────
 
 function rowToStrategy(row: Record<string, unknown>): Strategy {
-  return row['definition'] as Strategy;
+  const strat = row['definition'] as Strategy;
+  if (row['is_common'] !== undefined && strat) {
+    strat.isCommon = Boolean(row['is_common']);
+  }
+  if (Array.isArray(row['symbols']) && strat && (!strat.symbols || strat.symbols.length === 0)) {
+    strat.symbols = row['symbols'] as string[];
+  }
+  return strat;
 }
 
 // ── GET ───────────────────────────────────────────────────────────────────────
@@ -24,7 +31,7 @@ function rowToStrategy(row: Record<string, unknown>): Strategy {
 export async function GET(): Promise<Response> {
   try {
     const { rows } = await db.query(
-      `SELECT definition FROM strategies ORDER BY updated_at DESC`,
+      `SELECT definition, is_common, symbols FROM strategies ORDER BY updated_at DESC`,
     );
     return Response.json({ strategies: rows.map(rowToStrategy) });
   } catch (err) {
@@ -50,8 +57,8 @@ export async function POST(req: NextRequest): Promise<Response> {
   try {
     await db.query(
       `INSERT INTO strategies
-         (id, name, description, version, symbol, timeframe, definition, notify_on_signal, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         (id, name, description, version, symbol, timeframe, definition, notify_on_signal, is_common, symbols, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
        ON CONFLICT (id) DO UPDATE SET
          name             = EXCLUDED.name,
          description      = EXCLUDED.description,
@@ -60,6 +67,8 @@ export async function POST(req: NextRequest): Promise<Response> {
          timeframe        = EXCLUDED.timeframe,
          definition       = EXCLUDED.definition,
          notify_on_signal = EXCLUDED.notify_on_signal,
+         is_common        = EXCLUDED.is_common,
+         symbols          = EXCLUDED.symbols,
          updated_at       = NOW()`,
       [
         strategy.id,
@@ -70,6 +79,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         strategy.timeframe,
         JSON.stringify(strategy),
         strategy.notifyOnSignal ?? false,
+        strategy.isCommon ?? false,
+        strategy.symbols ?? (strategy.symbol ? [strategy.symbol] : []),
       ],
     );
 

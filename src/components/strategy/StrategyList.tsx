@@ -9,11 +9,13 @@
  * in that symbol to a different symbol in one action.
  */
 
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import {
   useStrategyStore,
   createDefaultStrategy,
   createDefaultTemplate,
+  createDefaultCommonStrategy,
+  createDefaultMtfStrategy,
 } from '@/store/strategy';
 import type { Strategy } from '@/types/strategy';
 import { exportToFile, parseImportFile } from '@/lib/strategy/io';
@@ -22,696 +24,16 @@ import {
   pushManyStrategiesToDb,
   deleteStrategyFromDb,
   deleteAllStrategiesFromDb,
+  syncStrategyToDb,
+  syncManyStrategiesToDb,
 } from '@/lib/strategy/api';
-
-// ── Template row ──────────────────────────────────────────────────────────────
-
-interface TemplateRowProps {
-  s:        Strategy;
-  active:   boolean;
-  onSelect: () => void;
-  onDelete: () => void;
-}
-
-function TemplateRow({ s, active, onSelect, onDelete }: TemplateRowProps) {
-  return (
-    <div
-      className={`group flex items-center justify-between px-3 py-2 cursor-pointer
-                  hover:bg-surface-2 transition-colors
-                  ${active ? 'bg-surface-2 border-l-2 border-violet-500' : 'border-l-2 border-transparent'}`}
-      onClick={onSelect}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-violet-400 flex-shrink-0">✦</span>
-          <span className="text-sm text-text-primary truncate">{s.name}</span>
-        </div>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-xs text-text-muted font-mono">{s.symbol} · {s.timeframe}</span>
-          <span className={`text-[9px] font-mono font-semibold px-1 py-px rounded flex-shrink-0 ${
-            s.action.type === 'enter_long'
-              ? 'bg-emerald-500/15 text-emerald-400'
-              : 'bg-red-500/15 text-red-400'
-          }`}>
-            {s.action.type === 'enter_long' ? '▲ Bull' : '▼ Bear'}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-0.5 ml-1">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (confirm(`Delete template "${s.name}"?`)) onDelete();
-          }}
-          className="btn-icon-xs text-text-muted opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
-          title="Delete template"
-        >
-          🗑
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Clone-group-to-symbol popover ─────────────────────────────────────────────
-
-interface CloneGroupPopoverProps {
-  /** Symbol whose strategies are being cloned. */
-  fromSymbol: string;
-  /** All unique symbols already in the store (for quick-picks). */
-  allSymbols: string[];
-  /** Number of strategies that will be copied. */
-  count:      number;
-  onClone:    (targetSymbol: string) => void;
-  onClose:    () => void;
-}
-
-function CloneGroupPopover({ fromSymbol, allSymbols, count, onClone, onClose }: CloneGroupPopoverProps) {
-  const [input, setInput]    = useState('');
-  const [toast, setToast]    = useState<string | null>(null);
-  const inputRef             = useRef<HTMLInputElement>(null);
-  const containerRef         = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  useEffect(() => {
-    function handle(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    }
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [onClose]);
-
-  const otherSymbols = allSymbols.filter((s) => s !== fromSymbol);
-
-  function commit(sym: string) {
-    const target = sym.trim().toUpperCase();
-    if (!target || target === fromSymbol) return;
-    onClone(target);
-    setToast(`${count} ${count === 1 ? 'strategy' : 'strategies'} copied to ${target}`);
-    // Brief toast then close
-    setTimeout(onClose, 1200);
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      className="absolute left-0 top-full mt-1 z-[200] w-56
-                 bg-[#0a0e1a] border border-surface-border rounded-md
-                 shadow-[0_4px_24px_rgba(0,0,0,0.8)] p-2 flex flex-col gap-2"
-      onClick={(e) => e.stopPropagation()}
-    >
-      {toast ? (
-        <p className="text-[11px] font-mono text-up text-center py-1">{toast}</p>
-      ) : (
-        <>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted">
-            Clone all {count} {count === 1 ? 'strategy' : 'strategies'} to…
-          </p>
-
-          {/* Existing symbol quick-picks */}
-          {otherSymbols.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {otherSymbols.map((sym) => (
-                <button
-                  key={sym}
-                  type="button"
-                  onClick={() => commit(sym)}
-                  className="px-2 py-0.5 rounded border border-surface-border bg-surface-2
-                             text-[11px] font-mono text-text-secondary
-                             hover:border-accent/50 hover:text-accent hover:bg-accent/5
-                             transition-colors"
-                >
-                  {sym}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {otherSymbols.length > 0 && <div className="h-px bg-surface-border" />}
-
-          {/* Custom symbol input */}
-          <div className="flex gap-1">
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter')  commit(input);
-                if (e.key === 'Escape') onClose();
-              }}
-              placeholder="SOLUSDT…"
-              className="flex-1 bg-surface-2 border border-surface-border rounded px-2 py-1
-                         text-xs font-mono text-text-primary placeholder:text-text-muted
-                         focus:outline-none focus:border-accent/60"
-            />
-            <button
-              type="button"
-              onClick={() => commit(input)}
-              disabled={!input.trim()}
-              className="px-2 py-1 rounded border border-accent/40 bg-accent/10
-                         text-accent text-xs font-mono font-semibold
-                         hover:bg-accent/20 disabled:opacity-30 disabled:cursor-not-allowed
-                         transition-colors"
-            >
-              Clone
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Group Telegram topic popover ─────────────────────────────────────────────
-
-interface GroupTopicPopoverProps {
-  symbol: string;
-  count: number;
-  initialTopic?: { enabled: boolean; name: string };
-  onApply: (topic: { enabled: boolean; name: string }) => void;
-  onClose: () => void;
-}
-
-function GroupTopicPopover({ symbol, count, initialTopic, onApply, onClose }: GroupTopicPopoverProps) {
-  const [enabled, setEnabled] = useState(initialTopic?.enabled ?? true);
-  const [name, setName]       = useState(initialTopic?.name || symbol);
-  const [toast, setToast]     = useState<string | null>(null);
-  const inputRef              = useRef<HTMLInputElement>(null);
-  const containerRef          = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (enabled) {
-      inputRef.current?.focus();
-    }
-  }, [enabled]);
-
-  useEffect(() => {
-    function handle(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    }
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [onClose]);
-
-  function commit() {
-    const finalTopic = {
-      enabled,
-      name: (name.trim() || symbol).substring(0, 128),
-    };
-    onApply(finalTopic);
-    setToast(
-      enabled
-        ? `Topic #${finalTopic.name} set for all ${count} strategies`
-        : `Topic routing disabled for all ${count} strategies`,
-    );
-    setTimeout(onClose, 1100);
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      className="absolute left-0 top-full mt-1 z-[200] w-64
-                 bg-[#0a0e1a] border border-surface-border rounded-md
-                 shadow-[0_4px_24px_rgba(0,0,0,0.8)] p-3 flex flex-col gap-2.5"
-      onClick={(e) => e.stopPropagation()}
-    >
-      {toast ? (
-        <p className="text-[11px] font-mono text-emerald-400 text-center py-2">{toast}</p>
-      ) : (
-        <>
-          <div className="flex items-center gap-1.5 text-text-primary">
-            <svg className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-            </svg>
-            <span className="text-[11px] font-mono font-semibold">Group Telegram Topic</span>
-          </div>
-
-          <p className="text-[10px] text-text-muted leading-tight">
-            Apply Telegram topic routing to all <span className="text-text-primary font-mono font-semibold">{count}</span> {symbol} strategies.
-          </p>
-
-          <label className="flex items-center gap-2 cursor-pointer select-none py-0.5">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={enabled}
-              onClick={() => setEnabled((v) => !v)}
-              className={`w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
-                enabled ? 'bg-sky-500' : 'bg-surface-border'
-              }`}
-            >
-              <span
-                className={`block w-3 h-3 rounded-full bg-white shadow transition-transform mx-0.5 ${
-                  enabled ? 'translate-x-4' : 'translate-x-0'
-                }`}
-              />
-            </button>
-            <span className="text-[11px] font-mono text-text-secondary">
-              {enabled ? 'Send to Telegram Topic' : 'General Chat (No topic)'}
-            </span>
-          </label>
-
-          {enabled && (
-            <div className="flex flex-col gap-1">
-              <span className="text-[10px] font-mono text-text-muted">Topic Name</span>
-              <input
-                ref={inputRef}
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value.substring(0, 128))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commit();
-                  if (e.key === 'Escape') onClose();
-                }}
-                placeholder={symbol}
-                className="bg-surface-2 border border-surface-border rounded px-2 py-1
-                           text-xs font-mono text-text-primary placeholder:text-text-muted
-                           focus:outline-none focus:border-sky-500/70"
-              />
-              <span className="text-[9px] text-text-muted font-mono">
-                Will route to topic #{name.trim() || symbol}
-              </span>
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-1 border-t border-surface-border">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-2 py-1 text-[11px] font-mono text-text-muted hover:text-text-primary transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={commit}
-              className="px-2.5 py-1 rounded border border-sky-500/50 bg-sky-500/15
-                         text-sky-400 text-[11px] font-mono font-semibold
-                         hover:bg-sky-500/25 transition-colors"
-            >
-              Apply to all {count}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Options popover (⋯ menu on each strategy row) ────────────────────────────
-
-type PopoverView = 'main' | 'clone' | 'merge';
-
-interface OptionsPopoverProps {
-  strategy:        Strategy;
-  /** Full strategy list — used to derive clone quick-picks and merge candidates. */
-  allStrategies:   Strategy[];
-  onDuplicate:     () => void;
-  onDelete:        () => void;
-  onCloneToSymbol: (target: string) => void;
-  onMerge:         (sourceIds: string[]) => void;
-  onClose:         () => void;
-}
-
-function OptionsPopover({
-  strategy, allStrategies, onDuplicate, onDelete, onCloneToSymbol, onMerge, onClose,
-}: OptionsPopoverProps) {
-  const [view,            setView]            = useState<PopoverView>('main');
-  const [cloneInput,      setCloneInput]      = useState('');
-  const [cloneToast,      setCloneToast]      = useState<string | null>(null);
-  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
-  const containerRef = useRef<HTMLDivElement>(null);
-  const cloneInputRef = useRef<HTMLInputElement>(null);
-
-  // Click-outside to close
-  useEffect(() => {
-    function handle(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) onClose();
-    }
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [onClose]);
-
-  // Auto-focus the clone input when that view opens
-  useEffect(() => {
-    if (view === 'clone') setTimeout(() => cloneInputRef.current?.focus(), 0);
-  }, [view]);
-
-  // Merge candidates: same symbol, same direction, not self, not template, exactly 1 entry group
-  const mergeEligible = allStrategies.filter(
-    (s) =>
-      !s.isTemplate &&
-      s.id !== strategy.id &&
-      s.symbol === strategy.symbol &&
-      s.action.type === strategy.action.type &&
-      s.entryConditions.length === 1,
-  );
-
-  // Symbols that already have strategies (for clone quick-picks)
-  const otherSymbols = Array.from(
-    new Set(
-      allStrategies
-        .filter((s) => !s.isTemplate && s.symbol !== strategy.symbol)
-        .map((s) => s.symbol),
-    ),
-  ).sort();
-
-  function commitClone(sym: string) {
-    const target = sym.trim().toUpperCase();
-    if (!target || target === strategy.symbol) return;
-    onCloneToSymbol(target);
-    setCloneToast(`Cloned to ${target}`);
-    setTimeout(onClose, 1000);
-  }
-
-  function toggleSource(id: string) {
-    setSelectedSources((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  function commitMerge() {
-    if (selectedSources.size === 0) return;
-    onMerge(Array.from(selectedSources));
-    onClose();
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      className="absolute right-0 top-full mt-0.5 z-[200] w-52
-                 bg-[#0a0e1a] border border-surface-border rounded-md
-                 shadow-[0_4px_24px_rgba(0,0,0,0.8)] p-1.5 flex flex-col gap-0.5"
-      onClick={(e) => e.stopPropagation()}
-    >
-      {/* ── Main view ── */}
-      {view === 'main' && (
-        <>
-          <button type="button" onClick={() => setView('clone')}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
-                       text-text-secondary hover:bg-surface-2 hover:text-accent
-                       transition-colors text-left">
-            <span className="text-[12px] w-3 text-center">→</span>
-            <span className="text-[12px] font-mono">Clone to symbol</span>
-          </button>
-
-          <button type="button" onClick={() => { onDuplicate(); onClose(); }}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
-                       text-text-secondary hover:bg-surface-2 hover:text-accent
-                       transition-colors text-left">
-            <span className="text-[12px] w-3 text-center">⧉</span>
-            <span className="text-[12px] font-mono">Duplicate</span>
-          </button>
-
-          <button type="button" onClick={() => setView('merge')}
-            disabled={mergeEligible.length === 0}
-            title={mergeEligible.length === 0
-              ? 'No eligible strategies (need same symbol, 1 group)'
-              : `${mergeEligible.length} eligible ${mergeEligible.length === 1 ? 'strategy' : 'strategies'}`}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
-                       text-text-secondary hover:bg-surface-2 hover:text-blue-400
-                       transition-colors text-left
-                       disabled:opacity-30 disabled:cursor-not-allowed">
-            <span className="text-[12px] w-3 text-center">⊕</span>
-            <span className="text-[12px] font-mono">Merge into this…</span>
-            {mergeEligible.length > 0 && (
-              <span className="ml-auto text-[10px] font-mono text-text-muted">
-                {mergeEligible.length}
-              </span>
-            )}
-          </button>
-
-          <div className="h-px bg-surface-border my-0.5" />
-
-          <button type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (confirm(`Delete "${strategy.name}"?`)) { onDelete(); onClose(); }
-            }}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded
-                       text-text-secondary hover:bg-red-500/10 hover:text-red-400
-                       transition-colors text-left">
-            <span className="text-[12px] w-3 text-center">🗑</span>
-            <span className="text-[12px] font-mono">Delete</span>
-          </button>
-        </>
-      )}
-
-      {/* ── Clone sub-view ── */}
-      {view === 'clone' && (
-        cloneToast ? (
-          <p className="text-[11px] font-mono text-up text-center py-2">{cloneToast}</p>
-        ) : (
-          <>
-            <button type="button" onClick={() => setView('main')}
-              className="flex items-center gap-1 text-[10px] font-mono text-text-muted
-                         hover:text-text-primary mb-1 transition-colors">
-              ‹ back
-            </button>
-            <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted px-1 mb-1">
-              Clone to…
-            </p>
-            {otherSymbols.length > 0 && (
-              <div className="flex flex-wrap gap-1 px-1 mb-1">
-                {otherSymbols.map((sym) => (
-                  <button key={sym} type="button" onClick={() => commitClone(sym)}
-                    className="px-1.5 py-0.5 rounded border border-surface-border bg-surface-2
-                               text-[11px] font-mono text-text-secondary
-                               hover:border-accent/50 hover:text-accent hover:bg-accent/5
-                               transition-colors">
-                    {sym}
-                  </button>
-                ))}
-              </div>
-            )}
-            {otherSymbols.length > 0 && <div className="h-px bg-surface-border my-1" />}
-            <div className="flex gap-1 px-1">
-              <input ref={cloneInputRef} type="text" value={cloneInput}
-                onChange={(e) => setCloneInput(e.target.value.toUpperCase())}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter')  commitClone(cloneInput);
-                  if (e.key === 'Escape') setView('main');
-                }}
-                placeholder="SOLUSDT…"
-                className="flex-1 bg-surface-2 border border-surface-border rounded px-2 py-1
-                           text-xs font-mono text-text-primary placeholder:text-text-muted
-                           focus:outline-none focus:border-accent/60" />
-              <button type="button" onClick={() => commitClone(cloneInput)}
-                disabled={!cloneInput.trim()}
-                className="px-2 py-1 rounded border border-accent/40 bg-accent/10
-                           text-accent text-xs font-mono font-semibold
-                           hover:bg-accent/20 disabled:opacity-30 disabled:cursor-not-allowed
-                           transition-colors">
-                →
-              </button>
-            </div>
-          </>
-        )
-      )}
-
-      {/* ── Merge sub-view ── */}
-      {view === 'merge' && (
-        <>
-          <button type="button"
-            onClick={() => { setView('main'); setSelectedSources(new Set()); }}
-            className="flex items-center gap-1 text-[10px] font-mono text-text-muted
-                       hover:text-text-primary mb-1 transition-colors">
-            ‹ back
-          </button>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted px-1 mb-1">
-            Merge into &ldquo;{strategy.name}&rdquo;
-          </p>
-          <p className="text-[10px] text-text-muted px-1 mb-1.5 leading-tight">
-            Each selected strategy&apos;s group is added as an OR group.
-          </p>
-          <div className="max-h-48 overflow-y-auto flex flex-col gap-0.5">
-            {mergeEligible.map((src) => (
-              <label key={src.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer
-                           hover:bg-surface-2 transition-colors select-none">
-                <input type="checkbox"
-                  checked={selectedSources.has(src.id)}
-                  onChange={() => toggleSource(src.id)}
-                  className="accent-accent flex-shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-mono text-text-primary truncate">{src.name}</div>
-                  <div className="text-[10px] text-text-muted truncate">
-                    {src.entryConditions[0]?.label
-                      ? `"${src.entryConditions[0].label}"`
-                      : `${src.entryConditions[0]?.conditions.length ?? 0} conditions`}
-                    {' · '}{src.timeframe}
-                  </div>
-                </div>
-              </label>
-            ))}
-          </div>
-          <div className="h-px bg-surface-border my-1" />
-          <button type="button" onClick={commitMerge}
-            disabled={selectedSources.size === 0}
-            className="w-full py-1.5 rounded bg-blue-500/15 text-blue-400 text-[11px] font-mono
-                       hover:bg-blue-500/25 disabled:opacity-30 disabled:cursor-not-allowed
-                       transition-colors">
-            Merge {selectedSources.size > 0 ? `${selectedSources.size} selected` : ''}
-          </button>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Strategy row ──────────────────────────────────────────────────────────────
-
-interface RowProps {
-  s:               Strategy;
-  active:          boolean;
-  /** Full strategy list passed through for the OptionsPopover. */
-  allStrategies:   Strategy[];
-  onSelect:        () => void;
-  onToggle:        () => void;
-  onDuplicate:     () => void;
-  onDelete:        () => void;
-  onCloneToSymbol: (targetSymbol: string) => void;
-  onMerge:         (sourceIds: string[]) => void;
-}
-
-function StrategyRow({
-  s, active, allStrategies, onSelect, onToggle, onDuplicate, onDelete, onCloneToSymbol, onMerge,
-}: RowProps) {
-  const [optionsOpen, setOptionsOpen] = useState(false);
-
-  return (
-    <div className="relative">
-      <div
-        className={`group flex items-center justify-between pl-5 pr-3 py-1.5 cursor-pointer
-                    hover:bg-surface-2 transition-colors
-                    ${active ? 'bg-surface-2 border-l-2 border-blue-500' : 'border-l-2 border-surface-border/50'}`}
-        onClick={onSelect}
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className={`text-xs truncate ${active ? 'text-text-primary font-medium' : 'text-text-secondary group-hover:text-text-primary'}`}>
-              {s.name}
-            </span>
-            {(s.isActive ?? false) && (
-              <span className={`text-[9px] font-bold flex-shrink-0 animate-pulse
-                               ${s.action.type === 'enter_long' ? 'text-emerald-400' : 'text-red-400'}`}>
-                {s.action.type === 'enter_long' ? '▲' : '▼'}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-text-muted font-mono">
-            <span>{s.timeframe}</span>
-            {s.aiGatekeeperEnabled && (
-              <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 font-semibold select-none" title="AI Gatekeeper Enabled for this strategy">
-                AI
-              </span>
-            )}
-            {s.notifyOnSignal && (
-              <span className="text-[9px] text-emerald-400/80 select-none" title="Telegram Notifications Active">
-                🔔
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-0.5 ml-1">
-          {/* Live monitor toggle — kept outside ⋯ for instant access */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onToggle(); }}
-            className={`btn-icon-xs transition-colors ${
-              (s.isActive ?? false)
-                ? 'text-emerald-400 hover:text-emerald-300'
-                : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary'
-            }`}
-            title={(s.isActive ?? false) ? 'Turn off live monitor' : 'Turn on live monitor'}
-          >
-            ⏻
-          </button>
-
-          {/* ⋯ options menu */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setOptionsOpen((v) => !v); }}
-            className={`btn-icon-xs transition-colors text-[16px] leading-none tracking-tighter ${
-              optionsOpen
-                ? 'text-accent opacity-100'
-                : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent'
-            }`}
-            title="Options"
-          >
-            ···
-          </button>
-        </div>
-      </div>
-
-      {optionsOpen && (
-        <OptionsPopover
-          strategy={s}
-          allStrategies={allStrategies}
-          onDuplicate={onDuplicate}
-          onDelete={onDelete}
-          onCloneToSymbol={onCloneToSymbol}
-          onMerge={onMerge}
-          onClose={() => setOptionsOpen(false)}
-        />
-      )}
-    </div>
-  );
-}
-
-// ── Section header ────────────────────────────────────────────────────────────
-
-interface SectionHeaderProps {
-  label:       string;
-  isCollapsed: boolean;
-  onToggle:    () => void;
-  onAdd:       () => void;
-  addTitle:    string;
-  count:       number;
-  accent?:     'blue' | 'violet' | 'cyan';
-}
-
-function SectionHeader({ label, isCollapsed, onToggle, onAdd, addTitle, count, accent = 'blue' }: SectionHeaderProps) {
-  return (
-    <div className="flex items-center justify-between px-3 py-1.5 border-b border-surface-border">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex items-center gap-1.5 text-text-muted hover:text-text-primary transition-colors select-none"
-      >
-        <span className={`text-[10px] transition-transform duration-150 ${isCollapsed ? '-rotate-90' : ''}`}>
-          ▾
-        </span>
-        <span className={`text-[11px] font-semibold uppercase tracking-wider ${
-          accent === 'violet' ? 'text-violet-400' :
-          accent === 'cyan' ? 'text-cyan-400' : 'text-blue-400'
-        }`}>
-          {label}
-        </span>
-        <span className="text-[10px] font-mono text-text-muted">{count}</span>
-      </button>
-      <button
-        type="button"
-        onClick={onAdd}
-        className="btn-icon-xs text-text-muted hover:text-text-primary"
-        title={addTitle}
-      >
-        +
-      </button>
-    </div>
-  );
-}
+import { CloneGroupPopover, GroupTopicPopover } from './StrategyPopovers';
+import {
+  TemplateRow,
+  StrategyRow,
+  CommonStrategyRow,
+  SectionHeader,
+} from './StrategyRows';
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -727,15 +49,15 @@ export function StrategyList() {
   const cloneStrategyToSymbol  = useStrategyStore((s) => s.cloneStrategyToSymbol);
   const setGroupActive         = useStrategyStore((s) => s.setGroupActive);
   const setGroupTelegramTopic  = useStrategyStore((s) => s.setGroupTelegramTopic);
-  const cloneFromTemplate     = useStrategyStore((s) => s.cloneFromTemplate);
   const loadStarterTemplates  = useStrategyStore((s) => s.loadStarterTemplates);
   const mergeStrategy         = useStrategyStore((s) => s.mergeStrategy);
   const importStrategies      = useStrategyStore((s) => s.importStrategies);
   const clearAllStrategies    = useStrategyStore((s) => s.clearAllStrategies);
-  const setStrategies         = useStrategyStore((s) => s.setStrategies);
 
   const [templatesCollapsed,       setTemplatesCollapsed]       = useState(false);
+  const [commonCollapsed,          setCommonCollapsed]          = useState(false);
   const [strategiesCollapsed,      setStrategiesCollapsed]      = useState(false);
+  const [mtfCollapsed,             setMtfCollapsed]             = useState(false);
   // Symbol groups: hidden/collapsed by default, separated between regular and MTF
   const [expandedRegularGroups, setExpandedRegularGroups] = useState<Set<string>>(new Set());
   const [expandedMtfGroups, setExpandedMtfGroups]         = useState<Set<string>>(new Set());
@@ -761,7 +83,6 @@ export function StrategyList() {
     setImportFeedback({ ok, msg });
     setTimeout(() => setImportFeedback(null), 3000);
   }, []);
-
 
   /** Export all strategies (templates + regulars) to a dated JSON file. */
   function handleExport() {
@@ -837,9 +158,10 @@ export function StrategyList() {
   const templates         = useMemo(() => strategies.filter((s) => s.isTemplate),   [strategies]);
   const longTemplates     = useMemo(() => templates.filter((t) => t.action.type === 'enter_long'),  [templates]);
   const shortTemplates    = useMemo(() => templates.filter((t) => t.action.type === 'enter_short'), [templates]);
-  
-  const regularStrategies = useMemo(() => strategies.filter((s) => !s.isTemplate && !s.isMtf), [strategies]);
-  const mtfStrategies     = useMemo(() => strategies.filter((s) => !s.isTemplate && s.isMtf), [strategies]);
+
+  const commonStrategies  = useMemo(() => strategies.filter((s) => !s.isTemplate && s.isCommon), [strategies]);
+  const regularStrategies = useMemo(() => strategies.filter((s) => !s.isTemplate && !s.isMtf && !s.isCommon), [strategies]);
+  const mtfStrategies     = useMemo(() => strategies.filter((s) => !s.isTemplate && s.isMtf && !s.isCommon), [strategies]);
 
   // All unique symbols — quick-picks for the group-level clone-all popover
   const allSymbols = useMemo(
@@ -851,20 +173,76 @@ export function StrategyList() {
     const s = createDefaultStrategy();
     upsertStrategy(s);
     setActiveStrategy(s.id);
-    pushStrategyToDb(s).catch((err) =>
-      console.warn('[strategy-list:new] DB push failed:', err),
+    syncStrategyToDb(s, 'strategy-list:new');
+  }
+
+  function handleNewCommonStrategy() {
+    const s = createDefaultCommonStrategy();
+    upsertStrategy(s);
+    setActiveStrategy(s.id);
+    setCommonCollapsed(false);
+    syncStrategyToDb(s, 'strategy-list:new-common');
+  }
+
+  async function handleConvertToCommon(s: Strategy) {
+    const sameNameSiblings = strategies.filter(
+      (other) => !other.isTemplate && !other.isCommon && other.id !== s.id && other.name.trim() === s.name.trim(),
     );
+
+    let assignedSymbols = s.symbols && s.symbols.length > 0 ? [...s.symbols] : [s.symbol];
+    let toDeleteIds: string[] = [];
+
+    if (sameNameSiblings.length > 0) {
+      const siblingSymbols = Array.from(new Set(sameNameSiblings.map((x) => x.symbol)));
+      const shouldMerge = confirm(
+        `Found ${sameNameSiblings.length} other strategies with the same name "${s.name}" on:\n` +
+        siblingSymbols.join(', ') +
+        `\n\nMerge all of them into this single Common Strategy and delete the duplicate copies?`,
+      );
+
+      if (!shouldMerge) {
+        return;
+      }
+
+      assignedSymbols = Array.from(new Set([...assignedSymbols, ...siblingSymbols]));
+      toDeleteIds = sameNameSiblings.map((x) => x.id);
+    } else {
+      const shouldConvert = confirm(
+        `Convert "${s.name}" into a Common Strategy shared across multiple tickers?`,
+      );
+      if (!shouldConvert) {
+        return;
+      }
+    }
+
+    const updatedCommon: Strategy = {
+      ...s,
+      isCommon: true,
+      symbols: assignedSymbols,
+      version: s.version + 1,
+      updatedAt: Date.now(),
+    };
+
+    try {
+      for (const delId of toDeleteIds) {
+        await deleteStrategyFromDb(delId).catch(console.warn);
+        deleteStrategy(delId);
+      }
+      await pushStrategyToDb(updatedCommon);
+      upsertStrategy(updatedCommon);
+      setActiveStrategy(updatedCommon.id);
+      setCommonCollapsed(false);
+      showFeedback(true, `Converted "${s.name}" to Common Strategy (${assignedSymbols.length} tickers)!`);
+    } catch (err) {
+      showFeedback(false, `Failed to convert: ${err instanceof Error ? err.message : 'DB error'}`);
+    }
   }
 
   function handleNewMtfStrategy() {
-    const s = import('@/store/strategy').then(({ createDefaultMtfStrategy }) => {
-      const mtf = createDefaultMtfStrategy();
-      upsertStrategy(mtf);
-      setActiveStrategy(mtf.id);
-      pushStrategyToDb(mtf).catch((err) =>
-        console.warn('[strategy-list:new-mtf] DB push failed:', err),
-      );
-    });
+    const mtf = createDefaultMtfStrategy();
+    upsertStrategy(mtf);
+    setActiveStrategy(mtf.id);
+    syncStrategyToDb(mtf, 'strategy-list:new-mtf');
   }
 
   function handleNewTemplate() {
@@ -872,18 +250,14 @@ export function StrategyList() {
     upsertStrategy(t);
     setActiveStrategy(t.id);
     setTemplatesCollapsed(false);
-    pushStrategyToDb(t).catch((err) =>
-      console.warn('[strategy-list:new-template] DB push failed:', err),
-    );
+    syncStrategyToDb(t, 'strategy-list:new-template');
   }
 
   function handleToggle(s: Strategy) {
     // Optimistic — toggle is low-stakes, fire-and-forget DB sync
     toggleStrategyActive(s.id);
     const updated = { ...s, isActive: !(s.isActive ?? false) };
-    pushStrategyToDb(updated).catch((err) =>
-      console.warn('[strategy-list:toggle] DB sync failed:', err),
-    );
+    syncStrategyToDb(updated, 'strategy-list:toggle');
   }
 
   async function handleDelete(s: Strategy) {
@@ -895,8 +269,6 @@ export function StrategyList() {
       showFeedback(false, `Delete failed: ${err instanceof Error ? err.message : 'DB error'}`);
     }
   }
-
-  const [mtfCollapsed, setMtfCollapsed] = useState(false);
 
   return (
     <aside className="w-52 flex-shrink-0 border-r border-surface-border flex flex-col bg-surface">
@@ -1047,10 +419,7 @@ export function StrategyList() {
             onClick={() => {
               const stamped = loadStarterTemplates();
               setTemplatesCollapsed(false);
-              // Push to DB so they survive a refresh (fire-and-forget)
-              pushManyStrategiesToDb(stamped).catch((err) =>
-                console.warn('[strategy-list:load-starters] DB push failed:', err),
-              );
+              syncManyStrategiesToDb(stamped, 'strategy-list:load-starters');
             }}
             className="btn-icon-xs text-text-muted hover:text-violet-400 transition-colors"
             title="Load starter templates"
@@ -1099,15 +468,19 @@ export function StrategyList() {
                 </span>
                 <span className="text-[10px] font-mono text-text-muted">{longTemplates.length}</span>
               </button>
-              {!collapsedTplDir.has('long') && longTemplates.map((t) => (
-                <TemplateRow
-                  key={t.id}
-                  s={t}
-                  active={activeId === t.id}
-                  onSelect={() => setActiveStrategy(t.id)}
-                  onDelete={() => handleDelete(t)}
-                />
-              ))}
+              {!collapsedTplDir.has('long') && (
+                <div className="border-l-2 border-emerald-500/40 ml-4 my-0.5 space-y-0.5">
+                  {longTemplates.map((t) => (
+                    <TemplateRow
+                      key={t.id}
+                      s={t}
+                      active={activeId === t.id}
+                      onSelect={() => setActiveStrategy(t.id)}
+                      onDelete={() => handleDelete(t)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1134,15 +507,19 @@ export function StrategyList() {
                 </span>
                 <span className="text-[10px] font-mono text-text-muted">{shortTemplates.length}</span>
               </button>
-              {!collapsedTplDir.has('short') && shortTemplates.map((t) => (
-                <TemplateRow
-                  key={t.id}
-                  s={t}
-                  active={activeId === t.id}
-                  onSelect={() => setActiveStrategy(t.id)}
-                  onDelete={() => handleDelete(t)}
-                />
-              ))}
+              {!collapsedTplDir.has('short') && (
+                <div className="border-l-2 border-red-500/40 ml-4 my-0.5 space-y-0.5">
+                  {shortTemplates.map((t) => (
+                    <TemplateRow
+                      key={t.id}
+                      s={t}
+                      active={activeId === t.id}
+                      onSelect={() => setActiveStrategy(t.id)}
+                      onDelete={() => handleDelete(t)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1159,6 +536,44 @@ export function StrategyList() {
               />
             ))
           }
+        </div>
+      )}
+
+      {/* ── Common Strategies section ────────────────────────────────────────── */}
+      <SectionHeader
+        label="Common Strategies"
+        isCollapsed={commonCollapsed}
+        onToggle={() => setCommonCollapsed((v) => !v)}
+        onAdd={handleNewCommonStrategy}
+        addTitle="New common strategy (shared across tickers)"
+        count={commonStrategies.length}
+        accent="violet"
+      />
+      {!commonCollapsed && (
+        <div className="py-1 border-b border-surface-border max-h-56 overflow-y-auto">
+          {commonStrategies.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-text-muted italic">
+              No common strategies yet. Click + or use &quot;Convert to Common&quot; on any strategy.
+            </p>
+          ) : (
+            <div className="border-l-2 border-purple-500/40 ml-4 my-0.5 space-y-0.5">
+              {commonStrategies.map((cs) => (
+                <CommonStrategyRow
+                  key={cs.id}
+                  s={cs}
+                  active={activeId === cs.id}
+                  allStrategies={strategies}
+                  onSelect={() => setActiveStrategy(cs.id)}
+                  onToggle={() => handleToggle(cs)}
+                  onDuplicate={() => {
+                    const copy = duplicateStrategy(cs.id);
+                    syncStrategyToDb(copy, 'common-duplicate');
+                  }}
+                  onDelete={() => handleDelete(cs)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1191,6 +606,7 @@ export function StrategyList() {
             duplicateStrategy={duplicateStrategy}
             cloneStrategyToSymbol={cloneStrategyToSymbol}
             mergeStrategy={mergeStrategy}
+            onConvertToCommon={handleConvertToCommon}
             setGroupActive={setGroupActive}
             setGroupTelegramTopic={setGroupTelegramTopic}
             copyGroupToSymbol={copyGroupToSymbol}
@@ -1230,6 +646,7 @@ export function StrategyList() {
             duplicateStrategy={duplicateStrategy}
             cloneStrategyToSymbol={cloneStrategyToSymbol}
             mergeStrategy={mergeStrategy}
+            onConvertToCommon={handleConvertToCommon}
             setGroupActive={setGroupActive}
             setGroupTelegramTopic={setGroupTelegramTopic}
             copyGroupToSymbol={copyGroupToSymbol}
@@ -1261,6 +678,7 @@ interface SymbolGroupListProps {
   duplicateStrategy: (id: string) => Strategy | undefined;
   cloneStrategyToSymbol: (id: string, target: string) => Strategy | undefined;
   mergeStrategy: (sources: string[], dest: string) => Strategy | undefined;
+  onConvertToCommon?: (s: Strategy) => void;
   setGroupActive: (symbol: string, active?: boolean, isMtf?: boolean) => void;
   setGroupTelegramTopic: (symbol: string, topic: { enabled: boolean; name: string }, isMtf?: boolean) => Strategy[];
   copyGroupToSymbol: (symbol: string, target: string, isMtf?: boolean) => Strategy[];
@@ -1271,7 +689,7 @@ interface SymbolGroupListProps {
 function SymbolGroupList({
   isMtf, strategies, allStrategies, expandedGroups, toggleGroup, clonePopoverKey, setClonePopoverKey,
   topicPopoverKey, setTopicPopoverKey, activeId, setActiveStrategy, handleToggle, handleDelete,
-  duplicateStrategy, cloneStrategyToSymbol, mergeStrategy, setGroupActive, setGroupTelegramTopic,
+  duplicateStrategy, cloneStrategyToSymbol, mergeStrategy, onConvertToCommon, setGroupActive, setGroupTelegramTopic,
   copyGroupToSymbol, setStrategiesCollapsed, allSymbols
 }: SymbolGroupListProps) {
   const groups = useMemo(() => {
@@ -1343,9 +761,7 @@ function SymbolGroupList({
                   const nextActive = !anyActive;
                   const updated = list.map((s) => ({ ...s, isActive: nextActive }));
                   setGroupActive(symbol, nextActive, isMtf);
-                  import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
-                    pushManyStrategiesToDb(updated).catch(err => console.warn('[group-toggle] sync failed:', err));
-                  });
+                  syncManyStrategiesToDb(updated, 'group-toggle');
                 }}
                 title={anyActive ? 'Turn off all in group' : 'Turn on all in group'}
                 className={`btn-icon-xs flex-shrink-0 transition-colors
@@ -1398,11 +814,7 @@ function SymbolGroupList({
                 onClone={(target) => {
                   const copies = copyGroupToSymbol(symbol, target, isMtf);
                   setStrategiesCollapsed(false);
-                  if (copies.length > 0) {
-                    import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
-                      pushManyStrategiesToDb(copies).catch(err => console.warn('[copy-group] sync failed:', err));
-                    });
-                  }
+                  syncManyStrategiesToDb(copies, 'copy-group');
                 }}
                 onClose={() => setClonePopoverKey(null)}
               />
@@ -1417,52 +829,39 @@ function SymbolGroupList({
                 }}
                 onApply={(topic) => {
                   const updated = setGroupTelegramTopic(symbol, topic, isMtf);
-                  if (updated.length > 0) {
-                    import('@/lib/strategy/api').then(({ pushManyStrategiesToDb }) => {
-                      pushManyStrategiesToDb(updated).catch((err) =>
-                        console.warn('[group-topic] sync failed:', err),
-                      );
-                    });
-                  }
+                  syncManyStrategiesToDb(updated, 'group-topic');
                 }}
                 onClose={() => setTopicPopoverKey(null)}
               />
             )}
-            {!isCollapsed && sorted.map((s) => (
-              <StrategyRow
-                key={s.id}
-                s={s}
-                active={activeId === s.id}
-                allStrategies={allStrategies}
-                onSelect={() => setActiveStrategy(s.id)}
-                onToggle={() => handleToggle(s)}
-                onDuplicate={() => {
-                  const copy = duplicateStrategy(s.id);
-                  if (copy) {
-                    import('@/lib/strategy/api').then(({ pushStrategyToDb }) => {
-                      pushStrategyToDb(copy).catch(err => console.warn('[duplicate] sync failed:', err));
-                    });
-                  }
-                }}
-                onDelete={() => handleDelete(s)}
-                onCloneToSymbol={(target) => {
-                  const clone = cloneStrategyToSymbol(s.id, target);
-                  if (clone) {
-                    import('@/lib/strategy/api').then(({ pushStrategyToDb }) => {
-                      pushStrategyToDb(clone).catch(err => console.warn('[clone-to-symbol] sync failed:', err));
-                    });
-                  }
-                }}
-                onMerge={(sourceIds) => {
-                  const merged = mergeStrategy(sourceIds, s.id);
-                  if (merged) {
-                    import('@/lib/strategy/api').then(({ pushStrategyToDb }) => {
-                      pushStrategyToDb(merged).catch(err => console.warn('[merge] sync failed:', err));
-                    });
-                  }
-                }}
-              />
-            ))}
+            {!isCollapsed && (
+              <div className={`border-l-2 ${isMtf ? 'border-l-cyan-500/40' : 'border-l-amber-500/40'} ml-4 my-0.5 space-y-0.5`}>
+                {sorted.map((s) => (
+                  <StrategyRow
+                    key={s.id}
+                    s={s}
+                    active={activeId === s.id}
+                    allStrategies={allStrategies}
+                    onSelect={() => setActiveStrategy(s.id)}
+                    onToggle={() => handleToggle(s)}
+                    onDuplicate={() => {
+                      const copy = duplicateStrategy(s.id);
+                      syncStrategyToDb(copy, 'duplicate');
+                    }}
+                    onDelete={() => handleDelete(s)}
+                    onCloneToSymbol={(target) => {
+                      const clone = cloneStrategyToSymbol(s.id, target);
+                      syncStrategyToDb(clone, 'clone-to-symbol');
+                    }}
+                    onMerge={(sourceIds) => {
+                      const merged = mergeStrategy(sourceIds, s.id);
+                      syncStrategyToDb(merged, 'merge');
+                    }}
+                    onConvertToCommon={onConvertToCommon ? () => onConvertToCommon(s) : undefined}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         );
       })}

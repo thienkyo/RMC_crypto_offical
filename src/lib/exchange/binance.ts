@@ -82,6 +82,40 @@ export async function fetchKlines(
 }
 
 /**
+ * Fetch real-time spot prices for a list of symbols from Binance REST `/api/v3/ticker/price`.
+ * Only queries crypto symbols (USDT/USDC pairs) and skips equities.
+ */
+export async function fetchTickerPrices(symbols: string[]): Promise<Record<string, number>> {
+  const cryptoSymbols = Array.from(
+    new Set(symbols.filter((s) => s.endsWith('USDT') || s.endsWith('USDC'))),
+  );
+  if (cryptoSymbols.length === 0) return {};
+
+  try {
+    const params = new URLSearchParams({
+      symbols: JSON.stringify(cryptoSymbols),
+    });
+    const res = await fetch(`${REST_BASE}/api/v3/ticker/price?${params.toString()}`, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return {};
+
+    const rows = (await res.json()) as Array<{ symbol: string; price: string }>;
+    const map: Record<string, number> = {};
+    for (const r of rows) {
+      const p = parseFloat(r.price);
+      if (Number.isFinite(p) && p > 0) {
+        map[r.symbol] = p;
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Backfill N candles by paginating Binance REST in reverse-time order.
  * Uses a 300ms pause between pages to stay well within rate limits.
  *

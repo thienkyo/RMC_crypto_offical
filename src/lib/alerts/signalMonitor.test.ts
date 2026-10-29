@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   formatTradeDuration,
+  getNextHeartbeatMilestoneMs,
   registerOrConfirmSignalMonitor,
   runSignalMonitorCheck,
   type SignalMonitorRow,
@@ -29,6 +30,18 @@ describe('Signal Monitor Engine', () => {
       expect(formatTradeDuration(2 * 3600_000)).toBe('2h');
       expect(formatTradeDuration(2 * 3600_000 + 15 * 60_000)).toBe('2h 15m');
       expect(formatTradeDuration(25 * 3600_000)).toBe('1d 1h');
+    });
+  });
+
+  describe('getNextHeartbeatMilestoneMs', () => {
+    it('follows 15m -> 30m -> 60m -> 4h ... -> 48h schedule', () => {
+      expect(getNextHeartbeatMilestoneMs(0)).toBe(15 * 60_000);
+      expect(getNextHeartbeatMilestoneMs(15 * 60_000)).toBe(30 * 60_000);
+      expect(getNextHeartbeatMilestoneMs(30 * 60_000)).toBe(60 * 60_000);
+      expect(getNextHeartbeatMilestoneMs(60 * 60_000)).toBe(4 * 3600_000);
+      expect(getNextHeartbeatMilestoneMs(4 * 3600_000)).toBe(8 * 3600_000);
+      expect(getNextHeartbeatMilestoneMs(44 * 3600_000)).toBe(48 * 3600_000);
+      expect(getNextHeartbeatMilestoneMs(48 * 3600_000)).toBeNull();
     });
   });
 
@@ -260,6 +273,69 @@ describe('Signal Monitor Engine', () => {
         undefined,
         undefined,
         5555,
+      );
+    });
+
+    it('sends tiered heartbeat at 15m and auto-expires trade at 48h', async () => {
+      const createdAt16mAgo = new Date(Date.now() - 16 * 60_000);
+      const openTrade15m: Partial<SignalMonitorRow> = {
+        id: 4,
+        symbol: 'ETHUSDT',
+        timeframe: '4h',
+        direction: 'long',
+        entry_price: '2369.0000',
+        stop_loss_price: '2307.2656',
+        take_profit_price: '2431.0000',
+        breakeven_price: '2369.0000',
+        is_breakeven_armed: false,
+        max_price: '2369.0000',
+        min_price: '2346.6200',
+        max_profit_pct: '0',
+        max_drawdown_pct: '-0.95',
+        status: 'open',
+        telegram_message_id: '6666',
+        strategy_name: 'UTILMATE_L',
+        created_at: createdAt16mAgo,
+        last_heartbeat_at: createdAt16mAgo,
+      };
+
+      vi.mocked(db.query)
+        .mockResolvedValueOnce({ rows: [openTrade15m] } as any)
+        .mockResolvedValueOnce({ rows: [] } as any);
+
+      const res15m = await runSignalMonitorCheck({ ETHUSDT: 2350.0 });
+      expect(res15m.heartbeatsSent).toBe(1);
+      expect(sendTelegramAlert).toHaveBeenCalledWith(
+        expect.stringContaining('Progress Update (15m Check-in • 4H)'),
+        'UTILMATE_L',
+        'signal',
+        undefined,
+        undefined,
+        6666,
+      );
+
+      // Now test 48h expiry
+      const createdAt49hAgo = new Date(Date.now() - 49 * 3600_000);
+      const expiredTrade: Partial<SignalMonitorRow> = {
+        ...openTrade15m,
+        id: 5,
+        created_at: createdAt49hAgo,
+        last_heartbeat_at: new Date(Date.now() - 5 * 3600_000),
+      };
+
+      vi.mocked(db.query)
+        .mockResolvedValueOnce({ rows: [expiredTrade] } as any)
+        .mockResolvedValueOnce({ rows: [] } as any);
+
+      const resExp = await runSignalMonitorCheck({ ETHUSDT: 2380.0 });
+      expect(resExp.closed).toBe(1);
+      expect(sendTelegramAlert).toHaveBeenCalledWith(
+        expect.stringContaining('48h Monitoring Complete (Final Summary)'),
+        'UTILMATE_L',
+        'signal',
+        undefined,
+        undefined,
+        6666,
       );
     });
   });

@@ -8,14 +8,54 @@
  *  4. Continuous check:
  *     - Price Guardian (Take Profit / Stop Loss hit) → closes and reports to thread.
  *     - Breakeven Milestone (+1R or 50% to TP) → moves SL to entry and notifies thread.
- *     - Bar-Close Heartbeat → periodic progress update aligned to the signal's timeframe.
+ *     - Tiered Heartbeat → periodic progress updates at 15m, 30m, 60m, then every 4h up to 48h.
  */
 
 import { db } from '@/lib/db/client';
 import { sendTelegramAlert } from '@/lib/alerts/telegram';
-import { TF_TO_MS } from '@/lib/exchange/binance';
-import type { Timeframe } from '@/types/market';
+import { fetchTickerPrices } from '@/lib/exchange/binance';
 import type { DynamicAtrLevels } from '@/types/strategy';
+
+const MIN_MS = 60_000;
+const HOUR_MS = 3_600_000;
+
+/**
+ * Tiered follow-up schedule from signal creation:
+ *  - 15m, 30m, 60m
+ *  - Then every 4h up to 48h (4h, 8h, 12h, 16h, 20h, 24h, 28h, 32h, 36h, 40h, 44h, 48h)
+ */
+export const HEARTBEAT_MILESTONES_MS: readonly number[] = [
+  15 * MIN_MS,
+  30 * MIN_MS,
+  60 * MIN_MS,
+  4 * HOUR_MS,
+  8 * HOUR_MS,
+  12 * HOUR_MS,
+  16 * HOUR_MS,
+  20 * HOUR_MS,
+  24 * HOUR_MS,
+  28 * HOUR_MS,
+  32 * HOUR_MS,
+  36 * HOUR_MS,
+  40 * HOUR_MS,
+  44 * HOUR_MS,
+  48 * HOUR_MS,
+];
+
+export const MAX_MONITOR_DURATION_MS = 48 * HOUR_MS;
+
+/**
+ * Returns the next heartbeat milestone offset (ms since created_at) that has not yet been sent,
+ * or null if all milestones up to 48h have already been covered.
+ */
+export function getNextHeartbeatMilestoneMs(lastHeartbeatOffsetMs: number): number | null {
+  for (const milestone of HEARTBEAT_MILESTONES_MS) {
+    if (milestone > lastHeartbeatOffsetMs) {
+      return milestone;
+    }
+  }
+  return null;
+}
 
 export interface SignalMonitorRow {
   id: number;
@@ -272,19 +312,29 @@ export async function runSignalMonitorCheck(
     );
 
     if (missingSymbols.length > 0) {
-      try {
-        const { rows: candleRows } = await db.query<{ symbol: string; close: string }>(
-          `SELECT DISTINCT ON (symbol) symbol, close
-           FROM candles
-           WHERE symbol = ANY($1)
-           ORDER BY symbol, open_time DESC`,
-          [missingSymbols],
-        );
-        for (const r of candleRows) {
-          prices[r.symbol] = parseFloat(r.close);
+      // 1. Fetch live spot prices directly from Binance REST for crypto symbols
+      const liveTickerPrices = await fetchTickerPrices(missingSymbols);
+      for (const [sym, price] of Object.entries(liveTickerPrices)) {
+        prices[sym] = price;
+      }
+
+      // 2. Fall back to DB candles for any remaining symbols (e.g. equities or if Binance unreachable)
+      const stillMissing = missingSymbols.filter((s) => prices[s] === undefined);
+      if (stillMissing.length > 0) {
+        try {
+          const { rows: candleRows } = await db.query<{ symbol: string; close: string }>(
+            `SELECT DISTINCT ON (symbol) symbol, close
+             FROM candles
+             WHERE symbol = ANY($1)
+             ORDER BY symbol, open_time DESC`,
+            [stillMissing],
+          );
+          for (const r of candleRows) {
+            prices[r.symbol] = parseFloat(r.close);
+          }
+        } catch (cErr) {
+          console.warn('[signal-monitor] Failed to fetch latest candle prices from DB:', cErr);
         }
-      } catch (cErr) {
-        console.warn('[signal-monitor] Failed to fetch latest candle prices from DB:', cErr);
       }
     }
 
@@ -438,11 +488,57 @@ export async function runSignalMonitorCheck(
         continue;
       }
 
-      // ── 4. Routine Timeframe Bar-Close Heartbeat ──────────────────────────
-      const tfMs = TF_TO_MS[m.timeframe as Timeframe] ?? 4 * 3600 * 1000;
-      const lastHbMs = m.last_heartbeat_at ? new Date(m.last_heartbeat_at).getTime() : new Date(m.created_at).getTime();
+      // ── 4. Check 48h Max Duration Expiry ──────────────────────────────────
+      const createdAtMs = new Date(m.created_at).getTime();
+      if (durationMs >= MAX_MONITOR_DURATION_MS) {
+        await db.query(
+          `UPDATE signal_monitors
+           SET status = 'closed', exit_reason = 'time_expired', exit_price = $1, exit_time = NOW(),
+               max_price = $2, min_price = $3, max_profit_pct = $4, max_drawdown_pct = $5,
+               last_checked_at = NOW()
+           WHERE id = $6`,
+          [curPrice, maxPrice, minPrice, maxProfitPct, maxDrawdownPct, m.id],
+        );
 
-      if (now - lastHbMs >= tfMs) {
+        if (m.signal_id) {
+          await db.query(
+            `UPDATE strategy_signals
+             SET actual_exit_price = $1, pnl_pct = $2, outcome_note = '48h monitor window expired', outcome_at = NOW()
+             WHERE id = $3`,
+            [curPrice, pnlPct, m.signal_id],
+          ).catch((err) => console.warn('[signal-monitor] Failed to update strategy_signals exit:', err));
+        }
+
+        if (rootMsgId) {
+          const expMsg =
+            `⏱️ <b>48h Monitoring Complete (Final Summary)</b>\n` +
+            `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()} • ${m.direction.toUpperCase()})\n` +
+            `• <b>Final Price:</b> $${curPrice.toFixed(4)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
+            `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
+            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${slPrice.toFixed(4)})`}\n` +
+            `• <b>Duration:</b> ${durationStr}\n` +
+            `• <b>Status:</b> Auto-closed after 48h window`;
+
+          sendTelegramAlert(
+            expMsg,
+            m.strategy_name,
+            'signal',
+            undefined,
+            undefined,
+            rootMsgId,
+          ).catch((err) => console.warn('[signal-monitor] Failed to send 48h expiry alert:', err));
+        }
+
+        result.closed++;
+        continue;
+      }
+
+      // ── 5. Tiered Heartbeat (15m, 30m, 60m, then every 4h in 48h) ─────────
+      const lastHbMs = m.last_heartbeat_at ? new Date(m.last_heartbeat_at).getTime() : createdAtMs;
+      const lastHbOffsetMs = Math.max(0, lastHbMs - createdAtMs);
+      const nextMilestoneMs = getNextHeartbeatMilestoneMs(lastHbOffsetMs);
+
+      if (nextMilestoneMs !== null && durationMs >= nextMilestoneMs) {
         await db.query(
           `UPDATE signal_monitors
            SET last_heartbeat_at = NOW(), max_price = $1, min_price = $2,
@@ -452,8 +548,9 @@ export async function runSignalMonitorCheck(
         );
 
         if (rootMsgId) {
+          const milestoneLabel = formatTradeDuration(nextMilestoneMs);
           const hbMsg =
-            `📊 <b>${m.timeframe.toUpperCase()} Candle Progress Update</b>\n` +
+            `📊 <b>Progress Update (${milestoneLabel} Check-in • ${m.timeframe.toUpperCase()})</b>\n` +
             `• <b>Symbol:</b> ${m.symbol} (${m.direction.toUpperCase()})\n` +
             `• <b>Current Price:</b> $${curPrice.toFixed(4)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
             `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +

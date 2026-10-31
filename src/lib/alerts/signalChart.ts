@@ -309,8 +309,8 @@ export function generateSignalChartSvg(params: SignalChartParams): string {
   const dirBorder = isLong ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)';
   const dirText = isLong ? 'LONG ▲' : 'SHORT ▼';
 
-  const stars = '★'.repeat(Math.max(1, Math.min(5, Math.round(rating)))) +
-                '☆'.repeat(Math.max(0, 5 - Math.round(rating)));
+  const stars = '★'.repeat(Math.max(1, Math.min(7, Math.round(rating)))) +
+                '☆'.repeat(Math.max(0, 7 - Math.round(rating)));
 
   const signalTag = signalId ? `sig#${signalId}` : '';
 

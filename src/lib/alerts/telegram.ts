@@ -165,6 +165,7 @@ export async function sendTelegramAlert(
         }
 
         // If image is present, send photo first
+        let sentPhotoMsgId: number | undefined;
         if (image?.buffer) {
           try {
             const formData = new FormData();
@@ -202,6 +203,7 @@ export async function sendTelegramAlert(
               const photoPayload = await photoRes.json().catch(() => ({})) as { result?: { message_id?: number } };
               const pMsgId = photoPayload.result?.message_id;
               if (pMsgId) {
+                sentPhotoMsgId = pMsgId;
                 chatMessageIds[chatId] = pMsgId;
                 primaryMessageId ??= pMsgId;
               }
@@ -211,13 +213,14 @@ export async function sendTelegramAlert(
           }
         }
 
+        const effectiveReplyId = replyToMessageId ?? sentPhotoMsgId;
         const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: 'HTML' };
         if (threadId) {
           body.message_thread_id = threadId;
         }
-        if (replyToMessageId) {
-          body.reply_parameters = { message_id: replyToMessageId };
-          body.reply_to_message_id = replyToMessageId;
+        if (effectiveReplyId) {
+          body.reply_parameters = { message_id: effectiveReplyId };
+          body.reply_to_message_id = effectiveReplyId;
         }
 
         let res = await fetch(`${TELEGRAM_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -262,7 +265,7 @@ export async function sendTelegramAlert(
             const mId = okPayload.result?.message_id;
             if (mId) {
               chatMessageIds[chatId] = mId;
-              primaryMessageId ??= mId;
+              primaryMessageId = mId;
             }
           }
         } else {
@@ -271,7 +274,7 @@ export async function sendTelegramAlert(
           const mId = okPayload.result?.message_id;
           if (mId) {
             chatMessageIds[chatId] = mId;
-            primaryMessageId ??= mId;
+            primaryMessageId = mId;
           }
         }
       } catch (err) {

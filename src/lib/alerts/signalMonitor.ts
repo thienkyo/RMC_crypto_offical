@@ -14,6 +14,7 @@
 import { db } from '@/lib/db/client';
 import { sendTelegramAlert } from '@/lib/alerts/telegram';
 import { fetchTickerPrices } from '@/lib/exchange/binance';
+import { formatChartPrice } from '@/lib/format';
 import type { DynamicAtrLevels } from '@/types/strategy';
 
 const MIN_MS = 60_000;
@@ -47,14 +48,26 @@ export const MAX_MONITOR_DURATION_MS = 48 * HOUR_MS;
 /**
  * Returns the next heartbeat milestone offset (ms since created_at) that has not yet been sent,
  * or null if all milestones up to 48h have already been covered.
+ * When `currentDurationMs` is passed, advances to the latest reached milestone if multiple
+ * milestones elapsed while the server was paused.
  */
-export function getNextHeartbeatMilestoneMs(lastHeartbeatOffsetMs: number): number | null {
+export function getNextHeartbeatMilestoneMs(
+  lastHeartbeatOffsetMs: number,
+  currentDurationMs?: number,
+): number | null {
+  let next: number | null = null;
   for (const milestone of HEARTBEAT_MILESTONES_MS) {
     if (milestone > lastHeartbeatOffsetMs) {
-      return milestone;
+      if (next === null) {
+        next = milestone;
+      } else if (currentDurationMs !== undefined && currentDurationMs >= milestone) {
+        next = milestone;
+      } else {
+        break;
+      }
     }
   }
-  return null;
+  return next;
 }
 
 export interface SignalMonitorRow {
@@ -159,17 +172,20 @@ export async function registerOrConfirmSignalMonitor(
       const oppMsgIdStr = opposing.telegram_message_id;
       if (oppMsgIdStr) {
         const oppMsgId = parseInt(oppMsgIdStr, 10);
+        const oppTopic = opposing.telegram_thread_id
+          ? { enabled: true, name: opposing.telegram_thread_id }
+          : telegramTopic;
         const conflictMsg =
           `⚠️ <b>Directional Conflict Warning</b>\n` +
           `An opposing <b>${direction.toUpperCase()}</b> setup just fired on <b>${symbol}</b> (${timeframe.toUpperCase()} • ${strategyName}).\n` +
-          `• Active position: <b>${opposing.direction.toUpperCase()}</b> from $${parseFloat(opposing.entry_price).toFixed(4)}\n` +
+          `• Active position: <b>${opposing.direction.toUpperCase()}</b> from $${formatChartPrice(parseFloat(opposing.entry_price))}\n` +
           `• Suggestion: Consider tightening your Stop Loss or locking partial profits.`;
 
         sendTelegramAlert(
           conflictMsg,
           strategyName,
           'signal',
-          telegramTopic,
+          oppTopic,
           undefined,
           oppMsgId,
         ).catch((err) => console.warn('[signal-monitor] Failed to send conflict alert:', err));
@@ -198,18 +214,21 @@ export async function registerOrConfirmSignalMonitor(
       // Threaded confirmation reply under the original trade message
       if (active.telegram_message_id) {
         const rootMsgId = parseInt(active.telegram_message_id, 10);
+        const activeTopic = active.telegram_thread_id
+          ? { enabled: true, name: active.telegram_thread_id }
+          : telegramTopic;
         const confluenceMsg =
           `🔗 <b>Signal Confluence Boost (#${newCount})</b>\n` +
           `• <b>Setup:</b> ${timeframe.toUpperCase()} <code>${strategyName}</code> confirmed this ${direction.toUpperCase()}.\n` +
-          `• <b>Original Entry:</b> $${parseFloat(active.entry_price).toFixed(4)}\n` +
-          `• <b>Current Trigger:</b> $${entryPrice.toFixed(4)}\n` +
+          `• <b>Original Entry:</b> $${formatChartPrice(parseFloat(active.entry_price))}\n` +
+          `• <b>Current Trigger:</b> $${formatChartPrice(entryPrice)}\n` +
           `• <i>Tracking as single unified trade thread.</i>`;
 
         sendTelegramAlert(
           confluenceMsg,
           strategyName,
           'signal',
-          telegramTopic,
+          activeTopic,
           undefined,
           rootMsgId,
         ).catch((err) => console.warn('[signal-monitor] Failed to send confluence alert:', err));
@@ -235,19 +254,22 @@ export async function registerOrConfirmSignalMonitor(
         : entryPrice * (1 - tpPct / 100);
 
     const breakevenPrice = entryPrice;
+    const topicName = telegramTopic?.enabled && telegramTopic.name.trim()
+      ? telegramTopic.name.trim()
+      : null;
 
     const { rows: insertRows } = await db.query<{ id: number }>(
       `INSERT INTO signal_monitors (
          signal_id, strategy_id, strategy_name, symbol, timeframe, direction,
          entry_price, stop_loss_price, take_profit_price, breakeven_price,
          is_breakeven_armed, status, max_price, min_price,
-         telegram_chat_id, telegram_message_id, confluence_count,
+         telegram_chat_id, telegram_message_id, telegram_thread_id, confluence_count,
          last_heartbeat_at, last_checked_at, created_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6,
          $7, $8, $9, $10,
          FALSE, 'open', $7, $7,
-         $11, $12, 1,
+         $11, $12, $13, 1,
          NOW(), NOW(), NOW()
        ) RETURNING id`,
       [
@@ -263,6 +285,7 @@ export async function registerOrConfirmSignalMonitor(
         breakevenPrice,
         telegramChatId ?? null,
         telegramMessageId ?? null,
+        topicName,
       ],
     );
 
@@ -359,6 +382,9 @@ export async function runSignalMonitorCheck(
       let maxDrawdownPct = Math.min(parseFloat(m.max_drawdown_pct), pnlPct);
 
       const rootMsgId = m.telegram_message_id ? parseInt(m.telegram_message_id, 10) : undefined;
+      const monitorTopic = m.telegram_thread_id
+        ? { enabled: true, name: m.telegram_thread_id }
+        : undefined;
       const durationMs = now - new Date(m.created_at).getTime();
       const durationStr = formatTradeDuration(durationMs);
 
@@ -387,7 +413,7 @@ export async function runSignalMonitorCheck(
           const tpMsg =
             `🎯 <b>Target Reached! (Take Profit)</b>\n` +
             `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()} • ${m.direction.toUpperCase()})\n` +
-            `• <b>Exit Price:</b> $${curPrice.toFixed(4)} (<b>+${pnlPct.toFixed(2)}%</b>)\n` +
+            `• <b>Exit Price:</b> $${formatChartPrice(curPrice)} (<b>+${pnlPct.toFixed(2)}%</b>)\n` +
             `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
             `• <b>Trade Duration:</b> ${durationStr}\n` +
             `• <b>Outcome:</b> Profit target fully achieved ✅`;
@@ -396,7 +422,7 @@ export async function runSignalMonitorCheck(
             tpMsg,
             m.strategy_name,
             'signal',
-            undefined,
+            monitorTopic,
             undefined,
             rootMsgId,
           ).catch((err) => console.warn('[signal-monitor] Failed to send TP alert:', err));
@@ -433,7 +459,7 @@ export async function runSignalMonitorCheck(
           const slMsg =
             `${exitLabel}\n` +
             `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()} • ${m.direction.toUpperCase()})\n` +
-            `• <b>Exit Price:</b> $${curPrice.toFixed(4)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
+            `• <b>Exit Price:</b> $${formatChartPrice(curPrice)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
             `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
             `• <b>Trade Duration:</b> ${durationStr}\n` +
             `• <b>Summary:</b> ${m.is_breakeven_armed ? 'Exited with zero loss (protected at breakeven).' : 'Closed at risk stop boundary.'}`;
@@ -442,7 +468,7 @@ export async function runSignalMonitorCheck(
             slMsg,
             m.strategy_name,
             'signal',
-            undefined,
+            monitorTopic,
             undefined,
             rootMsgId,
           ).catch((err) => console.warn('[signal-monitor] Failed to send SL alert:', err));
@@ -470,15 +496,15 @@ export async function runSignalMonitorCheck(
           const beMsg =
             `📍 <b>Milestone: +${pnlPct.toFixed(1)}% Reached</b>\n` +
             `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()})\n` +
-            `• <b>Current Price:</b> $${curPrice.toFixed(4)}\n` +
-            `• <b>Action:</b> Stop Loss automatically moved to <b>Breakeven ($${entryPrice.toFixed(4)})</b>.\n` +
+            `• <b>Current Price:</b> $${formatChartPrice(curPrice)}\n` +
+            `• <b>Action:</b> Stop Loss automatically moved to <b>Breakeven ($${formatChartPrice(entryPrice)})</b>.\n` +
             `• <b>Trade Status:</b> Risk-free runner active 🛡️`;
 
           sendTelegramAlert(
             beMsg,
             m.strategy_name,
             'signal',
-            undefined,
+            monitorTopic,
             undefined,
             rootMsgId,
           ).catch((err) => console.warn('[signal-monitor] Failed to send BE alert:', err));
@@ -513,9 +539,9 @@ export async function runSignalMonitorCheck(
           const expMsg =
             `⏱️ <b>48h Monitoring Complete (Final Summary)</b>\n` +
             `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()} • ${m.direction.toUpperCase()})\n` +
-            `• <b>Final Price:</b> $${curPrice.toFixed(4)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
+            `• <b>Final Price:</b> $${formatChartPrice(curPrice)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
             `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
-            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${slPrice.toFixed(4)})`}\n` +
+            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${formatChartPrice(slPrice)})`}\n` +
             `• <b>Duration:</b> ${durationStr}\n` +
             `• <b>Status:</b> Auto-closed after 48h window`;
 
@@ -523,7 +549,7 @@ export async function runSignalMonitorCheck(
             expMsg,
             m.strategy_name,
             'signal',
-            undefined,
+            monitorTopic,
             undefined,
             rootMsgId,
           ).catch((err) => console.warn('[signal-monitor] Failed to send 48h expiry alert:', err));
@@ -536,7 +562,7 @@ export async function runSignalMonitorCheck(
       // ── 5. Tiered Heartbeat (15m, 30m, 60m, then every 4h in 48h) ─────────
       const lastHbMs = m.last_heartbeat_at ? new Date(m.last_heartbeat_at).getTime() : createdAtMs;
       const lastHbOffsetMs = Math.max(0, lastHbMs - createdAtMs);
-      const nextMilestoneMs = getNextHeartbeatMilestoneMs(lastHbOffsetMs);
+      const nextMilestoneMs = getNextHeartbeatMilestoneMs(lastHbOffsetMs, durationMs);
 
       if (nextMilestoneMs !== null && durationMs >= nextMilestoneMs) {
         await db.query(
@@ -552,16 +578,16 @@ export async function runSignalMonitorCheck(
           const hbMsg =
             `📊 <b>Progress Update (${milestoneLabel} Check-in • ${m.timeframe.toUpperCase()})</b>\n` +
             `• <b>Symbol:</b> ${m.symbol} (${m.direction.toUpperCase()})\n` +
-            `• <b>Current Price:</b> $${curPrice.toFixed(4)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
+            `• <b>Current Price:</b> $${formatChartPrice(curPrice)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
             `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
-            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${slPrice.toFixed(4)})`}\n` +
+            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${formatChartPrice(slPrice)})`}\n` +
             `• <b>Duration:</b> ${durationStr}`;
 
           sendTelegramAlert(
             hbMsg,
             m.strategy_name,
             'signal',
-            undefined,
+            monitorTopic,
             undefined,
             rootMsgId,
           ).catch((err) => console.warn('[signal-monitor] Failed to send heartbeat alert:', err));

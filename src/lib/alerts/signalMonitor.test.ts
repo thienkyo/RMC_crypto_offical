@@ -34,7 +34,7 @@ describe('Signal Monitor Engine', () => {
   });
 
   describe('getNextHeartbeatMilestoneMs', () => {
-    it('follows 15m -> 30m -> 60m -> 4h ... -> 48h schedule', () => {
+    it('follows 15m -> 30m -> 60m -> 4h ... -> 48h schedule and catches up if paused', () => {
       expect(getNextHeartbeatMilestoneMs(0)).toBe(15 * 60_000);
       expect(getNextHeartbeatMilestoneMs(15 * 60_000)).toBe(30 * 60_000);
       expect(getNextHeartbeatMilestoneMs(30 * 60_000)).toBe(60 * 60_000);
@@ -42,6 +42,8 @@ describe('Signal Monitor Engine', () => {
       expect(getNextHeartbeatMilestoneMs(4 * 3600_000)).toBe(8 * 3600_000);
       expect(getNextHeartbeatMilestoneMs(44 * 3600_000)).toBe(48 * 3600_000);
       expect(getNextHeartbeatMilestoneMs(48 * 3600_000)).toBeNull();
+      // Catch-up: if last Hb was 0 and 65m have elapsed, advances to 60m milestone
+      expect(getNextHeartbeatMilestoneMs(0, 65 * 60_000)).toBe(60 * 60_000);
     });
   });
 
@@ -189,7 +191,7 @@ describe('Signal Monitor Engine', () => {
 
       // Verify Telegram reply sent with breakeven notice
       expect(sendTelegramAlert).toHaveBeenCalledWith(
-        expect.stringContaining('Stop Loss automatically moved to <b>Breakeven ($5.0000)</b>'),
+        expect.stringContaining('Stop Loss automatically moved to <b>Breakeven ($5.00)</b>'),
         'UTILMATE_L',
         'signal',
         undefined,

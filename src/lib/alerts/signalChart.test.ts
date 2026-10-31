@@ -46,6 +46,23 @@ describe('signalChart', () => {
     expect(svg).toContain('TP:');
     expect(svg).toContain('MAX:');
     expect(svg).toContain('▲ BUY');
+    expect(svg).toContain('★★★★☆☆☆');
+  });
+
+  it('renders 7 stars correctly on a 7-star rating', () => {
+    const svg = generateSignalChartSvg({
+      symbol: 'NEARUSDT',
+      timeframe: '4h',
+      strategyName: 'UTILMATE_L',
+      direction: 'long',
+      rating: 7,
+      entryPrice: 4.28,
+      candles: mockCandles,
+      signalId: 868,
+    });
+
+    expect(svg).toContain('★★★★★★★');
+    expect(svg).toContain('sig#868');
   });
 
   it('renders AI Gatekeeper badge in SVG header when aiEvaluation is provided', () => {

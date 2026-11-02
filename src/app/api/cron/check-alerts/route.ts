@@ -24,7 +24,7 @@ import { generateSignalChartPng } from '@/lib/alerts/signalChart';
 import { logStrategySignal, markSignalDelivered } from '@/lib/db/signals';
 import { shouldRunAiVerdict } from '@/lib/strategy/rating';
 import { evaluateMarketFlush, type FiredSignalSummary } from '@/lib/ai/evaluator/macro';
-import { registerOrConfirmSignalMonitor, runSignalMonitorCheck } from '@/lib/alerts/signalMonitor';
+import { getActiveOpenMonitor, registerOrConfirmSignalMonitor, runSignalMonitorCheck } from '@/lib/alerts/signalMonitor';
 
 export const maxDuration = 60;
 
@@ -147,14 +147,79 @@ export async function runCheckAlerts(): Promise<Response> {
   const dedupedFiredResults = Array.from(bestBySymbol.values());
   firedCount += dedupedFiredResults.length;
 
+  // ── 2c. Deduplication against already-open positions (Option 3) ───────────
+  // If a trade is already open on this symbol in the same direction,
+  // do not send a duplicate Telegram alert or chart image.
+  // Instead, silently log the signal to DB and update confluence.
+  const newFiredResults: Array<Extract<StrategyNotifyResult, { fired: true }>> = [];
+
+  for (const f of dedupedFiredResults) {
+    const direction = f.strategy.action.type === 'enter_long' ? 'long' : 'short';
+    let activeMonitor: Awaited<ReturnType<typeof getActiveOpenMonitor>> = null;
+    try {
+      activeMonitor = await getActiveOpenMonitor(f.strategy.symbol, direction);
+    } catch (err) {
+      console.warn(`[cron:check-alerts] Failed to check active monitor for ${f.strategy.symbol}:`, err);
+    }
+
+    if (activeMonitor) {
+      console.log(
+        `[cron:check-alerts] Suppressing duplicate alert for ${f.strategy.name} (${f.strategy.symbol} ${direction.toUpperCase()} already open as #${activeMonitor.id})`,
+      );
+
+      let signalId: number | undefined;
+      try {
+        signalId = await logStrategySignal({
+          strategyId:          f.strategy.id,
+          strategyName:        f.strategy.name,
+          symbol:              f.strategy.symbol,
+          timeframe:           f.strategy.timeframe,
+          direction,
+          entryPrice:          f.entryPrice,
+          stopLossPct:         f.strategy.risk?.stopLossPct,
+          takeProfitPct:       f.strategy.risk?.takeProfitPct,
+          candleTime:          f.candleTime,
+          telegramDelivered:   false,
+          conditionsSnapshot:  f.conditionGroups,
+          rating:              f.rating,
+          entryPriceLimit:     f.entryPriceLimit,
+        });
+      } catch (err) {
+        console.error('[cron:check-alerts] logStrategySignal failed:', err);
+      }
+
+      await registerOrConfirmSignalMonitor({
+        signalId,
+        strategyId:    f.strategy.id,
+        strategyName:  f.strategy.name,
+        symbol:        f.strategy.symbol,
+        timeframe:     f.strategy.timeframe,
+        direction,
+        entryPrice:    f.entryPrice,
+      }).catch((mErr) =>
+        console.warn('[cron:check-alerts] registerOrConfirmSignalMonitor failed:', mErr),
+      );
+
+      strategyDebug.push({
+        name:      f.strategy.name,
+        symbol:    f.strategy.symbol,
+        timeframe: f.strategy.timeframe,
+        result:    `suppressed_active_trade (active ${direction.toUpperCase()} #${activeMonitor.id})`,
+        debug:     f.debug as Record<string, unknown> | undefined,
+      });
+    } else {
+      newFiredResults.push(f);
+    }
+  }
+
   // ── 3. Branch: Option E (Market Flush >= 3) vs Option A + C (Isolated < 3) ──
   const FLUSH_THRESHOLD = 3;
 
-  if (dedupedFiredResults.length >= FLUSH_THRESHOLD) {
+  if (newFiredResults.length >= FLUSH_THRESHOLD) {
     // ── Option E: Market Flush Consolidated Digest ───────────────────────────
-    console.log(`[cron:check-alerts] MARKET FLUSH: ${dedupedFiredResults.length} strategies fired simultaneously!`);
+    console.log(`[cron:check-alerts] MARKET FLUSH: ${newFiredResults.length} strategies fired simultaneously!`);
 
-    const signalSummaries: FiredSignalSummary[] = dedupedFiredResults.map((f) => ({
+    const signalSummaries: FiredSignalSummary[] = newFiredResults.map((f) => ({
       strategyName: f.strategy.name,
       symbol: f.strategy.symbol,
       timeframe: f.strategy.timeframe,
@@ -166,13 +231,13 @@ export async function runCheckAlerts(): Promise<Response> {
     // 1 single Macro AI call for the entire cluster
     const macroEvaluation = await evaluateMarketFlush(
       signalSummaries,
-      dedupedFiredResults[0]?.candleTime ?? Date.now(),
+      newFiredResults[0]?.candleTime ?? Date.now(),
     );
 
     // Log all signals to DB first so we can include their DB signalId in the Telegram digest
     const loggedSignalIds = new Map<string, number>();
     await Promise.all(
-      dedupedFiredResults.map(async (f) => {
+      newFiredResults.map(async (f) => {
         try {
           const sigId = await logStrategySignal({
             strategyId:          f.strategy.id,
@@ -198,7 +263,7 @@ export async function runCheckAlerts(): Promise<Response> {
 
     // 1 consolidated Telegram message (with signalId and strategyId per row)
     const digestMessage = formatMarketFlushMessage({
-      signals: dedupedFiredResults.map((f) => ({
+      signals: newFiredResults.map((f) => ({
         strategyName: f.strategy.name,
         symbol:       f.strategy.symbol,
         timeframe:    f.strategy.timeframe,
@@ -209,12 +274,12 @@ export async function runCheckAlerts(): Promise<Response> {
         strategyId:   f.strategy.id,
       })),
       macroEvaluation,
-      timestamp: dedupedFiredResults[0]?.candleTime ?? Date.now(),
+      timestamp: newFiredResults[0]?.candleTime ?? Date.now(),
     });
 
     const telegramResult = await sendTelegramAlert(
       digestMessage,
-      `Market Flush (${dedupedFiredResults.length})`,
+      `Market Flush (${newFiredResults.length})`,
       'signal',
     );
 
@@ -232,7 +297,7 @@ export async function runCheckAlerts(): Promise<Response> {
       ? `Digest sent to ${telegramResult.delivered} chat(s)`
       : `failed: ${telegramResult.error}`;
 
-    for (const f of dedupedFiredResults) {
+    for (const f of newFiredResults) {
       strategyDebug.push({
         name:      f.strategy.name,
         symbol:    f.strategy.symbol,
@@ -242,12 +307,12 @@ export async function runCheckAlerts(): Promise<Response> {
         debug:     f.debug as Record<string, unknown> | undefined,
       });
     }
-  } else if (dedupedFiredResults.length > 0) {
+  } else if (newFiredResults.length > 0) {
     // ── Option A + C: Individual Signal Processing with Cycle Cap ────────────
     const MAX_AI_PER_CYCLE = 2;
 
     // Filter AI candidates (Option C: strategy.aiGatekeeperEnabled === true && rating >= threshold)
-    const aiCandidates = dedupedFiredResults.filter(
+    const aiCandidates = newFiredResults.filter(
       (f) => f.strategy.aiGatekeeperEnabled === true && shouldRunAiVerdict(f.rating, f.strategy.minSignalRating),
     );
 
@@ -255,7 +320,7 @@ export async function runCheckAlerts(): Promise<Response> {
     aiCandidates.sort((a, b) => b.rating - a.rating);
     const eligibleForAi = new Set(aiCandidates.slice(0, MAX_AI_PER_CYCLE).map((f) => f.strategy.id));
 
-    for (const f of dedupedFiredResults) {
+    for (const f of newFiredResults) {
       const direction = f.strategy.action.type === 'enter_long' ? 'long' : 'short';
       let aiEvaluation: import('@/lib/ai/evaluator/types').OrderEvaluationResult | undefined;
       let finalMessage = f.message;
@@ -402,6 +467,7 @@ export async function runCheckAlerts(): Promise<Response> {
             takeProfitPct:   f.strategy.risk.takeProfitPct,
             candles:         f.closedCandles,
             signalId,
+            candleTime:      f.candleTime,
             aiEvaluation,
             dynamicLevels:   f.dynamicLevels,
           });

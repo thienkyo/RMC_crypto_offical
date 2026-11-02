@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   formatTradeDuration,
   getNextHeartbeatMilestoneMs,
+  getActiveOpenMonitor,
   registerOrConfirmSignalMonitor,
   runSignalMonitorCheck,
   type SignalMonitorRow,
@@ -44,6 +45,27 @@ describe('Signal Monitor Engine', () => {
       expect(getNextHeartbeatMilestoneMs(48 * 3600_000)).toBeNull();
       // Catch-up: if last Hb was 0 and 65m have elapsed, advances to 60m milestone
       expect(getNextHeartbeatMilestoneMs(0, 65 * 60_000)).toBe(60 * 60_000);
+    });
+  });
+
+  describe('getActiveOpenMonitor', () => {
+    it('returns the open monitor when found', async () => {
+      const mockMonitor = { id: 10, symbol: 'BTCUSDT', direction: 'long', status: 'open' };
+      vi.mocked(db.query).mockResolvedValueOnce({ rows: [mockMonitor] } as any);
+
+      const result = await getActiveOpenMonitor('BTCUSDT', 'long');
+      expect(result).toEqual(mockMonitor);
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining("status = 'open'"),
+        ['BTCUSDT', 'long'],
+      );
+    });
+
+    it('returns null when no open monitor exists', async () => {
+      vi.mocked(db.query).mockResolvedValueOnce({ rows: [] } as any);
+
+      const result = await getActiveOpenMonitor('ETHUSDT', 'short');
+      expect(result).toBeNull();
     });
   });
 
@@ -109,18 +131,11 @@ describe('Signal Monitor Engine', () => {
       expect(res.monitorId).toBe(42);
       expect(res.confluenceCount).toBe(2);
 
-      // Verify threaded reply sent to root message 8888
-      expect(sendTelegramAlert).toHaveBeenCalledWith(
-        expect.stringContaining('Signal Confluence Boost (#2)'),
-        'MACD_L',
-        'signal',
-        undefined,
-        undefined,
-        8888,
-      );
+      // Action-only mode: confluence count is updated in DB without spamming Telegram
+      expect(sendTelegramAlert).not.toHaveBeenCalled();
     });
 
-    it('warns active monitor thread when opposing signal fires (Directional Conflict)', async () => {
+    it('creates monitor when opposing signal fires without spamming conflict warning', async () => {
       const activeLong: Partial<SignalMonitorRow> = {
         id: 77,
         symbol: 'BTCUSDT',
@@ -145,15 +160,7 @@ describe('Signal Monitor Engine', () => {
       });
 
       expect(res.action).toBe('created');
-      // Verify conflict warning was sent to the active Long thread (7777)
-      expect(sendTelegramAlert).toHaveBeenCalledWith(
-        expect.stringContaining('Directional Conflict Warning'),
-        'Bear_Sniper',
-        'signal',
-        undefined,
-        undefined,
-        7777,
-      );
+      expect(sendTelegramAlert).not.toHaveBeenCalled();
     });
   });
 
@@ -278,7 +285,7 @@ describe('Signal Monitor Engine', () => {
       );
     });
 
-    it('sends tiered heartbeat at 15m and auto-expires trade at 48h', async () => {
+    it('updates MFE/MAE silently at 15m and auto-expires trade silently at 48h (Action-Only mode)', async () => {
       const createdAt16mAgo = new Date(Date.now() - 16 * 60_000);
       const openTrade15m: Partial<SignalMonitorRow> = {
         id: 4,
@@ -306,17 +313,10 @@ describe('Signal Monitor Engine', () => {
         .mockResolvedValueOnce({ rows: [] } as any);
 
       const res15m = await runSignalMonitorCheck({ ETHUSDT: 2350.0 });
-      expect(res15m.heartbeatsSent).toBe(1);
-      expect(sendTelegramAlert).toHaveBeenCalledWith(
-        expect.stringContaining('Progress Update (15m Check-in • 4H)'),
-        'UTILMATE_L',
-        'signal',
-        undefined,
-        undefined,
-        6666,
-      );
+      expect(res15m.heartbeatsSent).toBe(0);
+      expect(sendTelegramAlert).not.toHaveBeenCalled();
 
-      // Now test 48h expiry
+      // Now test 48h expiry (silent DB closure without Telegram spam)
       const createdAt49hAgo = new Date(Date.now() - 49 * 3600_000);
       const expiredTrade: Partial<SignalMonitorRow> = {
         ...openTrade15m,
@@ -331,14 +331,7 @@ describe('Signal Monitor Engine', () => {
 
       const resExp = await runSignalMonitorCheck({ ETHUSDT: 2380.0 });
       expect(resExp.closed).toBe(1);
-      expect(sendTelegramAlert).toHaveBeenCalledWith(
-        expect.stringContaining('48h Monitoring Complete (Final Summary)'),
-        'UTILMATE_L',
-        'signal',
-        undefined,
-        undefined,
-        6666,
-      );
+      expect(sendTelegramAlert).not.toHaveBeenCalled();
     });
   });
 });

@@ -135,6 +135,22 @@ export function formatTradeDuration(ms: number): string {
 }
 
 /**
+ * Check if there is an active, open monitor for a given symbol and direction.
+ */
+export async function getActiveOpenMonitor(
+  symbol: string,
+  direction: 'long' | 'short',
+): Promise<SignalMonitorRow | null> {
+  const { rows } = await db.query<SignalMonitorRow>(
+    `SELECT * FROM signal_monitors
+     WHERE symbol = $1 AND direction = $2 AND status = 'open'
+     ORDER BY created_at ASC LIMIT 1`,
+    [symbol, direction],
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * Register a newly fired signal into active monitoring, or confirm an existing
  * active trade if one already exists for this symbol and direction.
  */
@@ -158,50 +174,19 @@ export async function registerOrConfirmSignalMonitor(
   } = params;
 
   try {
-    // ── 1. Check for active opposing signal (Directional Conflict Alert) ──
+    // ── 1. Check for active opposing signal (Directional Conflict) ────────
     const opposingDir = direction === 'long' ? 'short' : 'long';
-    const { rows: opposingRows } = await db.query<SignalMonitorRow>(
-      `SELECT * FROM signal_monitors
+    await db.query<SignalMonitorRow>(
+      `SELECT id FROM signal_monitors
        WHERE symbol = $1 AND direction = $2 AND status = 'open'
        ORDER BY created_at DESC LIMIT 1`,
       [symbol, opposingDir],
     );
 
-    if (opposingRows.length > 0) {
-      const opposing = opposingRows[0]!;
-      const oppMsgIdStr = opposing.telegram_message_id;
-      if (oppMsgIdStr) {
-        const oppMsgId = parseInt(oppMsgIdStr, 10);
-        const oppTopic = opposing.telegram_thread_id
-          ? { enabled: true, name: opposing.telegram_thread_id }
-          : telegramTopic;
-        const conflictMsg =
-          `⚠️ <b>Directional Conflict Warning</b>\n` +
-          `An opposing <b>${direction.toUpperCase()}</b> setup just fired on <b>${symbol}</b> (${timeframe.toUpperCase()} • ${strategyName}).\n` +
-          `• Active position: <b>${opposing.direction.toUpperCase()}</b> from $${formatChartPrice(parseFloat(opposing.entry_price))}\n` +
-          `• Suggestion: Consider tightening your Stop Loss or locking partial profits.`;
-
-        sendTelegramAlert(
-          conflictMsg,
-          strategyName,
-          'signal',
-          oppTopic,
-          undefined,
-          oppMsgId,
-        ).catch((err) => console.warn('[signal-monitor] Failed to send conflict alert:', err));
-      }
-    }
-
     // ── 2. Check for active same-direction signal (Confluence rule) ────────
-    const { rows: activeRows } = await db.query<SignalMonitorRow>(
-      `SELECT * FROM signal_monitors
-       WHERE symbol = $1 AND direction = $2 AND status = 'open'
-       ORDER BY created_at ASC LIMIT 1`,
-      [symbol, direction],
-    );
+    const active = await getActiveOpenMonitor(symbol, direction);
 
-    if (activeRows.length > 0) {
-      const active = activeRows[0]!;
+    if (active) {
       const newCount = (active.confluence_count ?? 1) + 1;
 
       await db.query(
@@ -210,29 +195,6 @@ export async function registerOrConfirmSignalMonitor(
          WHERE id = $2`,
         [newCount, active.id],
       );
-
-      // Threaded confirmation reply under the original trade message
-      if (active.telegram_message_id) {
-        const rootMsgId = parseInt(active.telegram_message_id, 10);
-        const activeTopic = active.telegram_thread_id
-          ? { enabled: true, name: active.telegram_thread_id }
-          : telegramTopic;
-        const confluenceMsg =
-          `🔗 <b>Signal Confluence Boost (#${newCount})</b>\n` +
-          `• <b>Setup:</b> ${timeframe.toUpperCase()} <code>${strategyName}</code> confirmed this ${direction.toUpperCase()}.\n` +
-          `• <b>Original Entry:</b> $${formatChartPrice(parseFloat(active.entry_price))}\n` +
-          `• <b>Current Trigger:</b> $${formatChartPrice(entryPrice)}\n` +
-          `• <i>Tracking as single unified trade thread.</i>`;
-
-        sendTelegramAlert(
-          confluenceMsg,
-          strategyName,
-          'signal',
-          activeTopic,
-          undefined,
-          rootMsgId,
-        ).catch((err) => console.warn('[signal-monitor] Failed to send confluence alert:', err));
-      }
 
       return { action: 'confirmed', monitorId: active.id, confluenceCount: newCount };
     }
@@ -514,8 +476,7 @@ export async function runSignalMonitorCheck(
         continue;
       }
 
-      // ── 4. Check 48h Max Duration Expiry ──────────────────────────────────
-      const createdAtMs = new Date(m.created_at).getTime();
+      // ── 4. Check 48h Max Duration Expiry (silent DB cleanup, no Telegram spam) ──
       if (durationMs >= MAX_MONITOR_DURATION_MS) {
         await db.query(
           `UPDATE signal_monitors
@@ -535,69 +496,11 @@ export async function runSignalMonitorCheck(
           ).catch((err) => console.warn('[signal-monitor] Failed to update strategy_signals exit:', err));
         }
 
-        if (rootMsgId) {
-          const expMsg =
-            `⏱️ <b>48h Monitoring Complete (Final Summary)</b>\n` +
-            `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()} • ${m.direction.toUpperCase()})\n` +
-            `• <b>Final Price:</b> $${formatChartPrice(curPrice)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
-            `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
-            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${formatChartPrice(slPrice)})`}\n` +
-            `• <b>Duration:</b> ${durationStr}\n` +
-            `• <b>Status:</b> Auto-closed after 48h window`;
-
-          sendTelegramAlert(
-            expMsg,
-            m.strategy_name,
-            'signal',
-            monitorTopic,
-            undefined,
-            rootMsgId,
-          ).catch((err) => console.warn('[signal-monitor] Failed to send 48h expiry alert:', err));
-        }
-
         result.closed++;
         continue;
       }
 
-      // ── 5. Tiered Heartbeat (15m, 30m, 60m, then every 4h in 48h) ─────────
-      const lastHbMs = m.last_heartbeat_at ? new Date(m.last_heartbeat_at).getTime() : createdAtMs;
-      const lastHbOffsetMs = Math.max(0, lastHbMs - createdAtMs);
-      const nextMilestoneMs = getNextHeartbeatMilestoneMs(lastHbOffsetMs, durationMs);
-
-      if (nextMilestoneMs !== null && durationMs >= nextMilestoneMs) {
-        await db.query(
-          `UPDATE signal_monitors
-           SET last_heartbeat_at = NOW(), max_price = $1, min_price = $2,
-               max_profit_pct = $3, max_drawdown_pct = $4, last_checked_at = NOW()
-           WHERE id = $5`,
-          [maxPrice, minPrice, maxProfitPct, maxDrawdownPct, m.id],
-        );
-
-        if (rootMsgId) {
-          const milestoneLabel = formatTradeDuration(nextMilestoneMs);
-          const hbMsg =
-            `📊 <b>Progress Update (${milestoneLabel} Check-in • ${m.timeframe.toUpperCase()})</b>\n` +
-            `• <b>Symbol:</b> ${m.symbol} (${m.direction.toUpperCase()})\n` +
-            `• <b>Current Price:</b> $${formatChartPrice(curPrice)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n` +
-            `• <b>Peak Gain (MFE):</b> +${maxProfitPct.toFixed(2)}%\n` +
-            `• <b>Protected:</b> ${m.is_breakeven_armed ? 'Yes (SL @ BE)' : `No (SL @ $${formatChartPrice(slPrice)})`}\n` +
-            `• <b>Duration:</b> ${durationStr}`;
-
-          sendTelegramAlert(
-            hbMsg,
-            m.strategy_name,
-            'signal',
-            monitorTopic,
-            undefined,
-            rootMsgId,
-          ).catch((err) => console.warn('[signal-monitor] Failed to send heartbeat alert:', err));
-        }
-
-        result.heartbeatsSent++;
-        continue;
-      }
-
-      // Default state touch (keep max/min metrics updated)
+      // Default state touch (keep max/min MFE/MAE metrics updated in DB silently)
       await db.query(
         `UPDATE signal_monitors
          SET max_price = $1, min_price = $2, max_profit_pct = $3, max_drawdown_pct = $4,

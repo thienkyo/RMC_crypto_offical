@@ -29,6 +29,7 @@ export interface SignalChartParams {
   takeProfitPct?: number;
   candles: Candle[];
   signalId?: number;
+  candleTime?: number;
   aiEvaluation?: import('@/lib/ai/evaluator/types').OrderEvaluationResult;
   dynamicLevels?: import('@/types/strategy').DynamicAtrLevels;
 }
@@ -269,35 +270,64 @@ export function generateSignalChartSvg(params: SignalChartParams): string {
     );
   }
 
-  // Signal Trigger Marker on the last bar
+  // Signal Trigger Marker on the firing candle
   const triggerElements: string[] = [];
   if (visibleCandles.length > 0) {
-    const lastIdx = visibleCandles.length - 1;
-    const lastBar = visibleCandles[lastIdx]!;
-    const lastX = plotLeft + lastIdx * barStep + barStep / 2;
+    let targetIdx = visibleCandles.length - 1;
+    if (params.candleTime) {
+      const foundIdx = visibleCandles.findIndex(
+        (c) => Math.abs(c.openTime - params.candleTime!) < 1000,
+      );
+      if (foundIdx !== -1) {
+        targetIdx = foundIdx;
+      }
+    }
+    const targetBar = visibleCandles[targetIdx]!;
+    const targetX = plotLeft + targetIdx * barStep + barStep / 2;
 
     // Subtle vertical highlight beam
     triggerElements.push(
-      `<rect x="${(lastX - barWidth).toFixed(1)}" y="${plotTop}" width="${(barWidth * 2).toFixed(1)}" height="${plotHeight}" fill="rgba(56, 189, 248, 0.08)"/>`,
+      `<rect x="${(targetX - barWidth).toFixed(1)}" y="${plotTop}" width="${(barWidth * 2).toFixed(1)}" height="${plotHeight}" fill="rgba(251, 191, 36, 0.08)"/>`,
     );
 
+    const sqSize = 10;
+    const sqX = targetX - sqSize / 2;
+
     if (direction === 'long') {
-      const lowY = toY(lastBar.low) + 8;
+      const wickBottom = toY(targetBar.low);
+      const sqY = wickBottom + 4;
+
+      // Yellow square signal trigger marker (matches web UI signal marker)
+      triggerElements.push(
+        `<!-- Signal Yellow Square -->`,
+        `<rect x="${sqX.toFixed(1)}" y="${sqY.toFixed(1)}" width="${sqSize}" height="${sqSize}" rx="2" fill="#fbbf24" stroke="#d97706" stroke-width="1.5"/>`,
+      );
+
+      const lowY = sqY + sqSize + 4;
       // Triangle pointing up
-      const tri = `${lastX.toFixed(1)},${lowY.toFixed(1)} ${(lastX - 7).toFixed(1)},${(lowY + 12).toFixed(1)} ${(lastX + 7).toFixed(1)},${(lowY + 12).toFixed(1)}`;
+      const tri = `${targetX.toFixed(1)},${lowY.toFixed(1)} ${(targetX - 7).toFixed(1)},${(lowY + 11).toFixed(1)} ${(targetX + 7).toFixed(1)},${(lowY + 11).toFixed(1)}`;
       triggerElements.push(
         `<polygon points="${tri}" fill="#10b981"/>`,
-        `<rect x="${(lastX - 22).toFixed(1)}" y="${(lowY + 14).toFixed(1)}" width="44" height="16" rx="3" fill="#10b981"/>`,
-        `<text x="${lastX.toFixed(1)}" y="${(lowY + 25.5).toFixed(1)}" fill="#022c22" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">▲ BUY</text>`,
+        `<rect x="${(targetX - 22).toFixed(1)}" y="${(lowY + 13).toFixed(1)}" width="44" height="16" rx="3" fill="#10b981"/>`,
+        `<text x="${targetX.toFixed(1)}" y="${(lowY + 24.5).toFixed(1)}" fill="#022c22" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">▲ BUY</text>`,
       );
     } else {
-      const highY = toY(lastBar.high) - 8;
+      const wickTop = toY(targetBar.high);
+      const sqY = wickTop - 4 - sqSize;
+
+      // Yellow square signal trigger marker (matches web UI signal marker)
+      triggerElements.push(
+        `<!-- Signal Yellow Square -->`,
+        `<rect x="${sqX.toFixed(1)}" y="${sqY.toFixed(1)}" width="${sqSize}" height="${sqSize}" rx="2" fill="#fbbf24" stroke="#d97706" stroke-width="1.5"/>`,
+      );
+
+      const highY = sqY - 4;
       // Triangle pointing down
-      const tri = `${lastX.toFixed(1)},${highY.toFixed(1)} ${(lastX - 7).toFixed(1)},${(highY - 12).toFixed(1)} ${(lastX + 7).toFixed(1)},${(highY - 12).toFixed(1)}`;
+      const tri = `${targetX.toFixed(1)},${highY.toFixed(1)} ${(targetX - 7).toFixed(1)},${(highY - 11).toFixed(1)} ${(targetX + 7).toFixed(1)},${(highY - 11).toFixed(1)}`;
       triggerElements.push(
         `<polygon points="${tri}" fill="#ef4444"/>`,
-        `<rect x="${(lastX - 24).toFixed(1)}" y="${(highY - 30).toFixed(1)}" width="48" height="16" rx="3" fill="#ef4444"/>`,
-        `<text x="${lastX.toFixed(1)}" y="${(highY - 18.5).toFixed(1)}" fill="#450a0a" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">▼ SELL</text>`,
+        `<rect x="${(targetX - 24).toFixed(1)}" y="${(highY - 29).toFixed(1)}" width="48" height="16" rx="3" fill="#ef4444"/>`,
+        `<text x="${targetX.toFixed(1)}" y="${(highY - 17.5).toFixed(1)}" fill="#450a0a" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">▼ SELL</text>`,
       );
     }
   }

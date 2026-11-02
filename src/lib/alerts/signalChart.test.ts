@@ -46,7 +46,27 @@ describe('signalChart', () => {
     expect(svg).toContain('TP:');
     expect(svg).toContain('MAX:');
     expect(svg).toContain('▲ BUY');
+    expect(svg).toContain('<!-- Signal Yellow Square -->');
+    expect(svg).toContain('#fbbf24');
     expect(svg).toContain('★★★★☆☆☆');
+  });
+
+  it('renders yellow square on specific candle when candleTime is provided', () => {
+    const targetCandle = mockCandles[30]!;
+    const svg = generateSignalChartSvg({
+      symbol: 'BTCUSDT',
+      timeframe: '4h',
+      strategyName: 'RSI Momentum Breakout',
+      direction: 'short',
+      rating: 5,
+      entryPrice: 51200,
+      candles: mockCandles,
+      candleTime: targetCandle.openTime,
+    });
+
+    expect(svg).toContain('<!-- Signal Yellow Square -->');
+    expect(svg).toContain('#fbbf24');
+    expect(svg).toContain('▼ SELL');
   });
 
   it('renders 7 stars correctly on a 7-star rating', () => {

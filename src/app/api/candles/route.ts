@@ -191,11 +191,14 @@ export async function GET(req: NextRequest) {
   // ── Crypto Branch (Binance) ────────────────────────────────────────────────
   try {
     // ── 1. Check what we have in DB ──────────────────────────────────────────
-    const { rows: countRows } = await db.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM candles WHERE symbol = $1 AND timeframe = $2 AND source = 'binance'`,
+    const { rows: countRows } = await db.query<{ count: string; latest: Date | null }>(
+      `SELECT COUNT(*) AS count, MAX(open_time) AS latest
+         FROM candles
+        WHERE symbol = $1 AND timeframe = $2 AND source = 'binance'`,
       [symbol, tf],
     );
-    const dbCount = parseInt(countRows[0]?.count ?? '0', 10);
+    const dbCount  = parseInt(countRows[0]?.count ?? '0', 10);
+    let latestDbMs = countRows[0]?.latest?.getTime() ?? 0;
 
     // ── 2. Backfill from Binance if DB is thin ───────────────────────────────
     // We consider the DB "complete" if it has ≥ 90% of the desired depth.
@@ -210,6 +213,7 @@ export async function GET(req: NextRequest) {
       }
 
       if (candles.length > 0) {
+        latestDbMs = Math.max(latestDbMs, candles[candles.length - 1]!.openTime);
         await db.query(
           `INSERT INTO candles
              (symbol, timeframe, open_time, open, high, low, close, volume, close_time, source)
@@ -272,11 +276,6 @@ export async function GET(req: NextRequest) {
     // exactly that many (capped at 1000).  This fills multi-day gaps that
     // accumulate when the server restarts or the DB falls behind.
     try {
-      const { rows: latestRows } = await db.query<{ latest: Date | null }>(
-        `SELECT MAX(open_time) AS latest FROM candles WHERE symbol = $1 AND timeframe = $2`,
-        [symbol, tf],
-      );
-      const latestDbMs  = latestRows[0]?.latest?.getTime() ?? 0;
       const periodMs    = TF_TO_MS[tf];
       const gapBars     = latestDbMs > 0 ? Math.ceil((Date.now() - latestDbMs) / periodMs) : 10;
       // Fetch enough bars to cover the gap plus a small overlap buffer (3 bars).

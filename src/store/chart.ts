@@ -210,11 +210,31 @@ export const useChartStore = create<ChartState>()(
       },
 
       setCandles: (candles, contextKey) => {
-        const expected = `${get().symbol}-${get().timeframe}`;
+        const state = get();
+        const expected = `${state.symbol}-${state.timeframe}`;
         if (contextKey !== undefined && contextKey !== expected) return;
+
+        let nextCandles = candles;
+        if (
+          state.candlesKey === expected &&
+          state.candles.length > candles.length &&
+          candles.length > 0 &&
+          candles[0]!.openTime > state.candles[0]!.openTime
+        ) {
+          // A background poll returned a shorter tail slice (e.g. 1,000-bar direct
+          // exchange fallback on DB timeout) while full history (e.g. 4,380 bars)
+          // is already loaded for this context. Merge the fresh tail into the
+          // existing history prefix so the chart never shrinks & teleports.
+          const firstIncomingTime = candles[0]!.openTime;
+          const lastIncomingTime  = candles[candles.length - 1]!.openTime;
+          const prefix = state.candles.filter((c) => c.openTime < firstIncomingTime);
+          const suffix = state.candles.filter((c) => c.openTime > lastIncomingTime);
+          nextCandles = [...prefix, ...candles, ...suffix];
+        }
+
         set({
-          candles,
-          candlesKey: candles.length === 0 ? null : expected,
+          candles: nextCandles,
+          candlesKey: nextCandles.length === 0 ? null : expected,
         });
       },
       setLoading:  (isLoading) => set({ isLoading }),

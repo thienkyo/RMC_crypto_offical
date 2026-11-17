@@ -24,6 +24,7 @@ export { time_of_day }    from './time_of_day';
 export { volume_profile } from './volume_profile';
 export { cvd }              from './cvd';
 export { cvd_divergence }   from './cvd_divergence';
+export { svc_classifier }   from './svc_classifier';
 
 // Patterns
 export {
@@ -100,6 +101,7 @@ import {
 import { volume_profile } from './volume_profile';
 import { cvd }            from './cvd';
 import { cvd_divergence } from './cvd_divergence';
+import { svc_classifier } from './svc_classifier';
 
 // The registry stores all indicators under their widened default param type.
 // Callers pass Record<string,number> params (from the store) which satisfies
@@ -145,4 +147,5 @@ export const INDICATORS: Record<string, Indicator<Record<string, number>>> = {
   [bullishAbsorption.id]:       bullishAbsorption,
   [bearishAbsorption.id]:       bearishAbsorption,
   [cvd_divergence.id]:          cvd_divergence,
+  [svc_classifier.id]:          svc_classifier,
 };

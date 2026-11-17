@@ -12,6 +12,7 @@
  */
 
 import { db } from '@/lib/db/client';
+import { fetchLatestCandlesCached } from '@/lib/db/candles';
 import { sendTelegramAlert } from '@/lib/alerts/telegram';
 import { fetchTickerPrices } from '@/lib/exchange/binance';
 import { formatChartPrice } from '@/lib/format';
@@ -216,9 +217,26 @@ export async function registerOrConfirmSignalMonitor(
         : entryPrice * (1 - tpPct / 100);
 
     const breakevenPrice = entryPrice;
-    const topicName = telegramTopic?.enabled && telegramTopic.name.trim()
-      ? telegramTopic.name.trim()
-      : null;
+    let threadId: number | null = null;
+    if (telegramTopic?.enabled && telegramTopic.name.trim()) {
+      const rawName = telegramTopic.name.trim();
+      const asNum = parseInt(rawName, 10);
+      if (Number.isInteger(asNum) && String(asNum) === rawName) {
+        threadId = asNum;
+      } else {
+        try {
+          const { rows: topicRows } = await db.query<{ message_thread_id: string }>(
+            `SELECT message_thread_id FROM telegram_topics WHERE lower(name) = lower($1) LIMIT 1`,
+            [rawName],
+          );
+          if (topicRows[0]?.message_thread_id) {
+            threadId = parseInt(topicRows[0].message_thread_id, 10);
+          }
+        } catch {
+          // ignore lookup error
+        }
+      }
+    }
 
     const { rows: insertRows } = await db.query<{ id: number }>(
       `INSERT INTO signal_monitors (
@@ -247,7 +265,7 @@ export async function registerOrConfirmSignalMonitor(
         breakevenPrice,
         telegramChatId ?? null,
         telegramMessageId ?? null,
-        topicName,
+        threadId,
       ],
     );
 
@@ -264,6 +282,102 @@ export interface MonitorCheckResult {
   closed: number;
   breakevenArmed: number;
   heartbeatsSent: number;
+  invalidated?: number;
+}
+
+export interface ClosedCandleRow {
+  open_time: Date;
+  close_time: Date;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+export interface TechnicalInvalidationResult {
+  invalidated: boolean;
+  reason?: string;
+  ema20?: number;
+  prevExtreme?: number;
+}
+
+function computeSimpleEma(values: number[], period: number): number {
+  if (values.length === 0) return 0;
+  const k = 2 / (period + 1);
+  let ema = values[0]!;
+  for (let i = 1; i < values.length; i++) {
+    ema = values[i]! * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+/**
+ * Evaluates Option B (Technical Invalidation):
+ * Triggers when a newly closed candle (after signal creation) closes opposite to the
+ * trade direction in drawdown, breaks beyond the previous candle's extreme (high for SHORT,
+ * low for LONG), and either breaks across the 20 EMA or prints a 2nd consecutive opposing bar.
+ */
+export function evaluateTechnicalInvalidation(
+  candles: ClosedCandleRow[],
+  direction: 'long' | 'short',
+  entryPrice: number,
+  createdAtMs: number,
+): TechnicalInvalidationResult {
+  if (candles.length < 2) return { invalidated: false };
+
+  const parsed = candles.map((c) => ({
+    openTime: new Date(c.open_time).getTime(),
+    closeTime: new Date(c.close_time).getTime(),
+    open: parseFloat(c.open),
+    high: parseFloat(c.high),
+    low: parseFloat(c.low),
+    close: parseFloat(c.close),
+  }));
+
+  const latest = parsed[parsed.length - 1]!;
+  const prev = parsed[parsed.length - 2]!;
+
+  // Only evaluate candles that closed after the signal monitor was opened
+  if (latest.closeTime <= createdAtMs) {
+    return { invalidated: false };
+  }
+
+  const isLong = direction === 'long';
+  const latestPnlPct = isLong
+    ? ((latest.close - entryPrice) / entryPrice) * 100
+    : ((entryPrice - latest.close) / entryPrice) * 100;
+
+  if (latestPnlPct > -0.25) {
+    return { invalidated: false };
+  }
+
+  const ema20 = computeSimpleEma(
+    parsed.map((c) => c.close),
+    20,
+  );
+
+  const isOppositeBar = isLong ? latest.close < latest.open : latest.close > latest.open;
+  const prevOppositeBar = isLong ? prev.close < prev.open : prev.close > prev.open;
+  const prevExtreme = isLong ? prev.low : prev.high;
+  const brokePrevExtreme = isLong ? latest.close < prev.low : latest.close > prev.high;
+  const brokeEma20 = isLong ? latest.close < ema20 : latest.close > ema20;
+
+  if (isOppositeBar && brokePrevExtreme && (brokeEma20 || prevOppositeBar)) {
+    const barType = isLong ? 'Bearish' : 'Bullish';
+    const extremeLabel = isLong ? 'prior low' : 'prior high';
+    const emaClause = brokeEma20
+      ? ` & ${isLong ? 'below' : 'above'} 20 EMA ($${formatChartPrice(ema20)})`
+      : ' (2 consecutive opposing bars)';
+    return {
+      invalidated: true,
+      reason: `${barType} candle closed ${isLong ? 'below' : 'above'} ${extremeLabel} ($${formatChartPrice(prevExtreme)})${emaClause}`,
+      ema20,
+      prevExtreme,
+    };
+  }
+
+  return { invalidated: false };
 }
 
 /**
@@ -292,6 +406,7 @@ export async function runSignalMonitorCheck(
 
     // Build latest prices for symbols if not provided
     const prices: Record<string, number> = { ...(priceMap ?? {}) };
+    const fallbackCandleOpenTimeMs: Record<string, number> = {};
     const missingSymbols = Array.from(new Set(monitors.map((m) => m.symbol))).filter(
       (s) => prices[s] === undefined,
     );
@@ -303,19 +418,28 @@ export async function runSignalMonitorCheck(
         prices[sym] = price;
       }
 
-      // 2. Fall back to DB candles for any remaining symbols (e.g. equities or if Binance unreachable)
+      // 2. Fall back to fresh DB candles (<= 30m old) for any remaining symbols
       const stillMissing = missingSymbols.filter((s) => prices[s] === undefined);
       if (stillMissing.length > 0) {
         try {
-          const { rows: candleRows } = await db.query<{ symbol: string; close: string }>(
-            `SELECT DISTINCT ON (symbol) symbol, close
+          const { rows: candleRows } = await db.query<{
+            symbol: string;
+            close: string;
+            open_time: Date | string;
+          }>(
+            `SELECT DISTINCT ON (symbol) symbol, close, open_time
              FROM candles
              WHERE symbol = ANY($1)
+               AND open_time >= NOW() - INTERVAL '30 minutes'
              ORDER BY symbol, open_time DESC`,
             [stillMissing],
           );
           for (const r of candleRows) {
-            prices[r.symbol] = parseFloat(r.close);
+            const openMs = new Date(r.open_time).getTime();
+            if (Number.isFinite(openMs)) {
+              prices[r.symbol] = parseFloat(r.close);
+              fallbackCandleOpenTimeMs[r.symbol] = openMs;
+            }
           }
         } catch (cErr) {
           console.warn('[signal-monitor] Failed to fetch latest candle prices from DB:', cErr);
@@ -328,6 +452,15 @@ export async function runSignalMonitorCheck(
     for (const m of monitors) {
       const curPrice = prices[m.symbol];
       if (curPrice === undefined || isNaN(curPrice) || curPrice <= 0) continue;
+
+      // Guard against stale DB fallback candles that opened before the trade monitor was created
+      const fbOpenMs = fallbackCandleOpenTimeMs[m.symbol];
+      if (fbOpenMs !== undefined && fbOpenMs < new Date(m.created_at).getTime()) {
+        console.warn(
+          `[signal-monitor] Skipping stale DB fallback candle for ${m.symbol} (candle open ${new Date(fbOpenMs).toISOString()} < monitor created ${new Date(m.created_at).toISOString()})`,
+        );
+        continue;
+      }
 
       const entryPrice = parseFloat(m.entry_price);
       const slPrice = parseFloat(m.stop_loss_price);
@@ -498,6 +631,78 @@ export async function runSignalMonitorCheck(
 
         result.closed++;
         continue;
+      }
+
+      // ── 5. Check Technical Invalidation (Option B + Auto Early Exit) ──────
+      if (!m.is_breakeven_armed && pnlPct <= -0.3) {
+        try {
+          const liveCandles = await fetchLatestCandlesCached(m.symbol, m.timeframe, 30);
+          const closedCandles: ClosedCandleRow[] = liveCandles
+            .filter((c) => c.closeTime <= now)
+            .map((c) => ({
+              open_time: new Date(c.openTime),
+              close_time: new Date(c.closeTime),
+              open: String(c.open),
+              high: String(c.high),
+              low: String(c.low),
+              close: String(c.close),
+              volume: String(c.volume),
+            }));
+          const inv = evaluateTechnicalInvalidation(
+            closedCandles,
+            m.direction,
+            entryPrice,
+            new Date(m.created_at).getTime(),
+          );
+
+          if (inv.invalidated) {
+            await db.query(
+              `UPDATE signal_monitors
+               SET status = 'closed', exit_reason = 'invalidated', exit_price = $1, exit_time = NOW(),
+                   max_price = $2, min_price = $3, max_profit_pct = $4, max_drawdown_pct = $5,
+                   last_checked_at = NOW()
+               WHERE id = $6`,
+              [curPrice, maxPrice, minPrice, maxProfitPct, maxDrawdownPct, m.id],
+            );
+
+            if (m.signal_id) {
+              await db.query(
+                `UPDATE strategy_signals
+                 SET actual_exit_price = $1, pnl_pct = $2, outcome_note = $3, outcome_at = NOW()
+                 WHERE id = $4`,
+                [curPrice, pnlPct, `Early exit: ${inv.reason ?? 'Technical invalidation'}`, m.signal_id],
+              ).catch((err) => console.warn('[signal-monitor] Failed to update strategy_signals invalidation:', err));
+            }
+
+            if (rootMsgId) {
+              const fullSlLossPct = Math.abs(((slPrice - entryPrice) / entryPrice) * 100);
+              const savedPct = Math.max(0, fullSlLossPct - Math.abs(pnlPct));
+              const invMsg =
+                `⚠️ <b>Technical Invalidation — Early Exit</b>\n` +
+                `• <b>Symbol:</b> ${m.symbol} (${m.timeframe.toUpperCase()} • ${m.direction.toUpperCase()})\n` +
+                `• <b>Entry:</b> $${formatChartPrice(entryPrice)} → <b>Exit:</b> $${formatChartPrice(curPrice)} (<b>${pnlPct.toFixed(2)}%</b>)\n` +
+                `• <b>Trigger:</b> ${inv.reason}\n` +
+                `• <b>Risk Saved:</b> ~${savedPct.toFixed(2)}% saved vs. full Stop Loss ($${formatChartPrice(slPrice)})\n` +
+                `• <b>Trade Duration:</b> ${durationStr}\n` +
+                `• <b>Action:</b> Position closed early — exit manually now to protect capital 🛡️`;
+
+              sendTelegramAlert(
+                invMsg,
+                m.strategy_name,
+                'signal',
+                monitorTopic,
+                undefined,
+                rootMsgId,
+              ).catch((err) => console.warn('[signal-monitor] Failed to send invalidation alert:', err));
+            }
+
+            result.closed++;
+            result.invalidated = (result.invalidated ?? 0) + 1;
+            continue;
+          }
+        } catch (invErr) {
+          console.warn('[signal-monitor] Technical invalidation check failed:', invErr);
+        }
       }
 
       // Default state touch (keep max/min MFE/MAE metrics updated in DB silently)

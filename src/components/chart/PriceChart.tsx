@@ -98,6 +98,84 @@ function candleAtTime(candles: Candle[], timeSec: number): Candle | undefined {
 
 const toSec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 
+/** Binary search for the index of a candle at an exact openTime (ms), or -1 if not found. */
+function findCandleIndexByOpenTime(candles: Candle[], openTimeMs: number): number {
+  let lo = 0, hi = candles.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const t   = candles[mid]!.openTime;
+    if (t === openTimeMs) return mid;
+    if (t < openTimeMs)   lo = mid + 1;
+    else                  hi = mid - 1;
+  }
+  return -1;
+}
+
+/**
+ * Translate a saved logical range from `prevCandles` to `nextCandles` when the
+ * same symbol+timeframe series updates (e.g. a 1,000-bar fallback expands to
+ * 4,380 DB bars, or a new bar appends/shifts).
+ *
+ * Without this translation, logical indices from a 1,000-bar array (where
+ * index ~900–1025 is the present day) applied directly to a 4,380-bar array
+ * teleport the chart 3,380 bars into the past (April–May 2025 on 4h).
+ */
+export function resolveUpdatedLogicalRange(
+  prevCandles: Candle[] | null,
+  nextCandles: Candle[],
+  rawSavedRange: { from: number; to: number } | null,
+): { from: number; to: number } | null {
+  if (
+    !rawSavedRange ||
+    !Number.isFinite(rawSavedRange.from) ||
+    !Number.isFinite(rawSavedRange.to) ||
+    rawSavedRange.to <= rawSavedRange.from
+  ) {
+    return null;
+  }
+  if (!prevCandles || prevCandles.length === 0 || nextCandles.length === 0) {
+    return null;
+  }
+  if (rawSavedRange.from >= prevCandles.length) {
+    return null;
+  }
+
+  // If the user was parked at (or within 4 bars of) the live right edge of
+  // prevCandles, keep them anchored to the live right edge of nextCandles with
+  // the exact same bar span and right-offset overhang.
+  const wasAtLiveEdge = rawSavedRange.to >= prevCandles.length - 1 - 4;
+  if (wasAtLiveEdge) {
+    const deltaEnd = nextCandles.length - prevCandles.length;
+    const shifted = {
+      from: rawSavedRange.from + deltaEnd,
+      to:   rawSavedRange.to   + deltaEnd,
+    };
+    return shifted.from < nextCandles.length && shifted.to > shifted.from ? shifted : null;
+  }
+
+  // User had genuinely scrolled back in history: anchor by timestamp so prepended
+  // older bars shift the logical indices by the exact prepended count.
+  const anchorPrevIdx = Math.min(
+    prevCandles.length - 1,
+    Math.max(0, Math.floor(rawSavedRange.to)),
+  );
+  const anchorTime = prevCandles[anchorPrevIdx]!.openTime;
+  const anchorNextIdx = findCandleIndexByOpenTime(nextCandles, anchorTime);
+  if (anchorNextIdx === -1) {
+    return null;
+  }
+
+  const indexShift = anchorNextIdx - anchorPrevIdx;
+  const shifted = {
+    from: rawSavedRange.from + indexShift,
+    to:   rawSavedRange.to   + indexShift,
+  };
+  if (shifted.from >= nextCandles.length || shifted.to <= 0) {
+    return null;
+  }
+  return shifted;
+}
+
 /**
  * Same-context dirty check. Length + last openTime alone is not enough:
  * BTC and PAXG 1h series often share bar count and aligned last openTime, so
@@ -243,6 +321,7 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
             to: total + gap,
           });
         }
+        ts.scrollToPosition(gap, false);
         chart.priceScale('right').applyOptions({ autoScale: true });
         candleRef.current?.priceScale().applyOptions({ autoScale: true });
       },
@@ -528,8 +607,8 @@ export const PriceChart = forwardRef<PriceChartHandle, Props>(
         ? chart.timeScale().getVisibleLogicalRange()
         : null;
 
-      const savedRange = (rawSavedRange && rawSavedRange.from < candles.length)
-        ? rawSavedRange
+      const savedRange = !isNewContext
+        ? resolveUpdatedLogicalRange(lastCandlesRef.current, candles, rawSavedRange)
         : null;
 
       candleRef.current.setData(

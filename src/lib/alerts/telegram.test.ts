@@ -87,6 +87,33 @@ describe('Telegram Alerts with Topics', () => {
     expect(body.message_thread_id).toBe(42);
   });
 
+  it('numeric topic name (thread ID from signal_monitors) routes directly to main topic without querying or creating a new topic', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    });
+
+    const res = await sendTelegramAlert('follow-up message', 'strategy1', 'signal', { enabled: true, name: '1038' }, undefined, 1468);
+    expect(res.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // Only sendMessage, no createForumTopic
+
+    const sendCall = fetchMock.mock.calls[0];
+    expect(sendCall[0]).toContain('/sendMessage');
+    const body = JSON.parse(sendCall[1].body);
+    expect(body.message_thread_id).toBe(1038);
+    expect(body.reply_to_message_id).toBe(1468);
+
+    // Ensure it never queried telegram_topics by name='1038' or inserted a new topic
+    expect(db.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('SELECT message_thread_id FROM telegram_topics'),
+      expect.anything(),
+    );
+    expect(db.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO telegram_topics'),
+      expect.anything(),
+    );
+  });
+
   it('missing → createForumTopic once, stores id, returns it', async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes('/createForumTopic')) {

@@ -175,12 +175,13 @@ const adxTrendLong: Strategy = {
   ...BASE,
   id:          'starter_adx_trend_long',
   name:        'ADX Trend-Following',
-  longName:    '📈 LONG — ADX strong trend + StochRSI oversold dip + EMA(50) uptrend',
+  longName:    '📈 LONG — ADX strong trend + StochRSI oversold dip + EMA(50) uptrend + MACD Hist > 0',
   description:
-    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K < 20 (oversold pullback) + EMA(50) > 0 (uptrend).\n\n' +
+    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K < 20 (oversold pullback) + EMA(50) > 0 (uptrend) + MACD Histogram > 0 (bullish momentum).\n\n' +
     '• ADX(14) > 25: confirms the market is trending — filters out choppy, ranging conditions.\n' +
     '• StochRSI %K < 20: momentum has pulled back to oversold — times a "buy the dip" entry in an uptrend.\n' +
-    '• EMA Dev(50) > 0: confirms price is above the 50 EMA so we only buy dips in an actual uptrend (not during a crash).\n\n' +
+    '• EMA Dev(50) > 0: confirms price is above the 50 EMA so we only buy dips in an actual uptrend (not during a crash).\n' +
+    '• MACD Histogram > 0: confirms baseline bullish momentum is actively expanding.\n\n' +
     'Mirror of the SHORT "ADX Trend-Following" template.',
   symbol:    'BTCUSDT',
   timeframe: '4h',
@@ -214,6 +215,16 @@ const adxTrendLong: Strategy = {
           indicatorId:  'ema_dev',
           params:       { period: 50 },
           seriesIndex:  0,
+          operator:     'gt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_adxl_cond_macd',
+          indicatorId:  'macd',
+          params:       { fast: 12, slow: 26, signal: 9, trendEma: 200 },
+          seriesIndex:  2,   // Histogram
           operator:     'gt',
           value:        0,
           checkMode:    'confirmation',
@@ -573,12 +584,13 @@ const adxTrend: Strategy = {
   ...BASE,
   id:          'starter_adx_trend',
   name:        'ADX Trend-Following',
-  longName:    '📉 SHORT — ADX strong trend + StochRSI overbought rip + EMA(50) downtrend',
+  longName:    '📉 SHORT — ADX strong trend + StochRSI overbought rip + EMA(50) downtrend + MACD Hist < 0',
   description:
-    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K > 80 (overbought momentum) + EMA(50) < 0 (downtrend).\n\n' +
+    'High-conviction trend entry: ADX(14) > 25 (strong trend) + StochRSI %K > 80 (overbought momentum) + EMA(50) < 0 (downtrend) + MACD Histogram < 0 (bearish momentum).\n\n' +
     '• ADX(14) > 25: confirms the market is trending — filters out choppy, ranging conditions.\n' +
     '• StochRSI %K > 80: momentum is overbought — times a "sell the rip" entry in a downtrend.\n' +
     '• EMA Dev(50) < 0: confirms price is below the 50 EMA so we only short rips in an actual downtrend.\n\n' +
+    '• MACD Histogram < 0: confirms baseline bearish momentum is actively expanding.\n\n' +
     'Multi-timeframe tip: for best results check that the 1D chart agrees with the 4h direction.',
   symbol:    'BTCUSDT',
   timeframe: '4h',
@@ -612,6 +624,16 @@ const adxTrend: Strategy = {
           indicatorId:  'ema_dev',
           params:       { period: 50 },
           seriesIndex:  0,
+          operator:     'lt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_adx_cond_macd',
+          indicatorId:  'macd',
+          params:       { fast: 12, slow: 26, signal: 9, trendEma: 200 },
+          seriesIndex:  2,   // Histogram
           operator:     'lt',
           value:        0,
           checkMode:    'confirmation',
@@ -1043,6 +1065,81 @@ const vpValBounceLong: Strategy = {
   risk:   { stopLossPct: 1.5, takeProfitPct: 2.5 },
 };
 
+// ─── L10: ML Support Vector Trend Confluence — LONG ───────────────────────────
+//
+// Logic: Combines Machine Learning regime classification with classical trend and momentum.
+// • ML SVC Signal > 0: Support Vector Machine classifies recent Drift (returns) and
+//   Volatility (spread) into a Bullish regime over rolling 30-candle walk-forward window.
+// • EMA Dev(50) > 0: Price is above the 50-period EMA confirming macro structural uptrend.
+// • RSI(14) > 50: Positive momentum bias.
+// • RSI(14) < 70: Not overextended/overbought.
+
+const mlSvcTrendLong: Strategy = {
+  ...BASE,
+  id:          'starter_ml_svc_trend_long',
+  name:        'ML Support Vector Trend',
+  longName:    '📈 LONG — ML SVC Bullish Regime + EMA 50 Uptrend + RSI Momentum',
+  description:
+    'Machine Learning trend-following setup: Support Vector Classifier (SVC) + 50 EMA + RSI.\n\n' +
+    '• ML SVC Signal > 0: Support Vector Machine classifies market into Bullish regime (+1) over a rolling 30-bar walk-forward window.\n' +
+    '• EMA Dev(50) > 0: Close is above the 50-period EMA — structural uptrend confirmed.\n' +
+    '• RSI(14) > 50 & < 70: Bullish momentum acceleration without being overextended into overbought territory.\n\n' +
+    'Designed for 1h and 4h crypto momentum continuation trades. Adjust deadband threshold or lookback in parameters as needed.',
+  symbol:    'BTCUSDT',
+  timeframe: '1h',
+  entryConditions: [
+    {
+      id:    'starter_mlsvcl_group_1',
+      label: 'ML Bullish Regime Setup',
+      conditions: [
+        {
+          id:           'starter_mlsvcl_cond_svc',
+          indicatorId:  'svc_classifier',
+          params:       { enabled: 1, lookback: 30, threshold: 0.2 },
+          seriesIndex:  0,  // svc_signal: +1 (Bullish), -1 (Bearish), 0 (Neutral)
+          operator:     'gt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mlsvcl_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 50 },
+          seriesIndex:  0,  // EMA Dev % — > 0 = price above 50 EMA
+          operator:     'gt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mlsvcl_cond_rsi_min',
+          indicatorId:  'rsi',
+          params:       { period: 14, emaPeriod: 0 },
+          seriesIndex:  0,  // RSI > 50
+          operator:     'gt',
+          value:        50,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mlsvcl_cond_rsi_max',
+          indicatorId:  'rsi',
+          params:       { period: 14, emaPeriod: 0 },
+          seriesIndex:  0,  // RSI < 70
+          operator:     'lt',
+          value:        70,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_long', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 1 } },
+  risk:   { stopLossPct: 2, takeProfitPct: 4 },
+};
+
 // ─── S8: VP Value Area High Rotation — SHORT ───────────────────────────────────
 //
 // Mean-reversion short: mirror of the VAL bounce. Price has pushed to the Value
@@ -1259,6 +1356,80 @@ const ictSilverBulletShort: Strategy = {
   risk:   { stopLossPct: 1.5, takeProfitPct: 3 },
 };
 
+// ─── S10: ML Support Vector Trend Confluence — SHORT ──────────────────────────
+//
+// Logic: Mirror of the LONG ML SVC Trend strategy.
+// • ML SVC Signal < 0: Support Vector Machine classifies market into Bearish regime (-1).
+// • EMA Dev(50) < 0: Close is below the 50-period EMA confirming structural downtrend.
+// • RSI(14) < 50: Negative momentum bias.
+// • RSI(14) > 30: Not overextended/oversold.
+
+const mlSvcTrendShort: Strategy = {
+  ...BASE,
+  id:          'starter_ml_svc_trend_short',
+  name:        'ML Support Vector Trend',
+  longName:    '📉 SHORT — ML SVC Bearish Regime + EMA 50 Downtrend + RSI Momentum',
+  description:
+    'Machine Learning trend-following short: Support Vector Classifier (SVC) + 50 EMA + RSI.\n\n' +
+    '• ML SVC Signal < 0: Support Vector Machine classifies market into Bearish regime (-1) over a rolling 30-bar walk-forward window.\n' +
+    '• EMA Dev(50) < 0: Close is below the 50-period EMA — structural downtrend confirmed.\n' +
+    '• RSI(14) < 50 & > 30: Bearish momentum acceleration without being overextended into oversold territory.\n\n' +
+    'Mirror of the LONG "ML Support Vector Trend" template. Designed for 1h and 4h breakdowns.',
+  symbol:    'BTCUSDT',
+  timeframe: '1h',
+  entryConditions: [
+    {
+      id:    'starter_mlsvcs_group_1',
+      label: 'ML Bearish Regime Setup',
+      conditions: [
+        {
+          id:           'starter_mlsvcs_cond_svc',
+          indicatorId:  'svc_classifier',
+          params:       { enabled: 1, lookback: 30, threshold: 0.2 },
+          seriesIndex:  0,  // svc_signal: +1 (Bullish), -1 (Bearish), 0 (Neutral)
+          operator:     'lt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mlsvcs_cond_trend',
+          indicatorId:  'ema_dev',
+          params:       { period: 50 },
+          seriesIndex:  0,  // EMA Dev % — < 0 = price below 50 EMA
+          operator:     'lt',
+          value:        0,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mlsvcs_cond_rsi_max',
+          indicatorId:  'rsi',
+          params:       { period: 14, emaPeriod: 0 },
+          seriesIndex:  0,  // RSI < 50
+          operator:     'lt',
+          value:        50,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+        {
+          id:           'starter_mlsvcs_cond_rsi_min',
+          indicatorId:  'rsi',
+          params:       { period: 14, emaPeriod: 0 },
+          seriesIndex:  0,  // RSI > 30
+          operator:     'gt',
+          value:        30,
+          checkMode:    'confirmation',
+          checkCandles: 1,
+        },
+      ],
+    },
+  ],
+  exitConditions: [],
+  action: { type: 'enter_short', positionSizePct: 10, maxPositions: 1, entryPriceOffset: { mode: 'pct', value: 1 } },
+  risk:   { stopLossPct: 2, takeProfitPct: 4 },
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Exported list — LONG first, then SHORT ─────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1274,6 +1445,7 @@ export const STARTER_TEMPLATES: Strategy[] = [
   macdCrossTrendLong,     // L7 — MACD bullish cross below 0 + close above 200 EMA
   ictSilverBulletLong,    // L8 — Bullish Liquidity Sweep + Bullish FVG + above 50 EMA
   vpValBounceLong,        // L9 — VP VAL support bounce + POC above + rotational
+  mlSvcTrendLong,         // L10 — ML SVC Bullish Regime + EMA 50 Uptrend + RSI Momentum
 
   // ── SHORT ───────────────────────────────────────────────────────────────────
   trendReversal,          // S1 — Three Crows + RSI overbought + MACD bearish cross + below 200 EMA
@@ -1285,4 +1457,5 @@ export const STARTER_TEMPLATES: Strategy[] = [
   macdCrossTrendShort,    // S7 — MACD bearish cross above 0 + close below 200 EMA
   ictSilverBulletShort,   // S8 — Bearish Liquidity Sweep + Bearish FVG + below 50 EMA
   vpVahRotationShort,     // S9 — VP VAH resistance rotation + POC below + rotational
+  mlSvcTrendShort,        // S10 — ML SVC Bearish Regime + EMA 50 Downtrend + RSI Momentum
 ];

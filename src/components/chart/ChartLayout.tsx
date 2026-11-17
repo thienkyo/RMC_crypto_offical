@@ -407,6 +407,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // series.update() in the WebSocket handler above. This avoids calling
   // existing.setData() on every WebSocket tick (which in Lightweight Charts
   // resets the viewport / clobbers scrollToRealTime).
+  const firstCandleTime = candles[0]?.openTime ?? 0;
+  const lastCandleTime  = candles[candles.length - 1]?.openTime ?? 0;
+
   const allSeries: IndicatorSeries[] = useMemo(() => {
     if (candles.length === 0) return [];
 
@@ -436,10 +439,10 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       }
     }
     return result;
-  // candles.length (not candles ref) — same-bar ticks update overlays & sub-panes
-  // surgically via updateOverlayPoint / updateSeriesPoint in the WS handler above.
+  // candles.length + first/last openTime (not candles ref) — same-bar ticks update
+  // overlays & sub-panes surgically via updateOverlayPoint / updateSeriesPoint.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.length, symbol, timeframe, activeIndicators]);
+  }, [candles.length, firstCandleTime, lastCandleTime, symbol, timeframe, activeIndicators]);
 
   const overlaySeries = useMemo(
     () => allSeries.filter((s) => s.panel === 'overlay'),
@@ -455,8 +458,8 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // liveCandle changes on every tick, subPaneGroups was a new Map every tick →
   // SubChart's useEffect([series]) fired every tick → series.setData() → LWC
   // fired subscribeVisibleLogicalRangeChange → setSignalLines / setTimerY →
-  // re-render → repeat.  Using candles.length (stable between same-bar ticks)
-  // breaks the cycle while keeping sub-pane data correct.
+  // re-render → repeat.  Using candles.length + first/last openTime (stable
+  // between same-bar ticks) breaks the cycle while keeping sub-pane data correct.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const subPaneGroups = useMemo(() => {
     const groups = new Map<string, IndicatorSeries[]>();
@@ -489,9 +492,9 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       }
     }
     return groups;
-    // candles.length (not the array ref) — intentionally excludes same-bar tick
-    // changes so SubCharts only call setData() on new-bar events.
-  }, [candles.length, activeIndicators]); // eslint-disable-line react-hooks/exhaustive-deps
+    // candles.length + first/last openTime (not the array ref) — intentionally excludes
+    // same-bar tick changes so SubCharts only call setData() on new-bar/context events.
+  }, [candles.length, firstCandleTime, lastCandleTime, symbol, timeframe, activeIndicators]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Time-axis synchronization across panes (bidirectional) ───────────────
   //
@@ -500,14 +503,51 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   // The slight index offset between data arrays (RSI warmup = 14 bars, MACD = 25)
   // is imperceptible in an 80-bar window.
   const isSyncing = useRef(false);
+  const interactingPaneRef = useRef<string | null>(null);
+  const wheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const handlePointerUp = () => {
+      interactingPaneRef.current = null;
+    };
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+      if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
+    };
+  }, []);
 
   /**
    * Apply `range` to every pane except `sourceChart`.
    * The isSyncing guard prevents loops: setVisibleLogicalRange on chart B fires
    * B's listener synchronously, which would recurse — the guard drops it.
    */
-  const syncFromChart = useCallback((sourceChart: IChartApi, range: LogicalRange) => {
+  const syncFromChart = useCallback((sourceChart: IChartApi, range: LogicalRange, sourceId?: string) => {
     if (isSyncing.current) return;
+
+    // Sub-pane source: only sync to other charts if user is actively interacting with this sub-pane.
+    // Programmatic events (setData auto-fit, component mount) must NEVER drag the main chart.
+    if (sourceId && interactingPaneRef.current !== sourceId) {
+      // Programmatic change on sub-pane: snap the sub-pane back to mainChart instead!
+      const mainChart = priceRef.current?.getChart();
+      const mainRange = mainChart?.timeScale().getVisibleLogicalRange();
+      if (mainRange) {
+        isSyncing.current = true;
+        try {
+          sourceChart.timeScale().setVisibleLogicalRange(mainRange);
+        } catch {
+          // Ignore during layout transitions
+        } finally {
+          queueMicrotask(() => {
+            isSyncing.current = false;
+          });
+        }
+      }
+      return;
+    }
+
     isSyncing.current = true;
 
     try {
@@ -549,16 +589,21 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
       const mainChart = priceRef.current?.getChart();
       const initialRange = mainChart?.timeScale().getVisibleLogicalRange();
 
-      for (const [, handle] of subRefs.current) {
+      for (const [indicatorId, handle] of subRefs.current) {
         const chart = handle.getChart();
         if (!chart) continue;
         if (initialRange) {
           isSyncing.current = true;
-          chart.timeScale().setVisibleLogicalRange(initialRange);
-          queueMicrotask(() => { isSyncing.current = false; });
+          try {
+            chart.timeScale().setVisibleLogicalRange(initialRange);
+          } catch {
+            // Ignore during layout transitions
+          } finally {
+            queueMicrotask(() => { isSyncing.current = false; });
+          }
         }
         const handler = (range: LogicalRange | null) => {
-          if (range) syncFromChart(chart, range);
+          if (range) syncFromChart(chart, range, indicatorId);
         };
         chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
         unsubs.push(() => chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler));
@@ -575,13 +620,15 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
   const handleScrollToNow = useCallback(() => {
     if (candles.length === 0) return;
     priceRef.current?.scrollToNow();
-    const mainChart = priceRef.current?.getChart();
-    if (mainChart) {
-      const range = mainChart.timeScale().getVisibleLogicalRange();
-      if (range) {
-        syncFromChart(mainChart, range);
+    requestAnimationFrame(() => {
+      const mainChart = priceRef.current?.getChart();
+      if (mainChart) {
+        const range = mainChart.timeScale().getVisibleLogicalRange();
+        if (range) {
+          syncFromChart(mainChart, range);
+        }
       }
-    }
+    });
     setIsScrolledBack(false);
   }, [candles.length, syncFromChart]);
 
@@ -1664,7 +1711,22 @@ export function ChartLayout({ onCaptureMounted }: ChartLayoutProps) {
           {Array.from(subPaneGroups.entries()).map(([indicatorId, series], index, arr) => {
             const ind = INDICATORS[indicatorId];
             return (
-              <div key={indicatorId} className="flex flex-col">
+              <div
+                key={indicatorId}
+                className="flex flex-col"
+                onPointerDown={() => {
+                  interactingPaneRef.current = indicatorId;
+                }}
+                onWheel={() => {
+                  interactingPaneRef.current = indicatorId;
+                  if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
+                  wheelTimerRef.current = setTimeout(() => {
+                    if (interactingPaneRef.current === indicatorId) {
+                      interactingPaneRef.current = null;
+                    }
+                  }, 250);
+                }}
+              >
                 <PaneResizer onDelta={(delta) => handlePaneDelta(indicatorId, delta)} />
                 <SubChart
                   ref={(el) => {

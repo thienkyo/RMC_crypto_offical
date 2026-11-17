@@ -91,28 +91,58 @@ export async function fetchTickerPrices(symbols: string[]): Promise<Record<strin
   );
   if (cryptoSymbols.length === 0) return {};
 
-  try {
-    const params = new URLSearchParams({
-      symbols: JSON.stringify(cryptoSymbols),
-    });
-    const res = await fetch(`${REST_BASE}/api/v3/ticker/price?${params.toString()}`, {
-      cache: 'no-store',
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return {};
+  const map: Record<string, number> = {};
+  const params = new URLSearchParams({
+    symbols: JSON.stringify(cryptoSymbols),
+  });
+  const batchUrl = `${REST_BASE}/api/v3/ticker/price?${params.toString()}`;
 
-    const rows = (await res.json()) as Array<{ symbol: string; price: string }>;
-    const map: Record<string, number> = {};
-    for (const r of rows) {
-      const p = parseFloat(r.price);
-      if (Number.isFinite(p) && p > 0) {
-        map[r.symbol] = p;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(batchUrl, {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      if (res.ok) {
+        const rows = (await res.json()) as Array<{ symbol: string; price: string }>;
+        for (const r of rows) {
+          const p = parseFloat(r.price);
+          if (Number.isFinite(p) && p > 0) {
+            map[r.symbol] = p;
+          }
+        }
+        return map;
       }
+      console.warn(`[binance] fetchTickerPrices batch HTTP ${res.status} (attempt ${attempt}/2)`);
+    } catch (err) {
+      console.warn(`[binance] fetchTickerPrices batch error (attempt ${attempt}/2):`, err);
     }
-    return map;
-  } catch {
-    return {};
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
   }
+
+  // Per-symbol fallback if batch request failed (e.g. one invalid symbol or transient error)
+  await Promise.all(
+    cryptoSymbols.map(async (sym) => {
+      try {
+        const res = await fetch(`${REST_BASE}/api/v3/ticker/price?symbol=${encodeURIComponent(sym)}`, {
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) return;
+        const row = (await res.json()) as { symbol: string; price: string };
+        const p = parseFloat(row.price);
+        if (Number.isFinite(p) && p > 0) {
+          map[sym] = p;
+        }
+      } catch (err) {
+        console.warn(`[binance] fetchTickerPrices single symbol fallback failed for ${sym}:`, err);
+      }
+    }),
+  );
+
+  return map;
 }
 
 /**

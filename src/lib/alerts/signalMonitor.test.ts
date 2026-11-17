@@ -9,11 +9,21 @@ import {
 } from './signalMonitor';
 import { db } from '@/lib/db/client';
 import { sendTelegramAlert } from '@/lib/alerts/telegram';
+import { fetchLatestCandlesCached } from '@/lib/db/candles';
+import { fetchTickerPrices } from '@/lib/exchange/binance';
 
 vi.mock('@/lib/db/client', () => ({
   db: {
     query: vi.fn(),
   },
+}));
+
+vi.mock('@/lib/db/candles', () => ({
+  fetchLatestCandlesCached: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('@/lib/exchange/binance', () => ({
+  fetchTickerPrices: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock('@/lib/alerts/telegram', () => ({
@@ -310,7 +320,7 @@ describe('Signal Monitor Engine', () => {
 
       vi.mocked(db.query)
         .mockResolvedValueOnce({ rows: [openTrade15m] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+        .mockResolvedValueOnce({ rows: [] } as any); // default state touch
 
       const res15m = await runSignalMonitorCheck({ ETHUSDT: 2350.0 });
       expect(res15m.heartbeatsSent).toBe(0);
@@ -331,6 +341,130 @@ describe('Signal Monitor Engine', () => {
 
       const resExp = await runSignalMonitorCheck({ ETHUSDT: 2380.0 });
       expect(resExp.closed).toBe(1);
+      expect(sendTelegramAlert).not.toHaveBeenCalled();
+    });
+
+    it('triggers Technical Invalidation early exit and sends warning reply when structure breaks against trade', async () => {
+      const nowMs = Date.now();
+      const createdAtMs = nowMs - 4 * 3600_000;
+      const shortTrade: Partial<SignalMonitorRow> = {
+        id: 24,
+        signal_id: 932,
+        symbol: 'PAXGUSDT',
+        timeframe: '4h',
+        direction: 'short',
+        entry_price: '4040.0200',
+        stop_loss_price: '4093.7900',
+        take_profit_price: '3950.0000',
+        breakeven_price: '4040.0200',
+        is_breakeven_armed: false,
+        max_price: '4054.3800',
+        min_price: '4039.3600',
+        max_profit_pct: '0.01',
+        max_drawdown_pct: '-0.36',
+        status: 'open',
+        telegram_message_id: '1450',
+        strategy_name: 'UTILMATE_S',
+        created_at: new Date(createdAtMs),
+      };
+
+      // Ascending order candle objects as returned by fetchLatestCandlesCached
+      const mockCandlesAsc = [
+        {
+          openTime: nowMs - 12 * 3600_000,
+          closeTime: nowMs - 8 * 3600_000 - 1000,
+          open: 4021.99,
+          high: 4048.57,
+          low: 4020.87,
+          close: 4040.32,
+          volume: 2344272,
+        },
+        {
+          openTime: nowMs - 8 * 3600_000,
+          closeTime: nowMs - 4 * 3600_000 - 1000,
+          open: 4040.33,
+          high: 4049.62,
+          low: 4028.12,
+          close: 4047.00,
+          volume: 3906431,
+        },
+        {
+          openTime: nowMs - 4 * 3600_000,
+          closeTime: nowMs - 60_000, // closed AFTER created_at
+          open: 4047.66,
+          high: 4066.66,
+          low: 4039.36,
+          close: 4054.38, // bullish bar closing above prev high (4049.62) & EMA20
+          volume: 1756926,
+        },
+      ];
+
+      vi.mocked(fetchLatestCandlesCached).mockResolvedValueOnce(mockCandlesAsc as any);
+
+      vi.mocked(db.query)
+        .mockResolvedValueOnce({ rows: [shortTrade] } as any) // select open monitors
+        .mockResolvedValueOnce({ rows: [] } as any) // update signal_monitors closed
+        .mockResolvedValueOnce({ rows: [] } as any); // update strategy_signals
+
+      const res = await runSignalMonitorCheck({ PAXGUSDT: 4054.38 });
+
+      expect(res.closed).toBe(1);
+      expect(res.invalidated).toBe(1);
+      expect(sendTelegramAlert).toHaveBeenCalledWith(
+        expect.stringContaining('Technical Invalidation — Early Exit'),
+        'UTILMATE_S',
+        'signal',
+        undefined,
+        undefined,
+        1450,
+      );
+      expect(sendTelegramAlert).toHaveBeenCalledWith(
+        expect.stringContaining('Bullish candle closed above prior high'),
+        'UTILMATE_S',
+        'signal',
+        undefined,
+        undefined,
+        1450,
+      );
+    });
+
+    it('rejects stale DB fallback candles older than monitor created_at (prevents false TP/SL)', async () => {
+      const monitorCreatedAt = new Date('2026-11-13T07:11:04.889Z');
+      const staleCandleOpenTime = new Date('2026-11-06T12:00:00.000Z'); // before monitor created_at
+      const openTrade: Partial<SignalMonitorRow> = {
+        id: 75,
+        signal_id: 1013,
+        symbol: 'ETHUSDT',
+        timeframe: '4h',
+        direction: 'long',
+        entry_price: '1947.4600',
+        stop_loss_price: '1868.1641',
+        take_profit_price: '2026.7559',
+        breakeven_price: '1947.4600',
+        is_breakeven_armed: false,
+        max_price: '1947.4600',
+        min_price: '1928.5300',
+        max_profit_pct: '0',
+        max_drawdown_pct: '-0.97',
+        status: 'open',
+        telegram_message_id: '1626',
+        strategy_name: 'UTILMATE_L',
+        created_at: monitorCreatedAt,
+      };
+
+      // 1. Live ticker returns empty (transient API failure)
+      vi.mocked(fetchTickerPrices).mockResolvedValueOnce({});
+
+      // 2. DB query returns active monitor, then DB fallback returns a candle older than created_at
+      vi.mocked(db.query)
+        .mockResolvedValueOnce({ rows: [openTrade] } as any)
+        .mockResolvedValueOnce({
+          rows: [{ symbol: 'ETHUSDT', close: '2221.43', open_time: staleCandleOpenTime }],
+        } as any);
+
+      const res = await runSignalMonitorCheck();
+
+      expect(res.closed).toBe(0);
       expect(sendTelegramAlert).not.toHaveBeenCalled();
     });
   });

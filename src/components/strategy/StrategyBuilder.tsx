@@ -16,7 +16,8 @@
 
 import { useState, useEffect } from 'react';
 import { useStrategyStore, selectActiveStrategy, createDefaultStrategy } from '@/store/strategy';
-import { fetchStrategiesFromDb, syncStrategyToDb } from '@/lib/strategy/api';
+import { fetchStrategiesFromDb, syncStrategyToDb, syncManyStrategiesToDb } from '@/lib/strategy/api';
+import { STARTER_TEMPLATES } from '@/lib/strategy/starterTemplates';
 import { StrategyList }     from './StrategyList';
 import { StrategyForm }     from './StrategyForm';
 import { BacktestPanel }    from './BacktestPanel';
@@ -64,7 +65,23 @@ export function StrategyBuilder() {
         return;
       }
       setDbOffline(false);
-      setStrategies(remote);
+
+      // Auto-merge any newly added starter templates not yet stored in DB
+      const existingIds = new Set(remote.map((s) => s.id));
+      const missingStarters = STARTER_TEMPLATES.filter((t) => !existingIds.has(t.id));
+      if (missingStarters.length > 0) {
+        const now = Date.now();
+        const stampedMissing = missingStarters.map((t) => ({
+          ...t,
+          createdAt: t.createdAt === 0 ? now : t.createdAt,
+          updatedAt: now,
+        }));
+        const combined = [...remote, ...stampedMissing];
+        setStrategies(combined);
+        syncManyStrategiesToDb(stampedMissing, 'StrategyBuilder:auto-sync-missing-starters');
+      } else {
+        setStrategies(remote);
+      }
       if (!useStrategyStore.getState().activeStrategyId && remote.length > 0) {
         const first =
           remote.find((s) => !s.isTemplate && s.isActive) ??

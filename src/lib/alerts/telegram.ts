@@ -293,6 +293,15 @@ export async function sendTelegramAlert(
 
 async function resolveTopicThreadId(chatId: string, topicName: string): Promise<number | undefined> {
   if (!topicName) return undefined;
+
+  // If topicName is already a numeric message_thread_id (e.g. from signal_monitors.telegram_thread_id),
+  // return it directly instead of treating it as a forum topic title.
+  if (/^\d+$/.test(topicName.trim())) {
+    const numericId = parseInt(topicName.trim(), 10);
+    if (Number.isInteger(numericId) && numericId > 0) {
+      return numericId;
+    }
+  }
   
   try {
     const { rows } = await db.query<{ message_thread_id: string }>(
